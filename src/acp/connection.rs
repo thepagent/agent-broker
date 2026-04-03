@@ -190,7 +190,8 @@ impl AcpConnection {
 
         self.send_raw(&data).await?;
 
-        let resp = tokio::time::timeout(std::time::Duration::from_secs(30), rx)
+        let timeout_secs = if method == "session/new" { 120 } else { 30 };
+        let resp = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), rx)
             .await
             .map_err(|_| anyhow!("timeout waiting for {method} response"))?
             .map_err(|_| anyhow!("channel closed waiting for {method}"))?;
