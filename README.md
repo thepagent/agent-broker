@@ -152,6 +152,59 @@ error_hold_ms = 2500                  # keep error emoji for 2.5s
 
 The Docker image bundles both `agent-broker` and `kiro-cli` in a single container (agent-broker spawns kiro-cli as a child process).
 
+### Pod Architecture
+
+```
+┌─ Kubernetes Pod ─────────────────────────────────────────────────┐
+│                                                                  │
+│  ┌─────────────────────────────────────────────────────────┐     │
+│  │  agent-broker (main process, PID 1)                     │     │
+│  │                                                         │     │
+│  │  ┌──────────────┐   ┌──────────────┐   ┌───────────┐   │     │
+│  │  │ Discord      │   │ Session Pool │   │ Reaction  │   │     │
+│  │  │ Gateway WS   │   │ (per thread) │   │ Controller│   │     │
+│  │  └──────┬───────┘   └──────┬───────┘   └───────────┘   │     │
+│  │         │                  │                            │     │
+│  └─────────┼──────────────────┼────────────────────────────┘     │
+│            │                  │                                   │
+│            │ @mention /       │ spawn + stdio                    │
+│            │ thread msg       │ JSON-RPC (ACP)                   │
+│            │                  │                                   │
+│            ▼                  ▼                                   │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │  kiro-cli acp --trust-all-tools  (child process)        │    │
+│  │                                                          │    │
+│  │  stdin  ◄── JSON-RPC requests  (session/new, prompt)     │    │
+│  │  stdout ──► JSON-RPC responses (text, tool_call, done)   │    │
+│  │  stderr ──► (ignored)                                    │    │
+│  └──────────────────────────────────────────────────────────┘    │
+│                                                                  │
+│  ┌─ PVC Mount (/data) ──────────────────────────────────────┐    │
+│  │  ~/.kiro/              ← settings, skills, sessions      │    │
+│  │  ~/.local/share/kiro-cli/ ← OAuth tokens (data.sqlite3) │    │
+│  └──────────────────────────────────────────────────────────┘    │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+         │
+         │ WebSocket (wss://gateway.discord.gg)
+         ▼
+┌──────────────────┐         ┌──────────────┐
+│  Discord API     │ ◄─────► │  Discord     │
+│  Gateway         │         │  Users       │
+└──────────────────┘         └──────────────┘
+```
+
+- **Single container** — agent-broker is PID 1, spawns kiro-cli as a child process
+- **stdio JSON-RPC** — ACP communication over stdin/stdout, no network ports needed
+- **Session pool** — one kiro-cli process per Discord thread, up to `max_sessions`
+- **PVC** — persists OAuth tokens and settings across pod restarts
+
+### Install with Your Coding CLI
+
+Use this prompt with any ACP-compatible coding CLI (Kiro CLI, Claude Code, etc.) to install agent-broker for you:
+
+> Install agent-broker on my local k8s cluster using the Helm chart from https://thepagent.github.io/agent-broker. My Discord bot token is in the environment variable DISCORD_BOT_TOKEN and my channel ID is <REPLACE_WITH_YOUR_CHANNEL_ID>. After install, authenticate kiro-cli inside the pod using kiro-cli login --use-device-flow, then restart the deployment.
+
 ### Build & Push
 
 ```bash
