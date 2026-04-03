@@ -160,19 +160,19 @@ The Docker image bundles both `agent-broker` and `kiro-cli` in a single containe
 │  ┌─────────────────────────────────────────────────────────┐     │
 │  │  agent-broker (main process, PID 1)                     │     │
 │  │                                                         │     │
-│  │  ┌──────────────┐   ┌──────────────┐   ┌───────────┐   │     │
-│  │  │ Discord      │   │ Session Pool │   │ Reaction  │   │     │
-│  │  │ Gateway WS   │   │ (per thread) │   │ Controller│   │     │
-│  │  └──────┬───────┘   └──────┬───────┘   └───────────┘   │     │
+│  │  ┌──────────────┐   ┌──────────────┐   ┌───────────┐    │     │
+│  │  │ Discord      │   │ Session Pool │   │ Reaction  │    │     │
+│  │  │ Gateway WS   │   │ (per thread) │   │ Controller│    │     │
+│  │  └──────┬───────┘   └──────┬───────┘   └───────────┘    │     │
 │  │         │                  │                            │     │
 │  └─────────┼──────────────────┼────────────────────────────┘     │
-│            │                  │                                   │
+│            │                  │                                  │
 │            │ @mention /       │ spawn + stdio                    │
 │            │ thread msg       │ JSON-RPC (ACP)                   │
-│            │                  │                                   │
-│            ▼                  ▼                                   │
+│            │                  │                                  │
+│            ▼                  ▼                                  │
 │  ┌──────────────────────────────────────────────────────────┐    │
-│  │  kiro-cli acp --trust-all-tools  (child process)        │    │
+│  │  kiro-cli acp --trust-all-tools  (child process)         │    │
 │  │                                                          │    │
 │  │  stdin  ◄── JSON-RPC requests  (session/new, prompt)     │    │
 │  │  stdout ──► JSON-RPC responses (text, tool_call, done)   │    │
@@ -181,7 +181,7 @@ The Docker image bundles both `agent-broker` and `kiro-cli` in a single containe
 │                                                                  │
 │  ┌─ PVC Mount (/data) ──────────────────────────────────────┐    │
 │  │  ~/.kiro/              ← settings, skills, sessions      │    │
-│  │  ~/.local/share/kiro-cli/ ← OAuth tokens (data.sqlite3) │    │
+│  │  ~/.local/share/kiro-cli/ ← OAuth tokens (data.sqlite3)  │    │
 │  └──────────────────────────────────────────────────────────┘    │
 │                                                                  │
 └──────────────────────────────────────────────────────────────────┘
