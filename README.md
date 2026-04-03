@@ -201,7 +201,7 @@ The Docker image bundles both `agent-broker` and `kiro-cli` in a single containe
 
 ### Install with Your Coding CLI
 
-Use this prompt with any ACP-compatible coding CLI (Kiro CLI, Claude Code, etc.) to install agent-broker for you:
+Use this prompt with any coding CLI (Kiro CLI, Claude Code, Codex, Gemini, etc.) on the host that has `helm` and `kubectl` access to your cluster:
 
 > Install agent-broker on my local k8s cluster using the Helm chart from https://thepagent.github.io/agent-broker. My Discord bot token is in the environment variable DISCORD_BOT_TOKEN and my channel ID is <REPLACE_WITH_YOUR_CHANNEL_ID>. After install, authenticate kiro-cli inside the pod using kiro-cli login --use-device-flow, then restart the deployment.
 
