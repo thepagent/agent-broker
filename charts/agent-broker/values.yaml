@@ -1,0 +1,45 @@
+image:
+  repository: agent-broker
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+replicas: 1
+
+strategy:
+  type: Recreate
+
+resources: {}
+
+persistence:
+  enabled: true
+  storageClass: ""
+  size: 1Gi
+
+discord:
+  botToken: ""            # set via --set or external secret
+  allowedChannels:
+    - "YOUR_CHANNEL_ID"
+
+agent:
+  command: kiro-cli
+  args:
+    - acp
+    - --trust-all-tools
+  workingDir: /tmp
+  env: {}
+    # ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+
+pool:
+  maxSessions: 10
+  sessionTtlHours: 24
+
+reactions:
+  enabled: true
+  removeAfterReply: false
+
+env: {}
+envFrom: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

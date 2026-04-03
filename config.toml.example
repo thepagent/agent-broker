@@ -1,0 +1,50 @@
+[discord]
+bot_token = "${DISCORD_BOT_TOKEN}"
+allowed_channels = ["1234567890"]
+
+[agent]
+command = "kiro-cli"
+args = ["acp", "--trust-all-tools"]
+working_dir = "/tmp"
+
+# [agent]
+# command = "claude"
+# args = ["--acp"]
+# working_dir = "/tmp"
+# env = { ANTHROPIC_API_KEY = "${ANTHROPIC_API_KEY}" }
+
+# [agent]
+# command = "codex"
+# args = ["--acp"]
+# working_dir = "/tmp"
+# env = { OPENAI_API_KEY = "${OPENAI_API_KEY}" }
+
+# [agent]
+# command = "gemini"
+# args = ["--acp"]
+# working_dir = "/tmp"
+# env = { GEMINI_API_KEY = "${GEMINI_API_KEY}" }
+
+[pool]
+max_sessions = 10
+session_ttl_hours = 24
+
+[reactions]
+enabled = true
+remove_after_reply = false
+
+[reactions.emojis]
+queued = "👀"
+thinking = "🤔"
+tool = "🔥"
+coding = "👨💻"
+web = "⚡"
+done = "🆗"
+error = "😱"
+
+[reactions.timing]
+debounce_ms = 700
+stall_soft_ms = 10000
+stall_hard_ms = 30000
+done_hold_ms = 1500
+error_hold_ms = 2500

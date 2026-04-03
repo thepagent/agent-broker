@@ -1,0 +1,17 @@
+agent-broker {{ .Chart.AppVersion }} has been installed!
+
+{{- if not .Values.discord.botToken }}
+
+⚠️  No bot token was provided. Create the secret manually:
+
+  kubectl create secret generic {{ include "agent-broker.fullname" . }} \
+    --from-literal=discord-bot-token="YOUR_TOKEN"
+{{- end }}
+
+Authenticate kiro-cli (first time only):
+
+  kubectl exec -it deployment/{{ include "agent-broker.fullname" . }} -- kiro-cli login --use-device-flow
+
+Then restart the pod:
+
+  kubectl rollout restart deployment/{{ include "agent-broker.fullname" . }}

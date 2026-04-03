@@ -1,0 +1,137 @@
+name: Build & Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "Dockerfile"
+  workflow_dispatch:
+    inputs:
+      chart_bump:
+        description: 'Chart version bump type'
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
+      dry_run:
+        description: 'Dry run (show changes without committing)'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ inputs.dry_run != true }}
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  bump-chart:
+    needs: build-image
+    if: inputs.dry_run != true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      pages: write
+    steps:
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get current chart version
+        id: current
+        run: |
+          chart_version=$(grep '^version:' charts/agent-broker/Chart.yaml | awk '{print $2}')
+          echo "chart_version=$chart_version" >> "$GITHUB_OUTPUT"
+
+      - name: Bump chart version
+        id: bump
+        run: |
+          current="${{ steps.current.outputs.chart_version }}"
+          IFS='.' read -r major minor patch <<< "$current"
+          bump_type="${{ inputs.chart_bump }}"
+          bump_type="${bump_type:-patch}"
+          case "$bump_type" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+          new_version="${major}.${minor}.${patch}"
+          echo "new_version=$new_version" >> "$GITHUB_OUTPUT"
+
+      - name: Update Chart.yaml and values.yaml
+        run: |
+          SHORT_SHA="${{ github.sha }}"
+          SHORT_SHA="${SHORT_SHA:0:7}"
+          sed -i "s/^version: .*/version: ${{ steps.bump.outputs.new_version }}/" charts/agent-broker/Chart.yaml
+          sed -i "s/^appVersion: .*/appVersion: \"${SHORT_SHA}\"/" charts/agent-broker/Chart.yaml
+          sed -i "s|repository: .*|repository: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}|" charts/agent-broker/values.yaml
+          sed -i "s/tag: .*/tag: \"${SHORT_SHA}\"/" charts/agent-broker/values.yaml
+
+      - name: Commit and push
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          git config user.name "thepagent"
+          git config user.email "thepagent@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}
+          git add charts/agent-broker/Chart.yaml charts/agent-broker/values.yaml
+          git commit -m "chore: release chart ${{ steps.bump.outputs.new_version }}"
+          git push
+
+      - name: Trigger chart release
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          gh workflow run release.yml --repo ${{ github.repository }}
