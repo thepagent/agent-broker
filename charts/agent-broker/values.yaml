@@ -25,7 +25,7 @@ agent:
   args:
     - acp
     - --trust-all-tools
-  workingDir: /tmp
+  workingDir: /home/agent
   env: {}
     # ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
 
