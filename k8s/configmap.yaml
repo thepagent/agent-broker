@@ -11,7 +11,7 @@ data:
     [agent]
     command = "kiro-cli"
     args = ["acp", "--trust-all-tools"]
-    working_dir = "/tmp"
+    working_dir = "/home/agent"
 
     [pool]
     max_sessions = 10
