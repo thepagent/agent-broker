@@ -1,0 +1,88 @@
+{{- range $name, $agent := .Values.agents }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ printf "%s-%s" (include "agent-broker.fullname" $) $name | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "agent-broker.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  replicas: 1
+  serviceName: {{ printf "%s-%s" (include "agent-broker.fullname" $) $name | trunc 63 | trimSuffix "-" }}
+  selector:
+    matchLabels:
+      {{- include "agent-broker.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: {{ $name }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ printf "%s-%s" (include "agent-broker.fullname" $) $name | sha256sum }}
+      labels:
+        {{- include "agent-broker.selectorLabels" $ | nindent 8 }}
+        app.kubernetes.io/component: {{ $name }}
+    spec:
+      containers:
+        - name: agent-broker
+          image: "{{ $agent.image.repository }}:{{ $agent.image.tag | default $.Chart.AppVersion }}"
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          env:
+            - name: DISCORD_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ printf "%s-%s" (include "agent-broker.fullname" $) $name | trunc 63 | trimSuffix "-" }}
+                  key: discord-bot-token
+            - name: HOME
+              value: /home/agent
+            {{- range $key, $value := $agent.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          {{- with $agent.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $agent.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/agent-broker
+              readOnly: true
+            - name: data
+              mountPath: /home/agent
+            {{- if $agent.agentsMd }}
+            - name: config
+              mountPath: /home/agent/AGENTS.md
+              subPath: AGENTS.md
+            {{- end }}
+      {{- with $agent.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $agent.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $agent.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ printf "%s-%s" (include "agent-broker.fullname" $) $name | trunc 63 | trimSuffix "-" }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        {{- if $agent.persistence.storageClass }}
+        storageClassName: {{ $agent.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $agent.persistence.size | default "1Gi" }}
+{{- end }}

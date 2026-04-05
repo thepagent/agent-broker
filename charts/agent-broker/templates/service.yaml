@@ -1,17 +1,15 @@
 {{- range $name, $agent := .Values.agents }}
-{{- if $agent.discord.botToken }}
 ---
 apiVersion: v1
-kind: Secret
+kind: Service
 metadata:
   name: {{ printf "%s-%s" (include "agent-broker.fullname" $) $name | trunc 63 | trimSuffix "-" }}
   labels:
     {{- include "agent-broker.labels" $ | nindent 4 }}
     app.kubernetes.io/component: {{ $name }}
-  annotations:
-    "helm.sh/resource-policy": keep
-type: Opaque
-data:
-  discord-bot-token: {{ $agent.discord.botToken | b64enc | quote }}
-{{- end }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "agent-broker.selectorLabels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
 {{- end }}

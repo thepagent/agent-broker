@@ -34,45 +34,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
-Validate activeAgent and return the agent config dict.
-Fails with a clear error if activeAgent is not found in .Values.agents.
+Resource name for a given agent: <fullname>-<agentName>
 */}}
-{{- define "agent-broker.activeAgent" -}}
-{{- $agent := index .Values.agents .Values.activeAgent -}}
-{{- if not $agent -}}
-  {{- fail (printf "activeAgent '%s' not found in .Values.agents — valid options: %s" .Values.activeAgent (keys .Values.agents | sortAlpha | join ", ")) -}}
-{{- end -}}
-{{- $agent | toJson -}}
-{{- end }}
-
-{{/*
-Resolve active agent image repository
-*/}}
-{{- define "agent-broker.image.repository" -}}
-{{- $agent := include "agent-broker.activeAgent" . | fromJson -}}
-{{- $agent.image.repository -}}
-{{- end }}
-
-{{/*
-Resolve active agent image tag (falls back to .Chart.AppVersion)
-*/}}
-{{- define "agent-broker.image.tag" -}}
-{{- $agent := include "agent-broker.activeAgent" . | fromJson -}}
-{{- $agent.image.tag | default .Chart.AppVersion -}}
-{{- end }}
-
-{{/*
-Resolve active agent command
-*/}}
-{{- define "agent-broker.agent.command" -}}
-{{- $agent := include "agent-broker.activeAgent" . | fromJson -}}
-{{- $agent.command -}}
-{{- end }}
-
-{{/*
-Resolve active agent args as JSON array
-*/}}
-{{- define "agent-broker.agent.args" -}}
-{{- $agent := include "agent-broker.activeAgent" . | fromJson -}}
-{{- $agent.args | toJson -}}
+{{- define "agent-broker.agentName" -}}
+{{- printf "%s-%s" (include "agent-broker.fullname" .root) .name | trunc 63 | trimSuffix "-" }}
 {{- end }}

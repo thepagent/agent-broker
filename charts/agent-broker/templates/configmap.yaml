@@ -1,31 +1,35 @@
+{{- range $name, $agent := .Values.agents }}
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "agent-broker.fullname" . }}
+  name: {{ printf "%s-%s" (include "agent-broker.fullname" $) $name | trunc 63 | trimSuffix "-" }}
   labels:
-    {{- include "agent-broker.labels" . | nindent 4 }}
+    {{- include "agent-broker.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
 data:
   config.toml: |
     [discord]
     bot_token = "${DISCORD_BOT_TOKEN}"
-    allowed_channels = [{{ range $i, $ch := .Values.discord.allowedChannels }}{{ if $i }}, {{ end }}"{{ $ch }}"{{ end }}]
+    allowed_channels = [{{ range $i, $ch := $agent.discord.allowedChannels }}{{ if $i }}, {{ end }}"{{ $ch }}"{{ end }}]
 
     [agent]
-    command = "{{ include "agent-broker.agent.command" . | trim }}"
-    args = {{ include "agent-broker.agent.args" . | trim }}
-    working_dir = "{{ .Values.agent.workingDir }}"
-    {{- if .Values.agent.env }}
-    env = { {{ range $k, $v := .Values.agent.env }}{{ $k }} = "{{ $v }}", {{ end }} }
+    command = "{{ $agent.command }}"
+    args = {{ $agent.args | toJson }}
+    working_dir = "{{ $agent.workingDir | default "/home/agent" }}"
+    {{- if $agent.env }}
+    env = { {{ range $k, $v := $agent.env }}{{ $k }} = "{{ $v }}", {{ end }} }
     {{- end }}
 
     [pool]
-    max_sessions = {{ .Values.pool.maxSessions }}
-    session_ttl_hours = {{ .Values.pool.sessionTtlHours }}
+    max_sessions = {{ $agent.pool.maxSessions }}
+    session_ttl_hours = {{ $agent.pool.sessionTtlHours }}
 
     [reactions]
-    enabled = {{ .Values.reactions.enabled }}
-    remove_after_reply = {{ .Values.reactions.removeAfterReply }}
-  {{- if .Values.agentsMd }}
+    enabled = {{ $agent.reactions.enabled }}
+    remove_after_reply = {{ $agent.reactions.removeAfterReply }}
+  {{- if $agent.agentsMd }}
   AGENTS.md: |
-    {{- .Values.agentsMd | nindent 4 }}
+    {{- $agent.agentsMd | nindent 4 }}
   {{- end }}
+{{- end }}

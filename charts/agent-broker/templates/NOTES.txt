@@ -1,50 +1,57 @@
 agent-broker {{ .Chart.AppVersion }} has been installed!
 
-{{- if not .Values.discord.botToken }}
+{{- range $name, $agent := .Values.agents }}
 
-⚠️  No bot token was provided. Create the secret manually:
+--- Agent: {{ $name }} ---
 
-  kubectl create secret generic {{ include "agent-broker.fullname" . }} \
+{{- if not $agent.discord.botToken }}
+
+⚠️  No bot token was provided for agent "{{ $name }}". Create the secret manually:
+
+  kubectl create secret generic {{ printf "%s-%s" (include "agent-broker.fullname" $) $name | trunc 63 | trimSuffix "-" }} \
     --from-literal=discord-bot-token="YOUR_TOKEN"
 {{- end }}
 
-{{- $cmd := include "agent-broker.agent.command" . }}
-{{- if eq $cmd "kiro-cli" }}
+{{- if eq $agent.command "kiro-cli" }}
 
-Authenticate kiro-cli (first time only):
+Authenticate kiro-cli for agent "{{ $name }}" (first time only):
 
-  kubectl exec -it deployment/{{ include "agent-broker.fullname" . }} -- kiro-cli login --use-device-flow
-{{- else if eq $cmd "codex-acp" }}
+  kubectl exec -it statefulset/{{ printf "%s-%s" (include "agent-broker.fullname" $) $name | trunc 63 | trimSuffix "-" }} -- kiro-cli login --use-device-flow
+{{- else if eq $agent.command "codex-acp" }}
 
-Authenticate Codex (first time only):
+Authenticate Codex for agent "{{ $name }}" (first time only):
 
-  kubectl exec -it deployment/{{ include "agent-broker.fullname" . }} -- codex login --device-auth
-{{- else if eq $cmd "claude-agent-acp" }}
+  kubectl exec -it statefulset/{{ printf "%s-%s" (include "agent-broker.fullname" $) $name | trunc 63 | trimSuffix "-" }} -- codex login --device-auth
+{{- else if eq $agent.command "claude-agent-acp" }}
 
-Authenticate Claude Code (first time only):
+Authenticate Claude Code for agent "{{ $name }}" (first time only):
 
-  kubectl exec -it deployment/{{ include "agent-broker.fullname" . }} -- claude setup-token
+  kubectl exec -it statefulset/{{ printf "%s-%s" (include "agent-broker.fullname" $) $name | trunc 63 | trimSuffix "-" }} -- claude setup-token
 
 Then set the token as an env var (token is valid for 1 year):
 
-  helm upgrade {{ .Release.Name }} agent-broker/agent-broker --set env.CLAUDE_CODE_OAUTH_TOKEN="<token>"
-{{- else if eq $cmd "gemini" }}
+  helm upgrade {{ $.Release.Name }} agent-broker/agent-broker \
+    --set agents.{{ $name }}.env.CLAUDE_CODE_OAUTH_TOKEN="<token>"
+{{- else if eq $agent.command "gemini" }}
 
-Authenticate Gemini CLI (first time only):
+Authenticate Gemini CLI for agent "{{ $name }}" (first time only):
 
-  kubectl exec -it deployment/{{ include "agent-broker.fullname" . }} -- gemini
+  kubectl exec -it statefulset/{{ printf "%s-%s" (include "agent-broker.fullname" $) $name | trunc 63 | trimSuffix "-" }} -- gemini
 
   Select "Sign in with Google", open the URL in your browser, then
   curl the localhost callback URL from within the pod.
 
   Alternatively, set GEMINI_API_KEY:
 
-  helm upgrade {{ .Release.Name }} agent-broker/agent-broker --set env.GEMINI_API_KEY="<key>"
+  helm upgrade {{ $.Release.Name }} agent-broker/agent-broker \
+    --set agents.{{ $name }}.env.GEMINI_API_KEY="<key>"
 {{- else }}
 
-Authenticate your agent CLI (first time only) — refer to your CLI's documentation.
+Authenticate your agent CLI for "{{ $name }}" (first time only) — refer to your CLI's documentation.
 {{- end }}
 
 Then restart the pod:
 
-  kubectl rollout restart deployment/{{ include "agent-broker.fullname" . }}
+  kubectl rollout restart statefulset/{{ printf "%s-%s" (include "agent-broker.fullname" $) $name | trunc 63 | trimSuffix "-" }}
+
+{{- end }}
