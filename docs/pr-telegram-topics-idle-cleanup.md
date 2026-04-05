@@ -63,7 +63,9 @@ cleanup_idle (every 15 min)
 
 ### 3. Memory Compaction (`src/acp/pool.rs` + `src/acp/connection.rs`)
 
-Kiro ACP does not replay history on `session/load` — every resume is a cold start. Compaction bridges this gap:
+Kiro CLI ACP does not support `--resume` and does not replay conversation history on `session/load` — every new session is a cold start regardless of the session ID passed. To work around this limitation, agent-broker implements memory compaction:
+
+> Before evicting an idle session, the broker sends a summarization prompt to the still-live agent, stores the summary, and injects it as context into the first prompt of the next session. The agent answers with full context without needing native resume support.
 
 ```
 Session idle > TTL
