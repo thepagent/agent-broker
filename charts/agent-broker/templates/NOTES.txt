@@ -48,3 +48,12 @@ Authenticate your agent CLI (first time only) — refer to your CLI's documentat
 Then restart the pod:
 
   kubectl rollout restart deployment/{{ include "agent-broker.fullname" . }}
+
+
+⚠️  Discord channel IDs are large integers (>2^53). Always use --set-string:
+
+  helm install agent-broker agent-broker/agent-broker \
+    --set-string discord.allowedChannels[0]="YOUR_CHANNEL_ID"
+
+  Using --set (without -string) causes float64 precision loss and the bot
+  will silently ignore all messages.
