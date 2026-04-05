@@ -60,8 +60,8 @@ impl std::fmt::Display for JsonRpcError {
 pub enum AcpEvent {
     Text(String),
     Thinking,
-    ToolStart { title: String },
-    ToolDone { title: String, status: String },
+    ToolStart { id: String, title: String },
+    ToolDone { id: String, title: String, status: String },
     Status,
 }
 
@@ -79,16 +79,18 @@ pub fn classify_notification(msg: &JsonRpcMessage) -> Option<AcpEvent> {
             Some(AcpEvent::Thinking)
         }
         "tool_call" => {
+            let id = update.get("toolCallId").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let title = update.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            Some(AcpEvent::ToolStart { title })
+            Some(AcpEvent::ToolStart { id, title })
         }
         "tool_call_update" => {
+            let id = update.get("toolCallId").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let title = update.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let status = update.get("status").and_then(|v| v.as_str()).unwrap_or("").to_string();
             if status == "completed" || status == "failed" {
-                Some(AcpEvent::ToolDone { title, status })
+                Some(AcpEvent::ToolDone { id, title, status })
             } else {
-                Some(AcpEvent::ToolStart { title })
+                Some(AcpEvent::ToolStart { id, title })
             }
         }
         "plan" => Some(AcpEvent::Status),

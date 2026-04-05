@@ -192,6 +192,7 @@ async fn stream_prompt(
 
             let mut text_buf = String::new();
             let mut tool_lines: Vec<String> = Vec::new();
+            let mut tool_ids: Vec<String> = Vec::new();
             let current_msg_id = msg_id;
 
             if reset {
@@ -210,19 +211,15 @@ async fn stream_prompt(
                         if buf_rx.has_changed().unwrap_or(false) {
                             let content = buf_rx.borrow_and_update().clone();
                             if content != last_content {
-                                if content.len() > 1900 {
-                                    let chunks = format::split_message(&content, 1900);
-                                    if let Some(first) = chunks.first() {
-                                        let _ = edit(&ctx, channel, current_edit_msg, first).await;
-                                    }
-                                    for chunk in chunks.iter().skip(1) {
-                                        if let Ok(new_msg) = channel.say(&ctx.http, chunk).await {
-                                            current_edit_msg = new_msg.id;
-                                        }
-                                    }
+                                // During streaming, only edit the single placeholder message.
+                                // Truncate if over Discord's limit — the final edit handles
+                                // proper multi-message splitting after streaming completes.
+                                let display = if content.len() > 1900 {
+                                    format!("{}…", &content[..1900])
                                 } else {
-                                    let _ = edit(&ctx, channel, current_edit_msg, &content).await;
-                                }
+                                    content.clone()
+                                };
+                                let _ = edit(&ctx, channel, current_edit_msg, &display).await;
                                 last_content = content;
                             }
                         }
@@ -253,16 +250,27 @@ async fn stream_prompt(
                         AcpEvent::Thinking => {
                             reactions.set_thinking().await;
                         }
-                        AcpEvent::ToolStart { title, .. } if !title.is_empty() => {
+                        AcpEvent::ToolStart { id, title, .. } if !title.is_empty() => {
                             reactions.set_tool(&title).await;
+                            tool_ids.push(id);
                             tool_lines.push(format!("🔧 `{title}`..."));
                             let _ = buf_tx.send(compose_display(&tool_lines, &text_buf));
                         }
-                        AcpEvent::ToolDone { title, status, .. } => {
+                        AcpEvent::ToolDone { id, title, status, .. } => {
                             reactions.set_thinking().await;
                             let icon = if status == "completed" { "✅" } else { "❌" };
-                            if let Some(line) = tool_lines.iter_mut().rev().find(|l| l.contains(&title)) {
-                                *line = format!("{icon} `{title}`");
+                            // Match by toolCallId instead of title text.
+                            // On match, swap the icon but keep the original ToolStart title,
+                            // since ToolDone often returns a different or empty title.
+                            let idx = tool_ids.iter().rposition(|tid| !tid.is_empty() && tid == &id);
+                            if let Some(i) = idx {
+                                let kept_title = tool_lines[i]
+                                    .split('`').nth(1)
+                                    .unwrap_or(&title);
+                                tool_lines[i] = format!("{icon} `{kept_title}`");
+                            } else if !title.is_empty() {
+                                tool_ids.push(id);
+                                tool_lines.push(format!("{icon} `{title}`"));
                             }
                             let _ = buf_tx.send(compose_display(&tool_lines, &text_buf));
                         }
