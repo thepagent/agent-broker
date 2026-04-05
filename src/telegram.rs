@@ -51,6 +51,8 @@ struct ThreadCtx {
     thread_id: Option<ThreadId>,
     /// Session key for the ACP pool.
     session_key: String,
+    /// True if this topic was just created (so we should rename it after the response).
+    is_new_topic: bool,
 }
 
 /// Determine the thread context for an incoming message.
@@ -78,6 +80,7 @@ async fn get_or_create_thread(bot: &Bot, msg: &Message) -> anyhow::Result<Thread
                 chat_id,
                 thread_id: Some(thread_id),
                 session_key: format!("{}:{}", chat_id, thread_id),
+                is_new_topic: false,
             });
         }
 
@@ -96,6 +99,7 @@ async fn get_or_create_thread(bot: &Bot, msg: &Message) -> anyhow::Result<Thread
             chat_id,
             thread_id: Some(thread_id),
             session_key: format!("{}:{}", chat_id, thread_id),
+            is_new_topic: true,
         })
     } else {
         // Plain DM or regular group — use reply chains.
@@ -106,7 +110,7 @@ async fn get_or_create_thread(bot: &Bot, msg: &Message) -> anyhow::Result<Thread
             let user_id = msg.from().map(|u| u.id.0).unwrap_or(0);
             format!("{}:{}", chat_id, user_id)
         };
-        Ok(ThreadCtx { chat_id, thread_id: None, session_key })
+        Ok(ThreadCtx { chat_id, thread_id: None, session_key, is_new_topic: false })
     }
 }
 
@@ -120,8 +124,10 @@ pub async fn run(pool: Arc<SessionPool>, bot_token: String, allowed_users: HashS
         let pool = pool.clone();
         let allowed_users = allowed_users.clone();
         async move {
-            // Auth check
             let user_id = msg.from().map(|u| u.id.0 as i64).unwrap_or(0);
+            tracing::info!(chat_id = %msg.chat.id, user_id, thread_id = ?msg.thread_id, text = ?msg.text(), "raw message received");
+
+            // Auth check
             if !allowed_users.is_empty() && !allowed_users.contains(&user_id) {
                 return Ok(());
             }
@@ -183,6 +189,12 @@ pub async fn run(pool: Arc<SessionPool>, bot_token: String, allowed_users: HashS
             match &result {
                 Ok(()) => {
                     set_reaction(&bot, chat_id, user_msg_id, EMOJI_DONE).await;
+                    // Rename new topics with a Kiro-generated title
+                    if ctx.is_new_topic {
+                        if let Some(tid) = ctx.thread_id {
+                            rename_topic(&pool, &ctx.session_key, &prompt, &bot, chat_id, tid).await;
+                        }
+                    }
                     tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
                     clear_reaction(&bot, chat_id, user_msg_id).await;
                 }
@@ -203,7 +215,43 @@ pub async fn run(pool: Arc<SessionPool>, bot_token: String, allowed_users: HashS
     .await;
 }
 
-// ── Streaming prompt with live edits ────────────────────────────────────────
+// ── Topic rename ─────────────────────────────────────────────────────────────
+
+async fn rename_topic(
+    pool: &SessionPool,
+    session_key: &str,
+    original_prompt: &str,
+    bot: &Bot,
+    chat_id: ChatId,
+    thread_id: ThreadId,
+) {
+    let title_prompt = format!(
+        "Reply with ONLY a short topic title (max 40 chars, no quotes) for this message: {}",
+        original_prompt
+    );
+    let title = pool.with_connection(session_key, |conn| {
+        let p = title_prompt.clone();
+        Box::pin(async move {
+            let (mut rx, _) = conn.session_prompt(&p).await?;
+            let mut text = String::new();
+            while let Some(msg) = rx.recv().await {
+                if msg.id.is_some() { break; }
+                if let Some(crate::acp::AcpEvent::Text(t)) = crate::acp::classify_notification(&msg) {
+                    text.push_str(&t);
+                }
+            }
+            conn.prompt_done().await;
+            Ok(text)
+        })
+    }).await;
+
+    if let Ok(raw) = title {
+        let name = format!("🤖 {}", raw.trim().chars().take(40).collect::<String>());
+        let _ = bot.edit_forum_topic(chat_id, thread_id).name(name).await;
+    }
+}
+
+// ── Streaming prompt with live edits ─────────────────────────────────────────
 
 async fn stream_prompt(
     pool: &SessionPool,
