@@ -3,55 +3,67 @@ agent-broker {{ .Chart.AppVersion }} has been installed!
 {{- range $name, $agent := .Values.agents }}
 
 --- Agent: {{ $name }} ---
-
 {{- if not $agent.discord.botToken }}
 
-⚠️  No bot token was provided for agent "{{ $name }}". Create the secret manually:
+⚠️  No bot token for "{{ $name }}". Create the secret manually:
 
   kubectl create secret generic {{ printf "%s-%s" (include "agent-broker.fullname" $) $name | trunc 63 | trimSuffix "-" }} \
     --from-literal=discord-bot-token="YOUR_TOKEN"
 {{- end }}
 
+{{- $s3 := $agent.persistence.s3 }}
+{{- if and $s3.enabled (and $s3.bucket (ne $s3.bucket "")) }}
+  Auth persistence: S3{{ if $.Values.minio.enabled }} (internal MinIO){{ else if ne $s3.endpoint "" }} ({{ $s3.endpoint }}){{ end }}
+  Bucket: {{ $s3.bucket }}/{{ $s3.prefix }}
+  Paths:  {{ $agent.persistence.paths | join ", " }}
+{{- else }}
+  ⚠️  Auth persistence is DISABLED — login state lost on pod restart.
+  Enable with: --set agents.{{ $name }}.persistence.s3.enabled=true
+{{- end }}
+
 {{- if eq $agent.command "kiro-cli" }}
 
-Authenticate kiro-cli for agent "{{ $name }}" (first time only):
+Authenticate kiro-cli (first time only):
 
-  kubectl exec -it statefulset/{{ printf "%s-%s" (include "agent-broker.fullname" $) $name | trunc 63 | trimSuffix "-" }} -- kiro-cli login --use-device-flow
+  kubectl exec -it deployment/{{ printf "%s-%s" (include "agent-broker.fullname" $) $name | trunc 63 | trimSuffix "-" }} -- kiro-cli login --use-device-flow
 {{- else if eq $agent.command "codex-acp" }}
 
-Authenticate Codex for agent "{{ $name }}" (first time only):
+Authenticate Codex (first time only):
 
-  kubectl exec -it statefulset/{{ printf "%s-%s" (include "agent-broker.fullname" $) $name | trunc 63 | trimSuffix "-" }} -- codex login --device-auth
+  kubectl exec -it deployment/{{ printf "%s-%s" (include "agent-broker.fullname" $) $name | trunc 63 | trimSuffix "-" }} -- codex login --device-auth
 {{- else if eq $agent.command "claude-agent-acp" }}
 
-Authenticate Claude Code for agent "{{ $name }}" (first time only):
+Authenticate Claude Code (first time only):
 
-  kubectl exec -it statefulset/{{ printf "%s-%s" (include "agent-broker.fullname" $) $name | trunc 63 | trimSuffix "-" }} -- claude setup-token
+  kubectl exec -it deployment/{{ printf "%s-%s" (include "agent-broker.fullname" $) $name | trunc 63 | trimSuffix "-" }} -- claude setup-token
 
-Then set the token as an env var (token is valid for 1 year):
+Then set the token:
 
   helm upgrade {{ $.Release.Name }} agent-broker/agent-broker \
     --set agents.{{ $name }}.env.CLAUDE_CODE_OAUTH_TOKEN="<token>"
 {{- else if eq $agent.command "gemini" }}
 
-Authenticate Gemini CLI for agent "{{ $name }}" (first time only):
+Authenticate Gemini CLI (first time only):
 
-  kubectl exec -it statefulset/{{ printf "%s-%s" (include "agent-broker.fullname" $) $name | trunc 63 | trimSuffix "-" }} -- gemini
+  kubectl exec -it deployment/{{ printf "%s-%s" (include "agent-broker.fullname" $) $name | trunc 63 | trimSuffix "-" }} -- gemini
 
-  Select "Sign in with Google", open the URL in your browser, then
-  curl the localhost callback URL from within the pod.
-
-  Alternatively, set GEMINI_API_KEY:
+  Or set GEMINI_API_KEY:
 
   helm upgrade {{ $.Release.Name }} agent-broker/agent-broker \
     --set agents.{{ $name }}.env.GEMINI_API_KEY="<key>"
 {{- else }}
 
-Authenticate your agent CLI for "{{ $name }}" (first time only) — refer to your CLI's documentation.
+Authenticate your agent CLI (first time only) — refer to your CLI's documentation.
 {{- end }}
 
-Then restart the pod:
+Then restart:
 
-  kubectl rollout restart statefulset/{{ printf "%s-%s" (include "agent-broker.fullname" $) $name | trunc 63 | trimSuffix "-" }}
+  kubectl rollout restart deployment/{{ printf "%s-%s" (include "agent-broker.fullname" $) $name | trunc 63 | trimSuffix "-" }}
+{{- end }}
 
+{{- if .Values.minio.enabled }}
+
+── Built-in MinIO ─────────────────────────────────────────────
+MinIO is running at: http://{{ .Release.Name }}-minio:9000
+Access key: {{ .Values.minio.auth.rootUser }}
 {{- end }}

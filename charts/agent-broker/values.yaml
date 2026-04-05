@@ -1,7 +1,7 @@
 image:
   pullPolicy: IfNotPresent
 
-# Each entry in `agents` creates an independent StatefulSet, ConfigMap, and Secret.
+# Each entry in `agents` creates an independent Deployment and ConfigMap/Secret.
 # Add as many agents as you need — each can serve different Discord channels.
 agents:
   kiro:
@@ -32,8 +32,22 @@ agents:
       enabled: true
       removeAfterReply: false
     persistence:
-      storageClass: ""
-      size: 1Gi
+      s3:
+        enabled: false
+        bucket: ""
+        prefix: ""                # e.g. "agents/kiro" — unique per agent
+        credentialsSecret: ""     # Secret with AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY
+        endpoint: ""              # leave empty for AWS S3; set for MinIO e.g. http://minio:9000
+        region: "us-east-1"
+      # Paths relative to $HOME to backup/restore.
+      # Adjust per CLI type:
+      #   kiro-cli:        [.kiro/settings, .kiro/steering]
+      #   claude-agent-acp:[.claude]
+      #   codex:           [.codex]
+      #   gemini:          [.config/gemini]
+      paths:
+        - .kiro/settings
+        - .kiro/steering
     resources: {}
     nodeSelector: {}
     tolerations: []
@@ -61,5 +75,26 @@ agents:
 #       enabled: true
 #       removeAfterReply: false
 #     persistence:
-#       size: 1Gi
+#       s3:
+#         enabled: false
+#         bucket: ""
+#         prefix: "agents/claude"
+#         credentialsSecret: ""
+#         endpoint: ""
+#         region: "us-east-1"
+#       paths:
+#         - .claude
 #     resources: {}
+
+# ── Built-in MinIO (optional) ──────────────────────────────────────────────
+# Enable this if you don't have an existing S3 or MinIO instance.
+# When enabled, all agents with persistence.s3.enabled=true and an empty
+# persistence.s3.endpoint will automatically point to this internal MinIO.
+minio:
+  enabled: false
+  auth:
+    rootUser: admin
+    rootPassword: ""     # set via --set minio.auth.rootPassword=...
+  defaultBuckets: "agent-broker"
+  persistence:
+    size: 5Gi

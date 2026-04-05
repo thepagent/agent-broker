@@ -1,0 +1,157 @@
+{{- range $name, $agent := .Values.agents }}
+{{- $fullname := printf "%s-%s" (include "agent-broker.fullname" $) $name | trunc 63 | trimSuffix "-" }}
+{{- $s3 := $agent.persistence.s3 }}
+{{- $s3Enabled := and $s3.enabled (and $s3.bucket (ne $s3.bucket "")) }}
+{{- $s3Endpoint := $s3.endpoint }}
+{{- if and $.Values.minio.enabled (eq $s3Endpoint "") }}
+{{- $s3Endpoint = printf "http://%s-minio:9000" $.Release.Name }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "agent-broker.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "agent-broker.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: {{ $name }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") $ | sha256sum }}
+      labels:
+        {{- include "agent-broker.selectorLabels" $ | nindent 8 }}
+        app.kubernetes.io/component: {{ $name }}
+    spec:
+      {{- if $s3Enabled }}
+      initContainers:
+        - name: s3-restore
+          image: amazon/aws-cli:latest
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              {{- range $agent.persistence.paths }}
+              echo "Restoring {{ . }} from s3://{{ $s3.bucket }}/{{ $s3.prefix }}/{{ . }}"
+              mkdir -p /home/agent/{{ . }}
+              aws s3 sync s3://{{ $s3.bucket }}/{{ $s3.prefix }}/{{ . }}/ /home/agent/{{ . }}/ || true
+              {{- end }}
+              echo "Restore complete."
+          env:
+            - name: AWS_REGION
+              value: {{ $s3.region | default "us-east-1" | quote }}
+            {{- if ne $s3Endpoint "" }}
+            - name: AWS_ENDPOINT_URL
+              value: {{ $s3Endpoint | quote }}
+            {{- end }}
+            {{- if $s3.credentialsSecret }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s3.credentialsSecret }}
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s3.credentialsSecret }}
+                  key: AWS_SECRET_ACCESS_KEY
+            {{- end }}
+          volumeMounts:
+            - name: home
+              mountPath: /home/agent
+      {{- end }}
+      containers:
+        - name: agent-broker
+          image: "{{ $agent.image.repository }}:{{ $agent.image.tag | default $.Chart.AppVersion }}"
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          {{- if $s3Enabled }}
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - sh
+                  - -c
+                  - |
+                    set -e
+                    {{- range $agent.persistence.paths }}
+                    echo "Syncing {{ . }} to s3://{{ $s3.bucket }}/{{ $s3.prefix }}/{{ . }}"
+                    aws s3 sync /home/agent/{{ . }}/ s3://{{ $s3.bucket }}/{{ $s3.prefix }}/{{ . }}/ || true
+                    {{- end }}
+                    echo "Sync complete."
+          {{- end }}
+          env:
+            - name: DISCORD_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullname }}
+                  key: discord-bot-token
+            - name: HOME
+              value: /home/agent
+            {{- if $s3Enabled }}
+            - name: AWS_REGION
+              value: {{ $s3.region | default "us-east-1" | quote }}
+            {{- if ne $s3Endpoint "" }}
+            - name: AWS_ENDPOINT_URL
+              value: {{ $s3Endpoint | quote }}
+            {{- end }}
+            {{- if $s3.credentialsSecret }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s3.credentialsSecret }}
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s3.credentialsSecret }}
+                  key: AWS_SECRET_ACCESS_KEY
+            {{- end }}
+            {{- end }}
+            {{- range $key, $value := $agent.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          {{- with $agent.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $agent.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/agent-broker
+              readOnly: true
+            - name: home
+              mountPath: /home/agent
+            {{- if $agent.agentsMd }}
+            - name: config
+              mountPath: /home/agent/AGENTS.md
+              subPath: AGENTS.md
+            {{- end }}
+      {{- with $agent.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $agent.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $agent.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $fullname }}
+        - name: home
+          emptyDir: {}
+{{- end }}
