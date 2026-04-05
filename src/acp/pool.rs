@@ -55,6 +55,15 @@ impl SessionPool {
             }
             warn!(thread_id, "stale connection, rebuilding");
             conns.remove(thread_id);
+            // Clear the old session directory so the replacement agent starts clean
+            let stale_dir = self.thread_dir(thread_id);
+            drop(conns);
+            match tokio::fs::remove_dir_all(&stale_dir).await {
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => warn!(thread_id, error = %e, "failed to remove stale session directory"),
+            }
+            conns = self.connections.write().await;
         }
 
         if conns.len() >= self.max_sessions {
@@ -100,20 +109,27 @@ impl SessionPool {
 
     pub async fn cleanup_idle(&self, ttl_secs: u64) {
         let cutoff = Instant::now() - std::time::Duration::from_secs(ttl_secs);
-        let mut conns = self.connections.write().await;
-        let stale: Vec<String> = conns
-            .iter()
-            .filter(|(_, c)| c.last_active < cutoff || !c.alive())
-            .map(|(k, _)| k.clone())
-            .collect();
-        for key in stale {
-            info!(thread_id = %key, "cleaning up idle session");
-            conns.remove(&key);
-            // Child process killed via kill_on_drop when AcpConnection drops
+        let dirs_to_remove: Vec<(String, PathBuf)>;
+        {
+            let mut conns = self.connections.write().await;
+            let stale: Vec<String> = conns
+                .iter()
+                .filter(|(_, c)| c.last_active < cutoff || !c.alive())
+                .map(|(k, _)| k.clone())
+                .collect();
+            dirs_to_remove = stale
+                .iter()
+                .map(|k| (k.clone(), self.thread_dir(k)))
+                .collect();
+            for key in &stale {
+                info!(thread_id = %key, "cleaning up idle session");
+                conns.remove(key);
+                // Child process killed via kill_on_drop when AcpConnection drops
+            }
+        } // write lock released before async I/O
 
-            // Clean up the per-thread working directory
-            let thread_dir = self.thread_dir(&key);
-            match tokio::fs::remove_dir_all(&thread_dir).await {
+        for (key, dir) in dirs_to_remove {
+            match tokio::fs::remove_dir_all(&dir).await {
                 Ok(_) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => warn!(thread_id = %key, error = %e, "failed to remove session directory"),
@@ -122,18 +138,25 @@ impl SessionPool {
     }
 
     pub async fn shutdown(&self) {
-        let mut conns = self.connections.write().await;
-        let count = conns.len();
-        // Clean up per-thread session directories before dropping connections
-        for key in conns.keys().cloned().collect::<Vec<_>>() {
-            let dir = self.thread_dir(&key);
+        let dirs_to_remove: Vec<(String, PathBuf)>;
+        let count: usize;
+        {
+            let mut conns = self.connections.write().await;
+            count = conns.len();
+            dirs_to_remove = conns
+                .keys()
+                .map(|k| (k.clone(), self.thread_dir(k)))
+                .collect();
+            conns.clear(); // kill_on_drop handles process cleanup
+        } // write lock released before async I/O
+
+        for (key, dir) in dirs_to_remove {
             match tokio::fs::remove_dir_all(&dir).await {
                 Ok(_) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => warn!(thread_id = %key, error = %e, "failed to remove session directory"),
             }
         }
-        conns.clear(); // kill_on_drop handles process cleanup
         info!(count, "pool shutdown complete");
     }
 }
