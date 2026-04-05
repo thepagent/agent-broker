@@ -130,7 +130,7 @@ When a session is evicted, the bot sends a ⏱ notification in the topic. The ne
 
 ## Memory Compaction
 
-Since ACP does not replay session history on resume, agent-broker compacts the conversation to a summary before eviction and injects it into the first prompt of the new session:
+Kiro CLI ACP does not support `--resume` and does not replay session history on `session/load` — every new session is a cold start. To work around this, agent-broker compacts the conversation to a summary before eviction and injects it into the first prompt of the new session:
 
 ```
 [Context from previous session]: Alice is a user who loves blue flowers
