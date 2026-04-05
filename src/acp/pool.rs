@@ -22,7 +22,19 @@ impl SessionPool {
         }
     }
 
+    /// Build the per-thread working directory path.
+    fn thread_dir(&self, thread_id: &str) -> PathBuf {
+        [&self.config.working_dir, "sessions", thread_id]
+            .iter()
+            .collect()
+    }
+
     pub async fn get_or_create(&self, thread_id: &str) -> Result<()> {
+        // Validate thread_id to prevent path traversal — Discord snowflake IDs
+        // are numeric, so reject anything that isn't pure ASCII digits.
+        if !thread_id.chars().all(|c| c.is_ascii_digit()) {
+            return Err(anyhow!("invalid thread_id: {thread_id}"));
+        }
         // Check if alive connection exists
         {
             let conns = self.connections.read().await;
@@ -50,7 +62,7 @@ impl SessionPool {
         }
 
         // Create a per-thread working directory so concurrent sessions don't interfere
-        let thread_dir: PathBuf = [&self.config.working_dir, "sessions", thread_id].iter().collect();
+        let thread_dir = self.thread_dir(thread_id);
         tokio::fs::create_dir_all(&thread_dir).await?;
         let thread_dir_str = thread_dir.to_string_lossy().to_string();
 
@@ -100,11 +112,11 @@ impl SessionPool {
             // Child process killed via kill_on_drop when AcpConnection drops
 
             // Clean up the per-thread working directory
-            let thread_dir: PathBuf = [&self.config.working_dir, "sessions", &key].iter().collect();
-            if thread_dir.exists() {
-                if let Err(e) = tokio::fs::remove_dir_all(&thread_dir).await {
-                    warn!(thread_id = %key, error = %e, "failed to remove session directory");
-                }
+            let thread_dir = self.thread_dir(&key);
+            match tokio::fs::remove_dir_all(&thread_dir).await {
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => warn!(thread_id = %key, error = %e, "failed to remove session directory"),
             }
         }
     }
@@ -112,6 +124,15 @@ impl SessionPool {
     pub async fn shutdown(&self) {
         let mut conns = self.connections.write().await;
         let count = conns.len();
+        // Clean up per-thread session directories before dropping connections
+        for key in conns.keys().cloned().collect::<Vec<_>>() {
+            let dir = self.thread_dir(&key);
+            match tokio::fs::remove_dir_all(&dir).await {
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => warn!(thread_id = %key, error = %e, "failed to remove session directory"),
+            }
+        }
         conns.clear(); // kill_on_drop handles process cleanup
         info!(count, "pool shutdown complete");
     }
