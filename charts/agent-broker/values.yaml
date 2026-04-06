@@ -17,6 +17,8 @@ persistence:
 
 discord:
   botToken: ""            # set via --set or external secret
+  # ⚠️ Use --set-string for channel IDs to avoid float64 precision loss:
+  #   helm install ... --set-string discord.allowedChannels[0]="<CHANNEL_ID>"
   allowedChannels:
     - "YOUR_CHANNEL_ID"
 

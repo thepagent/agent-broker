@@ -8,6 +8,11 @@ data:
   config.toml: |
     [discord]
     bot_token = "${DISCORD_BOT_TOKEN}"
+    {{- range .Values.discord.allowedChannels }}
+    {{- if regexMatch "e\\+|E\\+" (toString .) }}
+    {{- fail (printf "discord.allowedChannels contains a mangled ID: %s — use --set-string instead of --set for channel IDs" (toString .)) }}
+    {{- end }}
+    {{- end }}
     allowed_channels = [{{ range $i, $ch := .Values.discord.allowedChannels }}{{ if $i }}, {{ end }}"{{ $ch }}"{{ end }}]
 
     [agent]

@@ -1,5 +1,10 @@
 agent-broker {{ .Chart.AppVersion }} has been installed!
 
+⚠️  Discord channel IDs must be set with --set-string (not --set) to avoid float64 precision loss:
+
+  helm upgrade {{ .Release.Name }} agent-broker/agent-broker \
+    --set-string discord.allowedChannels[0]="<YOUR_CHANNEL_ID>"
+
 {{- if not .Values.discord.botToken }}
 
 ⚠️  No bot token was provided. Create the secret manually:
