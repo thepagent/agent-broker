@@ -27,7 +27,7 @@ Create a dedicated secret for the GitHub token:
 
 ```bash
 kubectl create secret generic gh-token-secret \
-  --from-literal=gh-token="github_pat_xxxxxxxxxxxx"
+  --from-literal=gh-token="<YOUR_GITHUB_TOKEN>"
 ```
 
 ## 3. Inject via Helm Chart
@@ -48,7 +48,7 @@ Or pass it directly during install:
 
 ```bash
 helm install agent-broker charts/agent-broker \
-  --set env.GH_TOKEN="github_pat_xxxxxxxxxxxx"
+  --set env.GH_TOKEN="<YOUR_GITHUB_TOKEN>"
 ```
 
 > **Recommended**: Use `envFrom` with a separate secret rather than `--set`, so the token doesn't appear in shell history.
