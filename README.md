@@ -21,6 +21,47 @@ graph LR
 - **ACP protocol** — JSON-RPC over stdio with tool call, thinking, and permission auto-reply support
 - **Kubernetes-ready** — Dockerfile + k8s manifests with PVC for auth persistence
 
+## Chat Modes
+
+### Personal (default)
+Best for single-user or private bot usage.
+
+```mermaid
+flowchart LR
+    U([User]) -->|"any message in #general"| AB[agent-broker]
+    AB -->|auto-creates topic| T[Forum Topic]
+    T -->|all messages| AB
+    AB -->|replies directly| T
+```
+
+### Team
+Best for community / multi-user group chats.
+
+```mermaid
+flowchart LR
+    U([User]) -->|"plain text in #general"| AB[agent-broker]
+    AB -->|"silent 👀 buffer"| K[kiro-cli]
+
+    U -->|"@botname in #general"| AB
+    AB -->|reply in-place| U
+
+    U -->|"!kiro prompt"| AB
+    AB -->|creates topic| T[Forum Topic]
+
+    T -->|plain text| AB
+    AB -->|"silent 👀 buffer"| K
+
+    T -->|"@botname in topic"| AB
+    AB -->|replies in topic| T
+```
+
+Switch in `config.toml`:
+```toml
+[telegram]
+mode = "team"                  # or "personal"
+topic_creator_id = 123456789   # team only: restrict !kiro to this user ID
+```
+
 ## Session Lifecycle
 
 ```mermaid
@@ -104,26 +145,7 @@ cargo build --release
 
 ### 6. Use
 
-**Personal mode** (default) — single user / private bot:
-- Send any message in `#general` → bot auto-creates a topic and responds
-- Follow-up messages in the same topic continue the conversation
-
-**Team mode** — community / multi-user group:
-
-| Where | What you send | Result |
-|---|---|---|
-| `#general` | plain message | Kiro listens silently 👀, buffers context |
-| `#general` | `@botname` | Kiro replies in-place (no topic created) |
-| `#general` | `!kiro <prompt>` | Creates a new topic |
-| topic | plain message | Kiro listens silently 👀, buffers context |
-| topic | `@botname` | Kiro replies directly |
-
-Switch modes in `config.toml`:
-```toml
-[telegram]
-mode = "team"              # or "personal"
-topic_creator_id = 123456789  # team only: who can run !kiro
-```
+Send messages in the forum group. See [Chat Modes](#chat-modes) for full personal vs team behavior.
 
 Bot commands (send in any topic):
 - `!status` — show session state and last active time
