@@ -1,6 +1,6 @@
 # agent-broker
 
-A Rust bridge service between Discord and any ACP-compatible coding CLI (Kiro CLI, Claude Code, Codex, Gemini, etc.) using the [Agent Client Protocol](https://github.com/anthropics/agent-protocol) over stdio JSON-RPC.
+A Rust bridge service between Discord and any ACP-compatible coding CLI (Kiro CLI, Claude Code, Codex, Gemini, Qwen Code, etc.) using the [Agent Client Protocol](https://github.com/anthropics/agent-protocol) over stdio JSON-RPC.
 
 ```
 ┌──────────────┐  Gateway WS   ┌──────────────┐  ACP stdio    ┌──────────────┐
@@ -15,7 +15,7 @@ A Rust bridge service between Discord and any ACP-compatible coding CLI (Kiro CL
 
 ## Features
 
-- **Pluggable agent backend** — swap between Kiro CLI, Claude Code, Codex, Gemini via config
+- **Pluggable agent backend** — swap between Kiro CLI, Claude Code, Codex, Gemini, Qwen Code via config
 - **@mention trigger** — mention the bot in an allowed channel to start a conversation
 - **Thread-based multi-turn** — auto-creates threads; no @mention needed for follow-ups
 - **Edit-streaming** — live-updates the Discord message every 1.5s as tokens arrive
@@ -89,6 +89,7 @@ Swap backends using the `agent.preset` Helm value or manual config. Tested backe
 | `codex` | Codex | [@zed-industries/codex-acp](https://github.com/zed-industries/codex-acp) | `codex login --device-auth` |
 | `claude` | Claude Code | [@agentclientprotocol/claude-agent-acp](https://github.com/agentclientprotocol/claude-agent-acp) | `claude setup-token` |
 | `gemini` | Gemini CLI | Native `gemini --acp` | Google OAuth or `GEMINI_API_KEY` |
+| `qwen` | Qwen Code | Native `qwen --experimental-acp` | `QWEN_API_KEY` |
 
 ### Helm Install (recommended)
 
@@ -118,6 +119,12 @@ helm install agent-broker agent-broker/agent-broker \
   --set discord.botToken="$DISCORD_BOT_TOKEN" \
   --set-string discord.allowedChannels[0]="YOUR_CHANNEL_ID" \
   --set agent.preset=gemini
+
+# Qwen Code
+helm install agent-broker agent-broker/agent-broker \
+  --set discord.botToken="$DISCORD_BOT_TOKEN" \
+  --set discord.allowedChannels[0]="YOUR_CHANNEL_ID" \
+  --set agent.preset=qwen
 ```
 
 Then authenticate inside the pod (first time only):
@@ -136,6 +143,9 @@ kubectl exec -it deployment/agent-broker -- claude setup-token
 # Gemini (Google OAuth — open URL in browser, curl callback from pod)
 kubectl exec -it deployment/agent-broker -- gemini
 # Or use API key: helm upgrade agent-broker agent-broker/agent-broker --set env.GEMINI_API_KEY="<key>"
+
+# Qwen Code (API key)
+# helm upgrade agent-broker agent-broker/agent-broker --set env.QWEN_API_KEY="<key>"
 ```
 
 Restart after auth: `kubectl rollout restart deployment agent-broker`
@@ -169,6 +179,13 @@ command = "gemini"
 args = ["--acp"]
 working_dir = "/tmp"
 env = { GEMINI_API_KEY = "${GEMINI_API_KEY}" }
+
+# Qwen Code
+[agent]
+command = "qwen"
+args = ["--experimental-acp", "--trust-all-tools"]
+working_dir = "/tmp"
+env = { QWEN_API_KEY = "${QWEN_API_KEY}" }
 ```
 
 ## Configuration Reference
@@ -262,7 +279,7 @@ The Docker image bundles both `agent-broker` and `kiro-cli` in a single containe
 
 ### Install with Your Coding CLI
 
-Use one of these prompts with any coding CLI (Kiro CLI, Claude Code, Codex, Gemini, etc.) on the host that has `helm` and `kubectl` access to your cluster:
+Use one of these prompts with any coding CLI (Kiro CLI, Claude Code, Codex, Gemini, Qwen Code, etc.) on the host that has `helm` and `kubectl` access to your cluster:
 
 **Kiro CLI (default):**
 > Install agent-broker on my local k8s cluster using the Helm chart from https://thepagent.github.io/agent-broker. My Discord bot token is in the environment variable DISCORD_BOT_TOKEN and my channel ID is <REPLACE_WITH_YOUR_CHANNEL_ID>. After install, follow the NOTES output to authenticate, then restart the deployment.
@@ -275,6 +292,9 @@ Use one of these prompts with any coding CLI (Kiro CLI, Claude Code, Codex, Gemi
 
 **Gemini:**
 > Install agent-broker on my local k8s cluster using the Helm chart from https://thepagent.github.io/agent-broker with `--set agent.preset=gemini`. My Discord bot token is in the environment variable DISCORD_BOT_TOKEN and my channel ID is <REPLACE_WITH_YOUR_CHANNEL_ID>. After install, follow the NOTES output to authenticate, then restart the deployment.
+
+**Qwen Code:**
+> Install agent-broker on my local k8s cluster using the Helm chart from https://thepagent.github.io/agent-broker with `--set agent.preset=qwen`. My Discord bot token is in the environment variable DISCORD_BOT_TOKEN and my channel ID is <REPLACE_WITH_YOUR_CHANNEL_ID>. After install, follow the NOTES output to authenticate, then restart the deployment.
 
 ### Build & Push
 

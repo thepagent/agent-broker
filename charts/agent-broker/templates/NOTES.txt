@@ -45,6 +45,13 @@ Authenticate Gemini CLI (first time only):
   Alternatively, set GEMINI_API_KEY:
 
   helm upgrade {{ .Release.Name }} agent-broker/agent-broker --set env.GEMINI_API_KEY="<key>"
+{{- else if eq $cmd "qwen" }}
+
+Authenticate Qwen Code (first time only):
+
+  Set QWEN_API_KEY (Alibaba Cloud ModelStudio):
+
+  helm upgrade {{ .Release.Name }} agent-broker/agent-broker --set env.QWEN_API_KEY="<key>"
 {{- else }}
 
 Authenticate your agent CLI (first time only) — refer to your CLI's documentation.
