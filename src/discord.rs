@@ -73,7 +73,26 @@ impl EventHandler for Handler {
             return;
         }
 
-        tracing::debug!(prompt = %prompt, in_thread, "processing");
+        // Inject structured sender context so the downstream CLI can identify who sent the message
+        let display_name = msg.member.as_ref()
+            .and_then(|m| m.nick.as_ref())
+            .unwrap_or(&msg.author.name);
+        let sender_ctx = serde_json::json!({
+            "schema": "agent-broker.sender.v1",
+            "sender_id": msg.author.id.to_string(),
+            "sender_name": msg.author.name,
+            "display_name": display_name,
+            "channel": "discord",
+            "channel_id": msg.channel_id.to_string(),
+            "is_bot": msg.author.bot,
+        });
+        let prompt_with_sender = format!(
+            "<sender_context>\n{}\n</sender_context>\n\n{}",
+            serde_json::to_string(&sender_ctx).unwrap(),
+            prompt
+        );
+
+        tracing::debug!(prompt = %prompt_with_sender, in_thread, "processing");
 
         let thread_id = if in_thread {
             msg.channel_id.get()
@@ -119,7 +138,7 @@ impl EventHandler for Handler {
         let result = stream_prompt(
             &self.pool,
             &thread_key,
-            &prompt,
+            &prompt_with_sender,
             &ctx,
             thread_channel,
             thinking_msg.id,
