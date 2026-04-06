@@ -99,24 +99,24 @@ helm repo update
 # Kiro CLI (default)
 helm install agent-broker agent-broker/agent-broker \
   --set discord.botToken="$DISCORD_BOT_TOKEN" \
-  --set discord.allowedChannels[0]="YOUR_CHANNEL_ID"
+  --set-string discord.allowedChannels[0]="YOUR_CHANNEL_ID"
 
 # Codex
 helm install agent-broker agent-broker/agent-broker \
   --set discord.botToken="$DISCORD_BOT_TOKEN" \
-  --set discord.allowedChannels[0]="YOUR_CHANNEL_ID" \
+  --set-string discord.allowedChannels[0]="YOUR_CHANNEL_ID" \
   --set agent.preset=codex
 
 # Claude Code
 helm install agent-broker agent-broker/agent-broker \
   --set discord.botToken="$DISCORD_BOT_TOKEN" \
-  --set discord.allowedChannels[0]="YOUR_CHANNEL_ID" \
+  --set-string discord.allowedChannels[0]="YOUR_CHANNEL_ID" \
   --set agent.preset=claude
 
 # Gemini
 helm install agent-broker agent-broker/agent-broker \
   --set discord.botToken="$DISCORD_BOT_TOKEN" \
-  --set discord.allowedChannels[0]="YOUR_CHANNEL_ID" \
+  --set-string discord.allowedChannels[0]="YOUR_CHANNEL_ID" \
   --set agent.preset=gemini
 ```
 
