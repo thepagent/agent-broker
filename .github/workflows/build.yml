@@ -207,16 +207,23 @@ jobs:
           sed -i "s|repository: .*|repository: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}|" charts/agent-broker/values.yaml
           sed -i "s/tag: .*/tag: \"${IMAGE_SHA}\"/" charts/agent-broker/values.yaml
 
-      - name: Push chart bump directly to main
+      - name: Create and auto-merge bump PR
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           VERSION="${{ steps.bump.outputs.new_version }}"
           IMAGE_SHA="${{ steps.image-sha.outputs.sha }}"
+          BRANCH="chore/chart-${VERSION}"
           git config user.name "openclaw-helm-bot[bot]"
           git config user.email "3185992+openclaw-helm-bot[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
           git add charts/agent-broker/Chart.yaml charts/agent-broker/values.yaml
-          git commit -m "chore: bump chart to ${VERSION} [skip ci]
+          git commit -m "chore: bump chart to ${VERSION}
 
           image: ${IMAGE_SHA}"
-          git push origin main
+          git push origin "$BRANCH"
+          PR_URL=$(gh pr create \
+            --title "chore: bump chart to ${VERSION}" \
+            --body "Auto-generated chart version bump for image \`${IMAGE_SHA}\`." \
+            --base main --head "$BRANCH")
+          gh pr merge "$PR_URL" --squash --auto --delete-branch
