@@ -1,50 +1,50 @@
-agent-broker {{ .Chart.AppVersion }} has been installed!
+openab {{ .Chart.AppVersion }} has been installed!
 
 ⚠️  Discord channel IDs must be set with --set-string (not --set) to avoid float64 precision loss:
 
-  helm upgrade {{ .Release.Name }} agent-broker/agent-broker \
+  helm upgrade {{ .Release.Name }} openab/openab \
     --set-string discord.allowedChannels[0]="<YOUR_CHANNEL_ID>"
 
 {{- if not .Values.discord.botToken }}
 
 ⚠️  No bot token was provided. Create the secret manually:
 
-  kubectl create secret generic {{ include "agent-broker.fullname" . }} \
+  kubectl create secret generic {{ include "openab.fullname" . }} \
     --from-literal=discord-bot-token="YOUR_TOKEN"
 {{- end }}
 
-{{- $cmd := include "agent-broker.agent.command" . | trim }}
+{{- $cmd := include "openab.agent.command" . | trim }}
 {{- if eq $cmd "kiro-cli" }}
 
 Authenticate kiro-cli (first time only):
 
-  kubectl exec -it deployment/{{ include "agent-broker.fullname" . }} -- kiro-cli login --use-device-flow
+  kubectl exec -it deployment/{{ include "openab.fullname" . }} -- kiro-cli login --use-device-flow
 {{- else if eq $cmd "codex-acp" }}
 
 Authenticate Codex (first time only):
 
-  kubectl exec -it deployment/{{ include "agent-broker.fullname" . }} -- codex login --device-auth
+  kubectl exec -it deployment/{{ include "openab.fullname" . }} -- codex login --device-auth
 {{- else if eq $cmd "claude-agent-acp" }}
 
 Authenticate Claude Code (first time only):
 
-  kubectl exec -it deployment/{{ include "agent-broker.fullname" . }} -- claude setup-token
+  kubectl exec -it deployment/{{ include "openab.fullname" . }} -- claude setup-token
 
 Then set the token as an env var (token is valid for 1 year):
 
-  helm upgrade {{ .Release.Name }} agent-broker/agent-broker --set env.CLAUDE_CODE_OAUTH_TOKEN="<token>"
+  helm upgrade {{ .Release.Name }} openab/openab --set env.CLAUDE_CODE_OAUTH_TOKEN="<token>"
 {{- else if eq $cmd "gemini" }}
 
 Authenticate Gemini CLI (first time only):
 
-  kubectl exec -it deployment/{{ include "agent-broker.fullname" . }} -- gemini
+  kubectl exec -it deployment/{{ include "openab.fullname" . }} -- gemini
 
   Select "Sign in with Google", open the URL in your browser, then
   curl the localhost callback URL from within the pod.
 
   Alternatively, set GEMINI_API_KEY:
 
-  helm upgrade {{ .Release.Name }} agent-broker/agent-broker --set env.GEMINI_API_KEY="<key>"
+  helm upgrade {{ .Release.Name }} openab/openab --set env.GEMINI_API_KEY="<key>"
 {{- else }}
 
 Authenticate your agent CLI (first time only) — refer to your CLI's documentation.
@@ -52,4 +52,4 @@ Authenticate your agent CLI (first time only) — refer to your CLI's documentat
 
 Then restart the pod:
 
-  kubectl rollout restart deployment/{{ include "agent-broker.fullname" . }}
+  kubectl rollout restart deployment/{{ include "openab.fullname" . }}

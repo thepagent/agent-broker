@@ -1,5 +1,5 @@
 image:
-  repository: ghcr.io/thepagent/agent-broker
+  repository: ghcr.io/openabdev/openab
   tag: "dd7e1ca"
   pullPolicy: IfNotPresent
 

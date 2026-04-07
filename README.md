@@ -1,17 +1,17 @@
-# agent-broker
+# OpenAB — Open Agent Broker
 
-A Rust bridge service between Discord and any ACP-compatible coding CLI (Kiro CLI, Claude Code, Codex, Gemini, etc.) using the [Agent Client Protocol](https://github.com/anthropics/agent-protocol) over stdio JSON-RPC.
+A lightweight, secure, cloud-native ACP harness that bridges Discord and any [Agent Client Protocol](https://github.com/anthropics/agent-protocol)-compatible coding CLI (Kiro CLI, Claude Code, Codex, Gemini, etc.) over stdio JSON-RPC — delivering the next-generation development experience.
 
 ```
 ┌──────────────┐  Gateway WS   ┌──────────────┐  ACP stdio    ┌──────────────┐
-│   Discord    │◄─────────────►│ agent-broker │──────────────►│  coding CLI  │
+│   Discord    │◄─────────────►│ openab │──────────────►│  coding CLI  │
 │   User       │               │   (Rust)     │◄── JSON-RPC ──│  (acp mode)  │
 └──────────────┘               └──────────────┘               └──────────────┘
 ```
 
 ## Demo
 
-![agent-broker demo](images/demo.png)
+![openab demo](images/demo.png)
 
 ## Features
 
@@ -65,7 +65,7 @@ cargo run
 
 # Production
 cargo build --release
-./target/release/agent-broker config.toml
+./target/release/openab config.toml
 ```
 
 If no config path is given, it defaults to `config.toml` in the current directory.
@@ -93,28 +93,28 @@ Swap backends using the `agent.preset` Helm value or manual config. Tested backe
 ### Helm Install (recommended)
 
 ```bash
-helm repo add agent-broker https://thepagent.github.io/agent-broker
+helm repo add openab https://openabdev.github.io/openab
 helm repo update
 
 # Kiro CLI (default)
-helm install agent-broker agent-broker/agent-broker \
+helm install openab openab/openab \
   --set discord.botToken="$DISCORD_BOT_TOKEN" \
   --set-string discord.allowedChannels[0]="YOUR_CHANNEL_ID"
 
 # Codex
-helm install agent-broker agent-broker/agent-broker \
+helm install openab openab/openab \
   --set discord.botToken="$DISCORD_BOT_TOKEN" \
   --set-string discord.allowedChannels[0]="YOUR_CHANNEL_ID" \
   --set agent.preset=codex
 
 # Claude Code
-helm install agent-broker agent-broker/agent-broker \
+helm install openab openab/openab \
   --set discord.botToken="$DISCORD_BOT_TOKEN" \
   --set-string discord.allowedChannels[0]="YOUR_CHANNEL_ID" \
   --set agent.preset=claude
 
 # Gemini
-helm install agent-broker agent-broker/agent-broker \
+helm install openab openab/openab \
   --set discord.botToken="$DISCORD_BOT_TOKEN" \
   --set-string discord.allowedChannels[0]="YOUR_CHANNEL_ID" \
   --set agent.preset=gemini
@@ -124,21 +124,21 @@ Then authenticate inside the pod (first time only):
 
 ```bash
 # Kiro CLI
-kubectl exec -it deployment/agent-broker -- kiro-cli login --use-device-flow
+kubectl exec -it deployment/openab -- kiro-cli login --use-device-flow
 
 # Codex
-kubectl exec -it deployment/agent-broker -- codex login --device-auth
+kubectl exec -it deployment/openab -- codex login --device-auth
 
 # Claude Code
-kubectl exec -it deployment/agent-broker -- claude setup-token
-# Then: helm upgrade agent-broker agent-broker/agent-broker --set env.CLAUDE_CODE_OAUTH_TOKEN="<token>"
+kubectl exec -it deployment/openab -- claude setup-token
+# Then: helm upgrade openab openab/openab --set env.CLAUDE_CODE_OAUTH_TOKEN="<token>"
 
 # Gemini (Google OAuth — open URL in browser, curl callback from pod)
-kubectl exec -it deployment/agent-broker -- gemini
-# Or use API key: helm upgrade agent-broker agent-broker/agent-broker --set env.GEMINI_API_KEY="<key>"
+kubectl exec -it deployment/openab -- gemini
+# Or use API key: helm upgrade openab openab/openab --set env.GEMINI_API_KEY="<key>"
 ```
 
-Restart after auth: `kubectl rollout restart deployment agent-broker`
+Restart after auth: `kubectl rollout restart deployment openab`
 
 ### Manual config.toml
 
@@ -211,7 +211,7 @@ error_hold_ms = 2500                  # keep error emoji for 2.5s
 
 ## Kubernetes Deployment
 
-The Docker image bundles both `agent-broker` and `kiro-cli` in a single container (agent-broker spawns kiro-cli as a child process).
+The Docker image bundles both `openab` and `kiro-cli` in a single container (openab spawns kiro-cli as a child process).
 
 ### Pod Architecture
 
@@ -219,7 +219,7 @@ The Docker image bundles both `agent-broker` and `kiro-cli` in a single containe
 ┌─ Kubernetes Pod ─────────────────────────────────────────────────┐
 │                                                                  │
 │  ┌─────────────────────────────────────────────────────────┐     │
-│  │  agent-broker (main process, PID 1)                     │     │
+│  │  openab (main process, PID 1)                     │     │
 │  │                                                         │     │
 │  │  ┌──────────────┐   ┌──────────────┐   ┌───────────┐    │     │
 │  │  │ Discord      │   │ Session Pool │   │ Reaction  │    │     │
@@ -255,7 +255,7 @@ The Docker image bundles both `agent-broker` and `kiro-cli` in a single containe
 └──────────────────┘         └──────────────┘
 ```
 
-- **Single container** — agent-broker is PID 1, spawns kiro-cli as a child process
+- **Single container** — openab is PID 1, spawns kiro-cli as a child process
 - **stdio JSON-RPC** — ACP communication over stdin/stdout, no network ports needed
 - **Session pool** — one kiro-cli process per Discord thread, up to `max_sessions`
 - **PVC** — persists OAuth tokens and settings across pod restarts
@@ -265,30 +265,30 @@ The Docker image bundles both `agent-broker` and `kiro-cli` in a single containe
 Use one of these prompts with any coding CLI (Kiro CLI, Claude Code, Codex, Gemini, etc.) on the host that has `helm` and `kubectl` access to your cluster:
 
 **Kiro CLI (default):**
-> Install agent-broker on my local k8s cluster using the Helm chart from https://thepagent.github.io/agent-broker. My Discord bot token is in the environment variable DISCORD_BOT_TOKEN and my channel ID is <REPLACE_WITH_YOUR_CHANNEL_ID>. After install, follow the NOTES output to authenticate, then restart the deployment.
+> Install openab on my local k8s cluster using the Helm chart from https://openabdev.github.io/openab. My Discord bot token is in the environment variable DISCORD_BOT_TOKEN and my channel ID is <REPLACE_WITH_YOUR_CHANNEL_ID>. After install, follow the NOTES output to authenticate, then restart the deployment.
 
 **Codex:**
-> Install agent-broker on my local k8s cluster using the Helm chart from https://thepagent.github.io/agent-broker with `--set agent.preset=codex`. My Discord bot token is in the environment variable DISCORD_BOT_TOKEN and my channel ID is <REPLACE_WITH_YOUR_CHANNEL_ID>. After install, follow the NOTES output to authenticate, then restart the deployment.
+> Install openab on my local k8s cluster using the Helm chart from https://openabdev.github.io/openab with `--set agent.preset=codex`. My Discord bot token is in the environment variable DISCORD_BOT_TOKEN and my channel ID is <REPLACE_WITH_YOUR_CHANNEL_ID>. After install, follow the NOTES output to authenticate, then restart the deployment.
 
 **Claude Code:**
-> Install agent-broker on my local k8s cluster using the Helm chart from https://thepagent.github.io/agent-broker with `--set agent.preset=claude`. My Discord bot token is in the environment variable DISCORD_BOT_TOKEN and my channel ID is <REPLACE_WITH_YOUR_CHANNEL_ID>. After install, follow the NOTES output to authenticate, then restart the deployment.
+> Install openab on my local k8s cluster using the Helm chart from https://openabdev.github.io/openab with `--set agent.preset=claude`. My Discord bot token is in the environment variable DISCORD_BOT_TOKEN and my channel ID is <REPLACE_WITH_YOUR_CHANNEL_ID>. After install, follow the NOTES output to authenticate, then restart the deployment.
 
 **Gemini:**
-> Install agent-broker on my local k8s cluster using the Helm chart from https://thepagent.github.io/agent-broker with `--set agent.preset=gemini`. My Discord bot token is in the environment variable DISCORD_BOT_TOKEN and my channel ID is <REPLACE_WITH_YOUR_CHANNEL_ID>. After install, follow the NOTES output to authenticate, then restart the deployment.
+> Install openab on my local k8s cluster using the Helm chart from https://openabdev.github.io/openab with `--set agent.preset=gemini`. My Discord bot token is in the environment variable DISCORD_BOT_TOKEN and my channel ID is <REPLACE_WITH_YOUR_CHANNEL_ID>. After install, follow the NOTES output to authenticate, then restart the deployment.
 
 ### Build & Push
 
 ```bash
-docker build -t agent-broker:latest .
-docker tag agent-broker:latest <your-registry>/agent-broker:latest
-docker push <your-registry>/agent-broker:latest
+docker build -t openab:latest .
+docker tag openab:latest <your-registry>/openab:latest
+docker push <your-registry>/openab:latest
 ```
 
 ### Deploy
 
 ```bash
 # Create the secret with your bot token
-kubectl create secret generic agent-broker-secret \
+kubectl create secret generic openab-secret \
   --from-literal=discord-bot-token="your-token"
 
 # Edit k8s/configmap.yaml with your channel IDs
@@ -302,13 +302,13 @@ kubectl apply -f k8s/deployment.yaml
 kiro-cli requires a one-time OAuth login. The PVC persists the tokens across pod restarts.
 
 ```bash
-kubectl exec -it deployment/agent-broker -- kiro-cli login --use-device-flow
+kubectl exec -it deployment/openab -- kiro-cli login --use-device-flow
 ```
 
 Follow the device code flow in your browser, then restart the pod:
 
 ```bash
-kubectl rollout restart deployment agent-broker
+kubectl rollout restart deployment openab
 ```
 
 ### Manifests
@@ -316,7 +316,7 @@ kubectl rollout restart deployment agent-broker
 | File | Purpose |
 |------|---------|
 | `k8s/deployment.yaml` | Single-container pod with config + data volume mounts |
-| `k8s/configmap.yaml` | `config.toml` mounted at `/etc/agent-broker/` |
+| `k8s/configmap.yaml` | `config.toml` mounted at `/etc/openab/` |
 | `k8s/secret.yaml` | `DISCORD_BOT_TOKEN` injected as env var |
 | `k8s/pvc.yaml` | Persistent storage for auth + settings |
 

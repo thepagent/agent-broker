@@ -48,9 +48,9 @@ Users running `helm install` only see stable versions. Beta versions require `--
 Each build produces three multi-arch images tagged with the git short SHA:
 
 ```
-ghcr.io/thepagent/agent-broker:<sha>        # kiro-cli
-ghcr.io/thepagent/agent-broker-codex:<sha>   # codex
-ghcr.io/thepagent/agent-broker-claude:<sha>  # claude
+ghcr.io/openabdev/openab:<sha>        # kiro-cli
+ghcr.io/openabdev/openab-codex:<sha>   # codex
+ghcr.io/openabdev/openab-claude:<sha>  # claude
 ```
 
 The `latest` tag always points to the most recent build.

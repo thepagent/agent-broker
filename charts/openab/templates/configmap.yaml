@@ -1,9 +1,9 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "agent-broker.fullname" . }}
+  name: {{ include "openab.fullname" . }}
   labels:
-    {{- include "agent-broker.labels" . | nindent 4 }}
+    {{- include "openab.labels" . | nindent 4 }}
 data:
   config.toml: |
     [discord]
@@ -16,8 +16,8 @@ data:
     allowed_channels = [{{ range $i, $ch := .Values.discord.allowedChannels }}{{ if $i }}, {{ end }}"{{ $ch }}"{{ end }}]
 
     [agent]
-    command = "{{ include "agent-broker.agent.command" . | trim }}"
-    args = {{ include "agent-broker.agent.args" . | trim }}
+    command = "{{ include "openab.agent.command" . | trim }}"
+    args = {{ include "openab.agent.args" . | trim }}
     working_dir = "{{ .Values.agent.workingDir }}"
     {{- if .Values.agent.env }}
     env = { {{ range $k, $v := .Values.agent.env }}{{ $k }} = "{{ $v }}", {{ end }} }

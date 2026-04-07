@@ -1,8 +1,8 @@
-{{- define "agent-broker.name" -}}
+{{- define "openab.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
-{{- define "agent-broker.fullname" -}}
+{{- define "openab.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -15,32 +15,32 @@
 {{- end }}
 {{- end }}
 
-{{- define "agent-broker.chart" -}}
+{{- define "openab.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
-{{- define "agent-broker.labels" -}}
-helm.sh/chart: {{ include "agent-broker.chart" . }}
-{{ include "agent-broker.selectorLabels" . }}
+{{- define "openab.labels" -}}
+helm.sh/chart: {{ include "openab.chart" . }}
+{{ include "openab.selectorLabels" . }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
-{{- define "agent-broker.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "agent-broker.name" . }}
+{{- define "openab.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "openab.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
 Resolve agent preset → image repository
 */}}
-{{- define "agent-broker.image.repository" -}}
+{{- define "openab.image.repository" -}}
 {{- if .Values.agent.preset }}
-  {{- if eq .Values.agent.preset "codex" }}ghcr.io/thepagent/agent-broker-codex
-  {{- else if eq .Values.agent.preset "claude" }}ghcr.io/thepagent/agent-broker-claude
-  {{- else if eq .Values.agent.preset "gemini" }}ghcr.io/thepagent/agent-broker-gemini
+  {{- if eq .Values.agent.preset "codex" }}ghcr.io/openabdev/openab-codex
+  {{- else if eq .Values.agent.preset "claude" }}ghcr.io/openabdev/openab-claude
+  {{- else if eq .Values.agent.preset "gemini" }}ghcr.io/openabdev/openab-gemini
   {{- else }}{{ .Values.image.repository }}
   {{- end }}
 {{- else }}{{ .Values.image.repository }}
@@ -50,7 +50,7 @@ Resolve agent preset → image repository
 {{/*
 Resolve agent preset → command
 */}}
-{{- define "agent-broker.agent.command" -}}
+{{- define "openab.agent.command" -}}
 {{- if .Values.agent.preset }}
   {{- if eq .Values.agent.preset "codex" }}codex-acp
   {{- else if eq .Values.agent.preset "claude" }}claude-agent-acp
@@ -64,7 +64,7 @@ Resolve agent preset → command
 {{/*
 Resolve agent preset → args
 */}}
-{{- define "agent-broker.agent.args" -}}
+{{- define "openab.agent.args" -}}
 {{- if .Values.agent.preset }}
   {{- if or (eq .Values.agent.preset "codex") (eq .Values.agent.preset "claude") }}[]
   {{- else if eq .Values.agent.preset "gemini" }}["--acp"]
