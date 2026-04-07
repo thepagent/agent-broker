@@ -28,8 +28,7 @@ impl EventHandler for Handler {
         let bot_id = ctx.cache.current_user().id;
 
         let channel_id = msg.channel_id.get();
-        let in_allowed_channel =
-            self.allowed_channels.is_empty() || self.allowed_channels.contains(&channel_id);
+        let in_allowed_channel = self.allowed_channels.contains(&channel_id);
 
         let is_mentioned = msg.mentions_user_id(bot_id)
             || msg.content.contains(&format!("<@{}>", bot_id))
@@ -172,6 +171,9 @@ impl EventHandler for Handler {
 
     async fn ready(&self, _ctx: Context, ready: Ready) {
         info!(user = %ready.user.name, "discord bot connected");
+        if self.allowed_channels.is_empty() {
+            tracing::warn!("allowed_channels is empty — bot will NOT respond to any messages. Configure allowed_channels in config.toml.");
+        }
     }
 }
 

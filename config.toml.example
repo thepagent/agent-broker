@@ -1,5 +1,6 @@
 [discord]
 bot_token = "${DISCORD_BOT_TOKEN}"
+# Required: at least one channel ID. Empty list = bot will not respond to any messages.
 allowed_channels = ["1234567890"]
 
 [agent]
