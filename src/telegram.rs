@@ -609,10 +609,12 @@ async fn stream_prompt(
 ) -> anyhow::Result<()> {
     let prompt = prompt.to_string();
     let bot = bot.clone();
+    let session_key = session_key.to_string();
 
-    pool.with_connection(session_key, |conn| {
+    pool.with_connection(&session_key, |conn| {
         let prompt = prompt.clone();
         let bot = bot.clone();
+        let session_key = session_key.clone();
         Box::pin(async move {
             let reset = conn.session_reset;
             conn.session_reset = false;
@@ -624,32 +626,64 @@ async fn stream_prompt(
             let mut last_sent = String::new();
             let mut current_msg_id = msg_id;
             let mut last_edit = tokio::time::Instant::now();
+            let prompt_start = tokio::time::Instant::now();
+            const HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+            const ALIVE_CHECK: std::time::Duration = std::time::Duration::from_secs(30);
 
             if reset {
                 text_buf.push_str("⚠️ _Session expired, starting fresh..._\n\n");
             }
 
-            while let Some(notification) = rx.recv().await {
-                if notification.id.is_some() { break; }
+            'outer: loop {
+                tokio::select! {
+                    msg = rx.recv() => {
+                        let notification = match msg {
+                            Some(n) => n,
+                            None => break,
+                        };
 
-                if let Some(event) = classify_notification(&notification) {
-                    match event {
-                        AcpEvent::Text(t) => { text_buf.push_str(&t); }
-                        AcpEvent::Thinking => {
-                            set_reaction(&bot, chat_id, user_msg_id, EMOJI_THINKING).await;
+                        if notification.id.is_some() {
+                            // Drain window: capture late-arriving text chunks for 200ms
+                            let drain_until = tokio::time::Instant::now() + std::time::Duration::from_millis(200);
+                            while let Ok(Some(n)) = tokio::time::timeout_at(drain_until, rx.recv()).await {
+                                if let Some(AcpEvent::Text(t)) = classify_notification(&n) {
+                                    text_buf.push_str(&t);
+                                }
+                            }
+                            break;
                         }
-                        AcpEvent::ToolStart { title, .. } if !title.is_empty() => {
-                            set_reaction(&bot, chat_id, user_msg_id, tool_emoji(&title)).await;
-                            tool_lines.push(format!("🔧 `{title}`..."));
-                        }
-                        AcpEvent::ToolDone { title, status, .. } => {
-                            set_reaction(&bot, chat_id, user_msg_id, EMOJI_THINKING).await;
-                            let icon = if status == "completed" { "✅" } else { "❌" };
-                            if let Some(line) = tool_lines.iter_mut().rev().find(|l| l.contains(&title)) {
-                                *line = format!("{icon} `{title}`");
+
+                        if let Some(event) = classify_notification(&notification) {
+                            match event {
+                                AcpEvent::Text(t) => { text_buf.push_str(&t); }
+                                AcpEvent::Thinking => {
+                                    set_reaction(&bot, chat_id, user_msg_id, EMOJI_THINKING).await;
+                                }
+                                AcpEvent::ToolStart { title, .. } if !title.is_empty() => {
+                                    set_reaction(&bot, chat_id, user_msg_id, tool_emoji(&title)).await;
+                                    tool_lines.push(format!("🔧 `{title}`..."));
+                                }
+                                AcpEvent::ToolDone { title, status, .. } => {
+                                    set_reaction(&bot, chat_id, user_msg_id, EMOJI_THINKING).await;
+                                    let icon = if status == "completed" { "✅" } else { "❌" };
+                                    if let Some(line) = tool_lines.iter_mut().rev().find(|l| l.contains(&title)) {
+                                        *line = format!("{icon} `{title}`");
+                                    }
+                                }
+                                _ => {}
                             }
                         }
-                        _ => {}
+                    }
+                    _ = tokio::time::sleep(ALIVE_CHECK) => {
+                        if !conn.alive() {
+                            tracing::warn!(session_key, "agent process died mid-prompt, breaking");
+                            break 'outer;
+                        }
+                        if prompt_start.elapsed() > HARD_TIMEOUT {
+                            tracing::warn!(session_key, "prompt exceeded 30min hard timeout, breaking");
+                            break 'outer;
+                        }
+                        continue;
                     }
                 }
 
@@ -666,7 +700,13 @@ async fn stream_prompt(
             conn.prompt_done().await;
 
             let final_content = compose_display(&tool_lines, &text_buf);
-            let final_content = if final_content.is_empty() { "_(no response)_".to_string() } else { final_content };
+            let final_content = if final_content.trim().is_empty() && !tool_lines.is_empty() {
+                format!("{}\n\n_Task completed._", tool_lines.join("\n"))
+            } else if final_content.trim().is_empty() {
+                "_(no response)_".to_string()
+            } else {
+                final_content
+            };
             send_chunks(&bot, chat_id, current_msg_id, &final_content, thread_id).await;
 
             Ok(())
