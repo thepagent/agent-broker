@@ -34,6 +34,10 @@ pub struct TelegramConfig {
     pub allowed_users: Vec<i64>,
     /// If set, only this user ID can trigger `!kiro` topic creation (team mode).
     pub topic_creator_id: Option<i64>,
+    /// Who can run `!model` / `!cmd`. In team mode defaults to topic_creator_id.
+    /// In personal mode this is ignored (allowed_users already gates everything).
+    #[serde(default)]
+    pub model_admin_ids: Vec<i64>,
     /// `personal` (default) or `team`. See ChatMode for details.
     #[serde(default)]
     pub mode: ChatMode,

@@ -20,6 +20,15 @@ const EMOJI_WEB: &str = "⚡";
 const EMOJI_DONE: &str = "👍";
 const EMOJI_ERROR: &str = "😱";
 
+const SESSION_PREAMBLE: &str = "\
+[System: You are running inside agent-broker, a Telegram bot bridge. \
+You are NOT in a terminal — your responses appear in a Telegram topic thread. \
+Keep replies concise: state key outcomes and important steps only, skip verbose narration \
+(tool calls are already shown to the user separately). \
+When ending a response with a conclusion or summary, separate it with a line containing \
+only \"---\" so it can be sent as a distinct message. \
+Before executing any multi-step or destructive action, propose a plan and wait for confirmation.]";
+
 const CODING_TOKENS: &[&str] = &["exec", "process", "read", "write", "edit", "bash", "shell"];
 const WEB_TOKENS: &[&str] = &["web_search", "web_fetch", "web-search", "web-fetch", "browser"];
 
@@ -125,7 +134,7 @@ async fn get_or_create_thread(bot: &Bot, msg: &Message, is_kiro_cmd: bool) -> an
 
 // ── Main bot loop ────────────────────────────────────────────────────────────
 
-pub async fn run(pool: Arc<SessionPool>, bot_token: String, allowed_users: HashSet<i64>, topic_creator_id: Option<i64>, mode: ChatMode) {
+pub async fn run(pool: Arc<SessionPool>, bot_token: String, allowed_users: HashSet<i64>, topic_creator_id: Option<i64>, model_admin_ids: Vec<i64>, mode: ChatMode) {
     let bot = Bot::new(bot_token);
     info!("telegram bot starting");
 
@@ -189,8 +198,9 @@ pub async fn run(pool: Arc<SessionPool>, bot_token: String, allowed_users: HashS
                 let allowed_users = allowed_users.clone();
                 let bot_username = bot_username.clone();
                 let mode = mode.clone();
+                let model_admin_ids = model_admin_ids.clone();
                 async move {
-                    handle_message(bot, msg, pool, allowed_users, bot_username, mode, topic_creator_id).await
+                    handle_message(bot, msg, pool, allowed_users, bot_username, mode, topic_creator_id, model_admin_ids).await
                 }
             })
         )
@@ -216,6 +226,7 @@ async fn handle_message(
     bot_username: Option<String>,
     mode: ChatMode,
     topic_creator_id: Option<i64>,
+    model_admin_ids: Vec<i64>,
 ) -> ResponseResult<()> {
             let user_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
             tracing::info!(chat_id = %msg.chat.id, user_id, thread_id = ?msg.thread_id, text = ?msg.text(), "raw message received");
@@ -245,21 +256,42 @@ async fn handle_message(
                     Err(_) => return Ok(()),
                 };
 
+                // !model [value] — dedicated model picker shortcut
                 // !cmd /model or !cmd /agent — generic slash command bridge
-                if prompt.trim() == "!cmd" || prompt.starts_with("!cmd ") {
-                    let arg = prompt.trim_start_matches("!cmd").trim().to_string();
+                if prompt.trim() == "!model" || prompt.starts_with("!model ")
+                    || prompt.trim() == "!cmd" || prompt.starts_with("!cmd ")
+                {
                     let chat_id = msg.chat.id;
+
+                    // In team mode: only model_admin_ids (falling back to topic_creator_id) may run this.
+                    // In personal mode: no extra gate needed (allowed_users already covers it).
+                    if mode == ChatMode::Team {
+                        let can = can_change_model(user_id, &model_admin_ids, topic_creator_id);
+                        if !can {
+                            let mut req = bot.send_message(chat_id, "⛔ Only admins can change the model.");
+                            if let Some(tid) = ctx.thread_id { req = req.message_thread_id(tid); }
+                            else { req = req.reply_parameters(ReplyParameters::new(msg.id)); }
+                            let _ = req.await;
+                            return Ok(());
+                        }
+                    }
+
+                    // !model only makes sense inside an active topic session.
+                    if !in_real_topic {
+                        let mut req = bot.send_message(chat_id, "⚠️ Use `!model` inside a topic where a session is active.");
+                        if let Some(tid) = ctx.thread_id { req = req.message_thread_id(tid); }
+                        else { req = req.reply_parameters(ReplyParameters::new(msg.id)); }
+                        let _ = req.await;
+                        return Ok(());
+                    }
+
+                    let (slash_cmd, value) = parse_cmd_prompt(&prompt);
 
                     // Ensure session exists so we have options
                     let _ = pool.get_or_create(&ctx.session_key).await;
 
-                    // Parse: "!cmd /model" or "!cmd /model claude-sonnet-4"
-                    let mut parts = arg.splitn(2, ' ');
-                    let slash_cmd = parts.next().unwrap_or("").to_string();
-                    let value = parts.next().unwrap_or("").trim().to_string();
-
                     if slash_cmd.is_empty() || !slash_cmd.starts_with('/') {
-                        let mut req = bot.send_message(chat_id, "Usage: `!cmd /model` or `!cmd /agent`");
+                        let mut req = bot.send_message(chat_id, "Usage: `!model` or `!cmd /agent`");
                         if let Some(tid) = ctx.thread_id { req = req.message_thread_id(tid); }
                         else { req = req.reply_parameters(ReplyParameters::new(msg.id)); }
                         let _ = req.await;
@@ -271,7 +303,7 @@ async fn handle_message(
                     if value.is_empty() {
                         // Show inline keyboard
                         if options.is_empty() {
-                            let mut req = bot.send_message(chat_id, format!("No options available for `{slash_cmd}`."));
+                            let mut req = bot.send_message(chat_id, format!("⚠️ No options available for `{slash_cmd}`. Try sending a message first to start a session."));
                             if let Some(tid) = ctx.thread_id { req = req.message_thread_id(tid); }
                             else { req = req.reply_parameters(ReplyParameters::new(msg.id)); }
                             let _ = req.await;
@@ -290,10 +322,16 @@ async fn handle_message(
                             let _ = req.await;
                         }
                     } else {
-                        // Direct: !cmd /model claude-sonnet-4 → send as silent prompt
+                        // Direct: !model claude-sonnet-4 / !cmd /model claude-sonnet-4 → silent prompt
                         let prompt_text = format!("{slash_cmd} {value}");
-                        let _ = silent_prompt(&pool, &ctx.session_key, &prompt_text).await;
-                        let mut req = bot.send_message(chat_id, format!("✅ Sent: `{prompt_text}`"));
+                        let reply_text = match silent_prompt(&pool, &ctx.session_key, &prompt_text).await {
+                            Ok(_) => format!("✅ Sent: `{prompt_text}`"),
+                            Err(e) => {
+                                tracing::error!(session_key = %ctx.session_key, cmd = %prompt_text, error = %e, "silent_prompt failed");
+                                format!("⚠️ Failed to apply `{prompt_text}`: {e}")
+                            }
+                        };
+                        let mut req = bot.send_message(chat_id, reply_text);
                         if let Some(tid) = ctx.thread_id { req = req.message_thread_id(tid); }
                         else { req = req.reply_parameters(ReplyParameters::new(msg.id)); }
                         let _ = req.await;
@@ -398,6 +436,10 @@ async fn handle_message(
                 }
                 error!("pool error: {e}");
                 return Ok(());
+            }
+
+            if ctx.is_new_topic {
+                pool.set_pending_context(&ctx.session_key, SESSION_PREAMBLE.to_string()).await;
             }
 
             pool.register_meta(&ctx.session_key, SessionMeta {
@@ -736,7 +778,21 @@ async fn stream_prompt(
             } else {
                 final_content
             };
-            send_chunks(&bot, chat_id, current_msg_id, &final_content, thread_id).await;
+            // If Kiro appended a conclusion after "---", send it as a separate message.
+            if let Some(sep) = final_content.rfind("\n---\n") {
+                let body = final_content[..sep].trim();
+                let conclusion = final_content[sep + 5..].trim();
+                if !body.is_empty() && !conclusion.is_empty() {
+                    send_chunks(&bot, chat_id, current_msg_id, body, thread_id).await;
+                    let mut req = bot.send_message(chat_id, conclusion);
+                    if let Some(tid) = thread_id { req = req.message_thread_id(tid); }
+                    let _ = req.await;
+                } else {
+                    send_chunks(&bot, chat_id, current_msg_id, &final_content, thread_id).await;
+                }
+            } else {
+                send_chunks(&bot, chat_id, current_msg_id, &final_content, thread_id).await;
+            }
 
             Ok((final_content, timed_out, agent_died, partial_summary))
         })
@@ -788,4 +844,154 @@ fn compose_display(tool_lines: &[String], text: &str) -> String {
     }
     out.push_str(text.trim_end());
     out
+}
+
+/// Returns true if `user_id` is allowed to run `!model` / `!cmd`.
+/// Checks `model_admin_ids` first; falls back to `topic_creator_id`; if neither is set, allows all.
+fn can_change_model(user_id: i64, model_admin_ids: &[i64], topic_creator_id: Option<i64>) -> bool {
+    if !model_admin_ids.is_empty() {
+        return model_admin_ids.contains(&user_id);
+    }
+    if let Some(creator) = topic_creator_id {
+        return user_id == creator;
+    }
+    true // no restriction configured
+}
+
+/// Parse `!model [value]` or `!cmd /slash [value]` into `(slash_cmd, value)`.
+/// Returns `("", "")` for bare `!cmd` with no slash argument.
+fn parse_cmd_prompt(prompt: &str) -> (String, String) {
+    let arg = if prompt.starts_with("!model") {
+        format!("/model {}", prompt.trim_start_matches("!model").trim())
+    } else {
+        prompt.trim_start_matches("!cmd").trim().to_string()
+    };
+    let arg = arg.trim();
+    let mut parts = arg.splitn(2, ' ');
+    let slash_cmd = parts.next().unwrap_or("").to_string();
+    let value = parts.next().unwrap_or("").trim().to_string();
+    (slash_cmd, value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{can_change_model, parse_cmd_prompt};
+
+    // ── !model variants ───────────────────────────────────────────────────────
+
+    #[test]
+    fn model_bare() {
+        let (cmd, val) = parse_cmd_prompt("!model");
+        assert_eq!(cmd, "/model");
+        assert_eq!(val, "");
+    }
+
+    #[test]
+    fn model_with_value() {
+        let (cmd, val) = parse_cmd_prompt("!model claude-sonnet-4");
+        assert_eq!(cmd, "/model");
+        assert_eq!(val, "claude-sonnet-4");
+    }
+
+    #[test]
+    fn model_extra_spaces() {
+        let (cmd, val) = parse_cmd_prompt("!model   claude-sonnet-4  ");
+        assert_eq!(cmd, "/model");
+        assert_eq!(val, "claude-sonnet-4");
+    }
+
+    #[test]
+    fn model_only_spaces() {
+        // "!model   " — no real value, should show picker
+        let (cmd, val) = parse_cmd_prompt("!model   ");
+        assert_eq!(cmd, "/model");
+        assert_eq!(val, "");
+    }
+
+    // ── !cmd variants ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn cmd_bare() {
+        // "!cmd" alone — no slash arg, should hit usage error
+        let (cmd, val) = parse_cmd_prompt("!cmd");
+        assert_eq!(cmd, "");
+        assert_eq!(val, "");
+    }
+
+    #[test]
+    fn cmd_slash_model_bare() {
+        let (cmd, val) = parse_cmd_prompt("!cmd /model");
+        assert_eq!(cmd, "/model");
+        assert_eq!(val, "");
+    }
+
+    #[test]
+    fn cmd_slash_model_with_value() {
+        let (cmd, val) = parse_cmd_prompt("!cmd /model claude-sonnet-4");
+        assert_eq!(cmd, "/model");
+        assert_eq!(val, "claude-sonnet-4");
+    }
+
+    #[test]
+    fn cmd_slash_agent() {
+        let (cmd, val) = parse_cmd_prompt("!cmd /agent");
+        assert_eq!(cmd, "/agent");
+        assert_eq!(val, "");
+    }
+
+    #[test]
+    fn cmd_slash_agent_with_value() {
+        let (cmd, val) = parse_cmd_prompt("!cmd /agent kiro-cli");
+        assert_eq!(cmd, "/agent");
+        assert_eq!(val, "kiro-cli");
+    }
+
+    // ── Corner cases ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn cmd_no_slash_prefix() {
+        // "!cmd model" — missing leading slash, should fail the starts_with('/') guard
+        let (cmd, val) = parse_cmd_prompt("!cmd model");
+        assert!(!cmd.starts_with('/'), "should not have slash prefix");
+        assert_eq!(val, "");
+    }
+
+    #[test]
+    fn cmd_bare_slash() {
+        // "!cmd /" — slash with no name
+        let (cmd, val) = parse_cmd_prompt("!cmd /");
+        assert_eq!(cmd, "/");
+        assert_eq!(val, "");
+    }
+
+    #[test]
+    fn cmd_value_with_spaces() {
+        // value containing spaces — only first space splits cmd from value
+        let (cmd, val) = parse_cmd_prompt("!cmd /model claude sonnet 4");
+        assert_eq!(cmd, "/model");
+        assert_eq!(val, "claude sonnet 4");
+    }
+
+    // ── can_change_model ──────────────────────────────────────────────────────
+
+    #[test]
+    fn model_admin_ids_set_allows_listed_user() {
+        assert!(can_change_model(111, &[111, 222], Some(333)));
+    }
+
+    #[test]
+    fn model_admin_ids_set_blocks_unlisted_user() {
+        assert!(!can_change_model(999, &[111, 222], Some(333)));
+    }
+
+    #[test]
+    fn model_admin_ids_empty_falls_back_to_creator() {
+        assert!(can_change_model(333, &[], Some(333)));
+        assert!(!can_change_model(999, &[], Some(333)));
+    }
+
+    #[test]
+    fn no_restriction_allows_all() {
+        assert!(can_change_model(999, &[], None));
+    }
 }

@@ -42,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
 
     let allowed_users: HashSet<i64> = cfg.telegram.allowed_users.iter().cloned().collect();
 
-    telegram::run(pool.clone(), cfg.telegram.bot_token, allowed_users, cfg.telegram.topic_creator_id, cfg.telegram.mode).await;
+    telegram::run(pool.clone(), cfg.telegram.bot_token, allowed_users, cfg.telegram.topic_creator_id, cfg.telegram.model_admin_ids, cfg.telegram.mode).await;
 
     pool.shutdown().await;
     info!("agent-broker shut down");

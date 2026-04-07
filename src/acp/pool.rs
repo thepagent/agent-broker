@@ -71,6 +71,13 @@ impl SessionPool {
     }
 
     /// Store chat context for a session so cleanup can notify the user.
+    pub async fn set_pending_context(&self, session_key: &str, ctx: String) {
+        let mut conns = self.connections.write().await;
+        if let Some(conn) = conns.get_mut(session_key) {
+            conn.pending_context = Some(ctx);
+        }
+    }
+
     pub async fn register_meta(&self, session_key: &str, meta: SessionMeta) {
         self.meta.write().await.insert(session_key.to_string(), meta);
     }
