@@ -38,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
         "config loaded"
     );
 
-    let pool = Arc::new(acp::SessionPool::new(cfg.agent, cfg.pool.max_sessions));
+    let pool = Arc::new(acp::SessionPool::new(cfg.agent, cfg.pool.max_sessions, cfg.pool.crash_history_size));
 
     let allowed_users: HashSet<i64> = cfg.telegram.allowed_users.iter().cloned().collect();
 

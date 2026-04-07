@@ -54,14 +54,21 @@ pub struct AgentConfig {
 pub struct PoolConfig {
     #[serde(default = "default_max_sessions")]
     pub max_sessions: usize,
+    /// Number of recent user messages to keep in memory per session for crash recovery.
+    #[serde(default = "default_crash_history_size")]
+    pub crash_history_size: usize,
 }
 
 fn default_working_dir() -> String { "/tmp".into() }
 fn default_max_sessions() -> usize { 10 }
+fn default_crash_history_size() -> usize { 20 }
 
 impl Default for PoolConfig {
     fn default() -> Self {
-        Self { max_sessions: default_max_sessions() }
+        Self {
+            max_sessions: default_max_sessions(),
+            crash_history_size: default_crash_history_size(),
+        }
     }
 }
 

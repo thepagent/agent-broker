@@ -53,6 +53,7 @@ working_dir = "/home/agent"
 [pool]
 max_sessions = 10
 session_ttl_hours = 24
+crash_history_size = 20  # number of recent user messages to keep for crash recovery (0 to disable)
 
 [reactions]
 enabled = true

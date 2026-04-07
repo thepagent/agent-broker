@@ -1,7 +1,7 @@
 use crate::acp::connection::AcpConnection;
 use crate::config::AgentConfig;
 use anyhow::{anyhow, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::time::Instant;
@@ -37,19 +37,24 @@ pub struct SessionPool {
     summaries: RwLock<HashMap<String, String>>,
     /// Slash command options per session key (populated from session/new response).
     slash_commands: RwLock<HashMap<String, SlashCommands>>,
+    /// Recent user messages per session key, capped at crash_history_size.
+    user_message_history: RwLock<HashMap<String, VecDeque<String>>>,
+    crash_history_size: usize,
     config: AgentConfig,
     max_sessions: usize,
     pub evict_notifier: Mutex<Option<EvictNotifier>>,
 }
 
 impl SessionPool {
-    pub fn new(config: AgentConfig, max_sessions: usize) -> Self {
+    pub fn new(config: AgentConfig, max_sessions: usize, crash_history_size: usize) -> Self {
         Self {
             connections: RwLock::new(HashMap::new()),
             meta: RwLock::new(HashMap::new()),
             prev_session_ids: RwLock::new(HashMap::new()),
             summaries: RwLock::new(HashMap::new()),
             slash_commands: RwLock::new(HashMap::new()),
+            user_message_history: RwLock::new(HashMap::new()),
+            crash_history_size,
             config,
             max_sessions,
             evict_notifier: Mutex::new(None),
@@ -77,6 +82,17 @@ impl SessionPool {
             info!(session_key, "storing partial summary for crashed/timed-out session");
             self.summaries.write().await.insert(session_key.to_string(), summary);
         }
+    }
+
+    /// Record a user message for crash recovery. Keeps only the last crash_history_size messages.
+    pub async fn record_user_message(&self, session_key: &str, message: &str) {
+        if self.crash_history_size == 0 { return; }
+        let mut history = self.user_message_history.write().await;
+        let deque = history.entry(session_key.to_string()).or_default();
+        if deque.len() >= self.crash_history_size {
+            deque.pop_front();
+        }
+        deque.push_back(message.to_string());
     }
 
     pub async fn get_or_create(&self, thread_id: &str) -> Result<()> {
@@ -188,6 +204,7 @@ impl SessionPool {
         self.prev_session_ids.write().await.remove(session_key);
         self.summaries.write().await.remove(session_key);
         self.slash_commands.write().await.remove(session_key);
+        self.user_message_history.write().await.remove(session_key);
     }
 
     /// Return a human-readable status string for a session.
@@ -260,6 +277,22 @@ impl SessionPool {
                     info!(thread_id = %key, "compacted memory summary stored");
                     self.summaries.write().await.insert(key.clone(), summary);
                 }
+            } else {
+                // Compaction failed (crashed session) — fall back to raw user message history.
+                let history = self.user_message_history.read().await;
+                if let Some(msgs) = history.get(key) {
+                    if !msgs.is_empty() {
+                        let summary = msgs.iter()
+                            .map(|m| format!("- {m}"))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        info!(thread_id = %key, msgs = msgs.len(), "crash recovery: injecting user message history");
+                        self.summaries.write().await.insert(
+                            key.clone(),
+                            format!("[Recent messages before crash]:\n{summary}"),
+                        );
+                    }
+                }
             }
         }
 
@@ -284,6 +317,7 @@ impl SessionPool {
         let count = conns.len();
         conns.clear();
         self.meta.write().await.clear();
+        self.user_message_history.write().await.clear();
         info!(count, "pool shutdown complete");
     }
 }

@@ -441,6 +441,7 @@ async fn handle_message(
 
             set_reaction(&bot, chat_id, user_msg_id, EMOJI_THINKING).await;
 
+            pool.record_user_message(&ctx.session_key, &attributed_prompt).await;
             let result = stream_prompt(
                 &pool, &ctx.session_key, &attributed_prompt,
                 &bot, chat_id, thinking.id, user_msg_id, ctx.thread_id,
