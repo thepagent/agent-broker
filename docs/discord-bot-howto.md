@@ -1,6 +1,6 @@
 # Discord Bot Setup Guide
 
-Step-by-step guide to create and configure a Discord bot for agent-broker.
+Step-by-step guide to create and configure a Discord bot for openab.
 
 ## 1. Create a Discord Application
 
@@ -47,7 +47,7 @@ Step-by-step guide to create and configure a Discord bot for agent-broker.
 3. Click **Copy Channel ID**
 4. Use this ID in `allowed_channels` in your config
 
-## 7. Configure agent-broker
+## 7. Configure openab
 
 Set the bot token and channel ID:
 
@@ -65,7 +65,7 @@ allowed_channels = ["your-channel-id-from-step-6"]
 
 For Kubernetes:
 ```bash
-kubectl create secret generic agent-broker-secret \
+kubectl create secret generic openab-secret \
   --from-literal=discord-bot-token="your-token-from-step-3"
 ```
 

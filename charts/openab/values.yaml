@@ -1,6 +1,6 @@
 image:
-  repository: ghcr.io/thepagent/agent-broker
-  tag: "dd7e1ca"
+  repository: ghcr.io/openabdev/openab
+  tag: "78f8d2c"
   pullPolicy: IfNotPresent
 
 replicas: 1
@@ -9,6 +9,18 @@ strategy:
   type: Recreate
 
 resources: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
 
 persistence:
   enabled: true

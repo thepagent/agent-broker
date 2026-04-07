@@ -1,36 +1,46 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: agent-broker
+  name: openab
   labels:
-    app: agent-broker
+    app: openab
 spec:
   replicas: 1
   strategy:
     type: Recreate          # PVC is ReadWriteOnce
   selector:
     matchLabels:
-      app: agent-broker
+      app: openab
   template:
     metadata:
       labels:
-        app: agent-broker
+        app: openab
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       containers:
-        - name: agent-broker
-          image: agent-broker:latest
+        - name: openab
+          image: openab:latest
           imagePullPolicy: Never
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
           env:
             - name: DISCORD_BOT_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: agent-broker-secret
+                  name: openab-secret
                   key: discord-bot-token
             - name: HOME
               value: /home/agent
           volumeMounts:
             - name: config
-              mountPath: /etc/agent-broker
+              mountPath: /etc/openab
               readOnly: true
             # Default mounts for Kiro CLI. For other backends, replace
             # these subPath entries or mount the whole home directory:
@@ -45,7 +55,7 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: agent-broker-config
+            name: openab-config
         - name: data
           persistentVolumeClaim:
-            claimName: agent-broker-data
+            claimName: openab-data
