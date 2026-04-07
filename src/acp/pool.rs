@@ -70,6 +70,15 @@ impl SessionPool {
         self.meta.write().await.insert(session_key.to_string(), meta);
     }
 
+    /// Store a partial summary for a session (e.g. on crash or timeout).
+    /// Will be injected as context when the session is next resumed.
+    pub async fn store_partial_summary(&self, session_key: &str, summary: String) {
+        if !summary.trim().is_empty() {
+            info!(session_key, "storing partial summary for crashed/timed-out session");
+            self.summaries.write().await.insert(session_key.to_string(), summary);
+        }
+    }
+
     pub async fn get_or_create(&self, thread_id: &str) -> Result<()> {
         // Check if alive connection exists
         {

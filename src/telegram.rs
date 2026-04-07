@@ -611,7 +611,8 @@ async fn stream_prompt(
     let bot = bot.clone();
     let session_key = session_key.to_string();
 
-    pool.with_connection(&session_key, |conn| {
+    // Run the stream inside with_connection, return abnormal exit info after lock is released.
+    let (_final_content, timed_out, agent_died, partial_summary) = pool.with_connection(&session_key, |conn| {
         let prompt = prompt.clone();
         let bot = bot.clone();
         let session_key = session_key.clone();
@@ -712,6 +713,13 @@ async fn stream_prompt(
 
             conn.prompt_done().await;
 
+            // Build partial summary from whatever we captured — used for session recovery below.
+            let partial_summary = if timed_out || agent_died {
+                compose_display(&tool_lines, &text_buf)
+            } else {
+                String::new()
+            };
+
             // Append user-facing notice for abnormal exits
             if timed_out {
                 text_buf.push_str("\n\n⚠️ _Timed out after 30 minutes. Use !restart to start a fresh session._");
@@ -729,10 +737,21 @@ async fn stream_prompt(
             };
             send_chunks(&bot, chat_id, current_msg_id, &final_content, thread_id).await;
 
-            Ok(())
+            Ok((final_content, timed_out, agent_died, partial_summary))
         })
     })
-    .await
+    .await?;
+
+    // After lock is released: store partial summary and evict dead/timed-out session
+    // so the next message gets a fresh session with injected context.
+    // Works for both personal and team mode — recovery is session-key based, mode-agnostic.
+    if timed_out || agent_died {
+        pool.store_partial_summary(&session_key, partial_summary).await;
+        pool.remove_session(&session_key).await;
+        tracing::info!(session_key, timed_out, agent_died, "session evicted after abnormal exit, partial summary stored");
+    }
+
+    Ok(())
 }
 
 async fn send_chunks(
