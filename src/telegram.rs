@@ -627,6 +627,12 @@ async fn stream_prompt(
             let mut current_msg_id = msg_id;
             let mut last_edit = tokio::time::Instant::now();
             let prompt_start = tokio::time::Instant::now();
+            let mut timed_out = false;
+            let mut agent_died = false;
+
+            // WORKAROUND: These constants are hardcoded. Ideally the ACP protocol
+            // would provide structured lifecycle signals (heartbeat, progress, cancellation)
+            // so the broker doesn't need to guess via polling. Revisit when ACP matures.
             const HARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
             const ALIVE_CHECK: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -643,7 +649,8 @@ async fn stream_prompt(
                         };
 
                         if notification.id.is_some() {
-                            // Drain window: capture late-arriving text chunks for 200ms
+                            // WORKAROUND: 200ms drain window to catch late-arriving text chunks
+                            // that race against end_turn. Proper fix: sequence numbers in ACP.
                             let drain_until = tokio::time::Instant::now() + std::time::Duration::from_millis(200);
                             while let Ok(Some(n)) = tokio::time::timeout_at(drain_until, rx.recv()).await {
                                 if let Some(AcpEvent::Text(t)) = classify_notification(&n) {
@@ -674,13 +681,19 @@ async fn stream_prompt(
                             }
                         }
                     }
+                    // WORKAROUND: Poll liveness every 30s since ACP has no heartbeat.
+                    // stream_prompt still holds the write lock — a hung task blocks other
+                    // messages for up to HARD_TIMEOUT. Proper fix: release lock after
+                    // session_prompt, drain outside (same pattern as silent_prompt).
                     _ = tokio::time::sleep(ALIVE_CHECK) => {
                         if !conn.alive() {
-                            tracing::warn!(session_key, "agent process died mid-prompt, breaking");
+                            tracing::warn!(session_key, "agent process died mid-prompt");
+                            agent_died = true;
                             break 'outer;
                         }
                         if prompt_start.elapsed() > HARD_TIMEOUT {
-                            tracing::warn!(session_key, "prompt exceeded 30min hard timeout, breaking");
+                            tracing::warn!(session_key, "prompt exceeded 30min hard timeout");
+                            timed_out = true;
                             break 'outer;
                         }
                         continue;
@@ -698,6 +711,13 @@ async fn stream_prompt(
             }
 
             conn.prompt_done().await;
+
+            // Append user-facing notice for abnormal exits
+            if timed_out {
+                text_buf.push_str("\n\n⚠️ _Timed out after 30 minutes. Use !restart to start a fresh session._");
+            } else if agent_died {
+                text_buf.push_str("\n\n⚠️ _Agent process stopped unexpectedly. Use !restart to recover._");
+            }
 
             let final_content = compose_display(&tool_lines, &text_buf);
             let final_content = if final_content.trim().is_empty() && !tool_lines.is_empty() {
