@@ -209,7 +209,7 @@ impl AcpConnection {
                 Some(json!({
                     "protocolVersion": 1,
                     "clientCapabilities": {},
-                    "clientInfo": {"name": "agent-broker", "version": "0.1.0"},
+                    "clientInfo": {"name": "openab", "version": "0.1.0"},
                 })),
             )
             .await?;

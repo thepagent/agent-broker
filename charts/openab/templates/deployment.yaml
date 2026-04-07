@@ -1,9 +1,9 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "agent-broker.fullname" . }}
+  name: {{ include "openab.fullname" . }}
   labels:
-    {{- include "agent-broker.labels" . | nindent 4 }}
+    {{- include "openab.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicas }}
   {{- with .Values.strategy }}
@@ -12,23 +12,23 @@ spec:
   {{- end }}
   selector:
     matchLabels:
-      {{- include "agent-broker.selectorLabels" . | nindent 6 }}
+      {{- include "openab.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
       labels:
-        {{- include "agent-broker.selectorLabels" . | nindent 8 }}
+        {{- include "openab.selectorLabels" . | nindent 8 }}
     spec:
       containers:
-        - name: agent-broker
-          image: "{{ include "agent-broker.image.repository" . | trim }}:{{ .Values.image.tag }}"
+        - name: openab
+          image: "{{ include "openab.image.repository" . | trim }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: DISCORD_BOT_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "agent-broker.fullname" . }}
+                  name: {{ include "openab.fullname" . }}
                   key: discord-bot-token
             - name: HOME
               value: /home/agent
@@ -46,7 +46,7 @@ spec:
           {{- end }}
           volumeMounts:
             - name: config
-              mountPath: /etc/agent-broker
+              mountPath: /etc/openab
               readOnly: true
             {{- if .Values.persistence.enabled }}
             - name: data
@@ -72,9 +72,9 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: {{ include "agent-broker.fullname" . }}
+            name: {{ include "openab.fullname" . }}
         {{- if .Values.persistence.enabled }}
         - name: data
           persistentVolumeClaim:
-            claimName: {{ include "agent-broker.fullname" . }}
+            claimName: {{ include "openab.fullname" . }}
         {{- end }}

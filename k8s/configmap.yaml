@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: agent-broker-config
+  name: openab-config
 data:
   config.toml: |
     [discord]

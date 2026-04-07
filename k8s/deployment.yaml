@@ -1,36 +1,36 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: agent-broker
+  name: openab
   labels:
-    app: agent-broker
+    app: openab
 spec:
   replicas: 1
   strategy:
     type: Recreate          # PVC is ReadWriteOnce
   selector:
     matchLabels:
-      app: agent-broker
+      app: openab
   template:
     metadata:
       labels:
-        app: agent-broker
+        app: openab
     spec:
       containers:
-        - name: agent-broker
-          image: agent-broker:latest
+        - name: openab
+          image: openab:latest
           imagePullPolicy: Never
           env:
             - name: DISCORD_BOT_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: agent-broker-secret
+                  name: openab-secret
                   key: discord-bot-token
             - name: HOME
               value: /home/agent
           volumeMounts:
             - name: config
-              mountPath: /etc/agent-broker
+              mountPath: /etc/openab
               readOnly: true
             - name: data
               mountPath: /home/agent/.kiro
@@ -41,7 +41,7 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: agent-broker-config
+            name: openab-config
         - name: data
           persistentVolumeClaim:
-            claimName: agent-broker-data
+            claimName: openab-data

@@ -24,7 +24,7 @@ RUN mkdir -p /home/agent/.local/share/kiro-cli /home/agent/.kiro
 ENV HOME=/home/agent
 WORKDIR /home/agent
 
-COPY --from=builder /build/target/release/agent-broker /usr/local/bin/agent-broker
+COPY --from=builder /build/target/release/openab /usr/local/bin/openab
 
-ENTRYPOINT ["agent-broker"]
-CMD ["/etc/agent-broker/config.toml"]
+ENTRYPOINT ["openab"]
+CMD ["/etc/openab/config.toml"]

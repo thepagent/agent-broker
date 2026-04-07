@@ -81,6 +81,6 @@ async fn main() -> anyhow::Result<()> {
     // Cleanup
     cleanup_handle.abort();
     shutdown_pool.shutdown().await;
-    info!("agent-broker shut down");
+    info!("openab shut down");
     Ok(())
 }
