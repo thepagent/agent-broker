@@ -92,6 +92,8 @@ Swap backends using the `agent.preset` Helm value or manual config. Tested backe
 
 ### Helm Install (recommended)
 
+If you use `zsh`, quote indexed Helm keys like `'discord.allowedChannels[0]=...'` to avoid shell globbing.
+
 ```bash
 helm repo add openab https://openabdev.github.io/openab
 helm repo update
@@ -99,24 +101,24 @@ helm repo update
 # Kiro CLI (default)
 helm install openab openab/openab \
   --set discord.botToken="$DISCORD_BOT_TOKEN" \
-  --set-string discord.allowedChannels[0]="YOUR_CHANNEL_ID"
+  --set-string 'discord.allowedChannels[0]=YOUR_CHANNEL_ID'
 
 # Codex
 helm install openab openab/openab \
   --set discord.botToken="$DISCORD_BOT_TOKEN" \
-  --set-string discord.allowedChannels[0]="YOUR_CHANNEL_ID" \
+  --set-string 'discord.allowedChannels[0]=YOUR_CHANNEL_ID' \
   --set agent.preset=codex
 
 # Claude Code
 helm install openab openab/openab \
   --set discord.botToken="$DISCORD_BOT_TOKEN" \
-  --set-string discord.allowedChannels[0]="YOUR_CHANNEL_ID" \
+  --set-string 'discord.allowedChannels[0]=YOUR_CHANNEL_ID' \
   --set agent.preset=claude
 
 # Gemini
 helm install openab openab/openab \
   --set discord.botToken="$DISCORD_BOT_TOKEN" \
-  --set-string discord.allowedChannels[0]="YOUR_CHANNEL_ID" \
+  --set-string 'discord.allowedChannels[0]=YOUR_CHANNEL_ID' \
   --set agent.preset=gemini
 ```
 

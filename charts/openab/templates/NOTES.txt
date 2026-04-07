@@ -2,8 +2,10 @@ openab {{ .Chart.AppVersion }} has been installed!
 
 ⚠️  Discord channel IDs must be set with --set-string (not --set) to avoid float64 precision loss:
 
+⚠️  In zsh, quote indexed keys to avoid shell globbing:
+
   helm upgrade {{ .Release.Name }} openab/openab \
-    --set-string discord.allowedChannels[0]="<YOUR_CHANNEL_ID>"
+    --set-string 'discord.allowedChannels[0]=<YOUR_CHANNEL_ID>'
 
 {{- if not .Values.discord.botToken }}
 
