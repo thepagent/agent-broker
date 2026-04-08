@@ -1,4 +1,4 @@
-/// Split text into chunks at line boundaries, each <= limit chars.
+/// Split text into chunks at line boundaries, each <= limit bytes (UTF-8 safe).
 pub fn split_message(text: &str, limit: usize) -> Vec<String> {
     if text.len() <= limit {
         return vec![text.to_string()];
@@ -16,13 +16,14 @@ pub fn split_message(text: &str, limit: usize) -> Vec<String> {
         if !current.is_empty() {
             current.push('\n');
         }
-        // If a single line exceeds limit, hard-split it
+        // If a single line exceeds limit, hard-split on char boundaries
         if line.len() > limit {
-            for chunk in line.as_bytes().chunks(limit) {
-                if !current.is_empty() {
+            for ch in line.chars() {
+                if current.len() + ch.len_utf8() > limit {
                     chunks.push(current);
+                    current = String::new();
                 }
-                current = String::from_utf8_lossy(chunk).to_string();
+                current.push(ch);
             }
         } else {
             current.push_str(line);
@@ -32,4 +33,16 @@ pub fn split_message(text: &str, limit: usize) -> Vec<String> {
         chunks.push(current);
     }
     chunks
+}
+
+/// Truncate a string to at most `limit` bytes on a char boundary.
+pub fn truncate_utf8(s: &str, limit: usize) -> &str {
+    if s.len() <= limit {
+        return s;
+    }
+    let mut end = limit;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
