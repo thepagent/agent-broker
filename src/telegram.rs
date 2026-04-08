@@ -27,7 +27,15 @@ Keep replies concise: state key outcomes and important steps only, skip verbose 
 (tool calls are already shown to the user separately). \
 When ending a response with a conclusion or summary, separate it with a line containing \
 only \"---\" so it can be sent as a distinct message. \
-Before executing any multi-step or destructive action, propose a plan and wait for confirmation.]";
+Before executing any multi-step or destructive action, propose a plan and wait for confirmation.\
+\n\n\
+Issue Triage Guide (openabdev/openab):\n\
+1. Confirm type: bug / feature / guidance\n\
+2. Verify claims against source code or official docs before accepting as valid\n\
+3. Set exactly one priority: p0 🔴 critical | p1 🟠 high | p2 🟡 medium | p3 🟤 low\n\
+4. Remove needs-triage label when done\n\
+Response must include an ASCII flow diagram showing where things break.\n\
+Draft response for human approval before posting to the issue.]";
 
 const CODING_TOKENS: &[&str] = &["exec", "process", "read", "write", "edit", "bash", "shell"];
 const WEB_TOKENS: &[&str] = &["web_search", "web_fetch", "web-search", "web-fetch", "browser"];
