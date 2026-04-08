@@ -117,8 +117,16 @@ impl EventHandler for Handler {
         };
 
         let thread_key = thread_id.to_string();
-        if let Err(e) = self.pool.get_or_create(&thread_key).await {
-            let _ = edit(&ctx, thread_channel, thinking_msg.id, "⚠️ Failed to start agent.").await;
+        let progress_ctx = ctx.clone();
+        let progress_channel = thread_channel;
+        let progress_msg_id = thinking_msg.id;
+        if let Err(e) = self.pool.get_or_create(&thread_key, |status| {
+            let ctx = progress_ctx.clone();
+            async move {
+                let _ = edit(&ctx, progress_channel, progress_msg_id, status).await;
+            }
+        }).await {
+            let _ = edit(&ctx, thread_channel, thinking_msg.id, &format!("⚠️ Failed to start agent: {e}")).await;
             error!("pool error: {e}");
             return;
         }

@@ -21,7 +21,11 @@ impl SessionPool {
         }
     }
 
-    pub async fn get_or_create(&self, thread_id: &str) -> Result<()> {
+    pub async fn get_or_create<F, Fut>(&self, thread_id: &str, on_progress: F) -> Result<()>
+    where
+        F: Fn(&str) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
         // Check if alive connection exists
         {
             let conns = self.connections.read().await;
@@ -48,6 +52,8 @@ impl SessionPool {
             return Err(anyhow!("pool exhausted ({} sessions)", self.max_sessions));
         }
 
+        on_progress("⏳ 正在啟動 agent...").await;
+
         let mut conn = AcpConnection::spawn(
             &self.config.command,
             &self.config.args,
@@ -57,6 +63,9 @@ impl SessionPool {
         .await?;
 
         conn.initialize().await?;
+
+        on_progress("⏳ 正在建立 session...").await;
+
         conn.session_new(&self.config.working_dir).await?;
 
         let is_rebuild = conns.contains_key(thread_id);
