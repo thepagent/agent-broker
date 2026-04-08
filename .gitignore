@@ -2,5 +2,3 @@
 config.toml
 *.swp
 .DS_Store
-config.langya.toml
-.env
