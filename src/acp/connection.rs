@@ -96,7 +96,21 @@ impl AcpConnection {
                                 .and_then(|t| t.as_str())
                                 .unwrap_or("?");
                             info!(title, "auto-allow permission");
-                            let reply = JsonRpcResponse::new(id, json!({"optionId": "allow_always"}));
+                            let option_id = msg.params.as_ref()
+                                .and_then(|p| p.get("options"))
+                                .and_then(|o| o.as_array())
+                                .and_then(|options| {
+                                    options.iter()
+                                        .find(|o| o.get("kind").and_then(|k| k.as_str()) == Some("allow_always"))
+                                        .or_else(|| options.iter()
+                                            .find(|o| o.get("kind").and_then(|k| k.as_str()) == Some("allow_once")))
+                                        .or_else(|| options.iter()
+                                            .find(|o| o.get("kind").and_then(|k| k.as_str()) != Some("reject_once")))
+                                        .and_then(|o| o.get("optionId"))
+                                        .and_then(|id| id.as_str())
+                                })
+                                .unwrap_or("allow_always");
+                            let reply = JsonRpcResponse::new(id, json!({"optionId": option_id}));
                             if let Ok(data) = serde_json::to_string(&reply) {
                                 let mut w = stdin_clone.lock().await;
                                 let _ = w.write_all(format!("{data}\n").as_bytes()).await;
