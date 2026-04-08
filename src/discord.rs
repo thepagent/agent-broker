@@ -210,6 +210,10 @@ async fn stream_prompt(
             let (buf_tx, buf_rx) = watch::channel(initial);
 
             let mut text_buf = String::new();
+            // Accumulated thinking content from agent_thought_chunk events.
+            // Rendered above tool_lines + text as a blockquote so users can
+            // see the bot's reasoning before / alongside its actions.
+            let mut thought_buf = String::new();
             // Tool calls indexed by toolCallId. Vec preserves first-seen
             // order. We store id + title + state separately so a ToolDone
             // event that arrives without a refreshed title (claude-agent-acp's
@@ -274,10 +278,29 @@ async fn stream_prompt(
                                 // Reaction: back to thinking after tools
                             }
                             text_buf.push_str(&t);
-                            let _ = buf_tx.send(compose_display(&tool_lines, &text_buf));
+                            let _ = buf_tx.send(compose_display(&tool_lines, &thought_buf, &text_buf));
                         }
-                        AcpEvent::Thinking => {
+                        AcpEvent::Thinking(t) => {
                             reactions.set_thinking().await;
+                            if !t.is_empty() {
+                                // claude-agent-acp emits both `thinking`
+                                // (new block) and `thinking_delta`
+                                // (continuation) events as the same
+                                // `agent_thought_chunk` shape, so we can't
+                                // tell block boundaries from the protocol
+                                // alone. Heuristic: if the previous chunk
+                                // ended with sentence-ending punctuation
+                                // and the new one starts with a letter
+                                // (no leading whitespace), it's almost
+                                // certainly a new thinking block — insert
+                                // a paragraph break so they don't visually
+                                // run together as ".There's".
+                                if needs_thinking_separator(&thought_buf, &t) {
+                                    thought_buf.push_str("\n\n");
+                                }
+                                thought_buf.push_str(&t);
+                                let _ = buf_tx.send(compose_display(&tool_lines, &thought_buf, &text_buf));
+                            }
                         }
                         AcpEvent::ToolStart { id, title } if !title.is_empty() => {
                             reactions.set_tool(&title).await;
@@ -299,7 +322,7 @@ async fn stream_prompt(
                                     state: ToolState::Running,
                                 });
                             }
-                            let _ = buf_tx.send(compose_display(&tool_lines, &text_buf));
+                            let _ = buf_tx.send(compose_display(&tool_lines, &thought_buf, &text_buf));
                         }
                         AcpEvent::ToolDone { id, title, status } => {
                             reactions.set_thinking().await;
@@ -327,7 +350,7 @@ async fn stream_prompt(
                                     state: new_state,
                                 });
                             }
-                            let _ = buf_tx.send(compose_display(&tool_lines, &text_buf));
+                            let _ = buf_tx.send(compose_display(&tool_lines, &thought_buf, &text_buf));
                         }
                         _ => {}
                     }
@@ -339,7 +362,7 @@ async fn stream_prompt(
             let _ = edit_handle.await;
 
             // Final edit
-            let final_content = compose_display(&tool_lines, &text_buf);
+            let final_content = compose_display(&tool_lines, &thought_buf, &text_buf);
             let final_content = if final_content.is_empty() {
                 "_(no response)_".to_string()
             } else {
@@ -397,8 +420,41 @@ impl ToolEntry {
     }
 }
 
-fn compose_display(tool_lines: &[ToolEntry], text: &str) -> String {
+/// Heuristic for detecting a thinking block boundary in a stream of
+/// `agent_thought_chunk` deltas. claude-agent-acp doesn't tag the first
+/// delta of a new block, so we infer it: if the previous chunk ended in
+/// sentence-ending punctuation (`. ! ? 。 ! ?`) and the new chunk starts
+/// with a letter (no leading whitespace), they're almost certainly two
+/// separate thoughts that need a paragraph break.
+fn needs_thinking_separator(prev: &str, new: &str) -> bool {
+    if prev.is_empty() || new.is_empty() {
+        return false;
+    }
+    let last = match prev.chars().last() {
+        Some(c) => c,
+        None => return false,
+    };
+    let first = match new.chars().next() {
+        Some(c) => c,
+        None => return false,
+    };
+    let sentence_end = matches!(last, '.' | '!' | '?' | '。' | '！' | '？');
+    let starts_word = first.is_alphabetic();
+    sentence_end && starts_word
+}
+
+fn compose_display(tool_lines: &[ToolEntry], thought: &str, text: &str) -> String {
     let mut out = String::new();
+    let trimmed_thought = thought.trim();
+    if !trimmed_thought.is_empty() {
+        out.push_str("> 🤔 _Thinking_\n");
+        for line in trimmed_thought.lines() {
+            out.push_str("> ");
+            out.push_str(line);
+            out.push('\n');
+        }
+        out.push('\n');
+    }
     if !tool_lines.is_empty() {
         for entry in tool_lines {
             out.push_str(&entry.render());

@@ -59,7 +59,7 @@ impl std::fmt::Display for JsonRpcError {
 #[derive(Debug)]
 pub enum AcpEvent {
     Text(String),
-    Thinking,
+    Thinking(String),
     ToolStart { id: String, title: String },
     ToolDone { id: String, title: String, status: String },
     Status,
@@ -89,7 +89,18 @@ pub fn classify_notification(msg: &JsonRpcMessage) -> Option<AcpEvent> {
             Some(AcpEvent::Text(text.to_string()))
         }
         "agent_thought_chunk" => {
-            Some(AcpEvent::Thinking)
+            // Extract the streamed thinking text. claude-agent-acp emits
+            // these as `{ content: { type: "text", text: "..." } }` (same
+            // shape as agent_message_chunk). If the field is missing we
+            // still emit Thinking with an empty string so the reactions
+            // controller still flips 🤔.
+            let text = update
+                .get("content")
+                .and_then(|c| c.get("text"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            Some(AcpEvent::Thinking(text))
         }
         "tool_call" => {
             let title = update.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
