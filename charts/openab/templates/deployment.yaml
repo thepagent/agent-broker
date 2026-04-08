@@ -9,6 +9,8 @@ metadata:
   labels:
     {{- include "openab.labels" $d | nindent 4 }}
 spec:
+  # Hardcoded for PVC-backed agents: RWO volumes can't be shared across pods,
+  # so rolling updates and multiple replicas are not supported.
   replicas: 1
   strategy:
     type: Recreate
@@ -18,7 +20,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") $ | sha256sum }}
+        checksum/config: {{ $cfg | toJson | sha256sum }}
       labels:
         {{- include "openab.selectorLabels" $d | nindent 8 }}
     spec:
@@ -35,11 +37,13 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           env:
+            {{- if $cfg.discord.botToken }}
             - name: DISCORD_BOT_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "openab.agentFullname" $d }}
                   key: discord-bot-token
+            {{- end }}
             - name: HOME
               value: {{ $cfg.workingDir }}
             {{- range $k, $v := $cfg.env }}

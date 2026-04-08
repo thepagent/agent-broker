@@ -24,7 +24,7 @@ Agents deployed:
     Authenticate:
     kubectl exec -it deployment/{{ include "openab.agentFullname" (dict "ctx" $ "agent" $name) }} -- gemini
 {{- end }}
-{{- end }}
 
-Restart an agent after authentication:
-  kubectl rollout restart deployment/<agent-deployment-name>
+    Restart after auth:
+    kubectl rollout restart deployment/{{ include "openab.agentFullname" (dict "ctx" $ "agent" $name) }}
+{{- end }}

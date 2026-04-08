@@ -27,12 +27,12 @@ data:
     {{- end }}
 
     [pool]
-    max_sessions = {{ $cfg.pool.maxSessions }}
-    session_ttl_hours = {{ $cfg.pool.sessionTtlHours }}
+    max_sessions = {{ ($cfg.pool).maxSessions | default 10 }}
+    session_ttl_hours = {{ ($cfg.pool).sessionTtlHours | default 24 }}
 
     [reactions]
-    enabled = {{ $cfg.reactions.enabled }}
-    remove_after_reply = {{ $cfg.reactions.removeAfterReply }}
+    enabled = {{ ($cfg.reactions).enabled | default true }}
+    remove_after_reply = {{ ($cfg.reactions).removeAfterReply | default false }}
   {{- if $cfg.agentsMd }}
   AGENTS.md: |
     {{- $cfg.agentsMd | nindent 4 }}
