@@ -25,14 +25,6 @@ working_dir = "/home/agent"
 # working_dir = "/home/agent"
 # env = { GEMINI_API_KEY = "${GEMINI_API_KEY}" }
 
-# Local AI — Ollama, LocalAI, vLLM, llama.cpp, LM Studio (BYOCLI)
-# Install: cargo install --git https://github.com/BlakeHung/local-ai-acp
-# [agent]
-# command = "local-ai-acp"
-# args = []
-# working_dir = "/home/agent"
-# env = { LLM_BASE_URL = "http://localhost:11434/v1", LLM_MODEL = "gemma4:26b" }
-
 [pool]
 max_sessions = 10
 session_ttl_hours = 24
