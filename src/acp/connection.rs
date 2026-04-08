@@ -88,6 +88,10 @@ impl AcpConnection {
                     debug!(line = line.trim(), "acp_recv");
 
                     // Auto-reply session/request_permission
+                    // Dynamically pick the most permissive option from the request's
+                    // options array instead of hardcoding an optionId.  Different ACP
+                    // agents use different ids (e.g. "allow_always" vs "allow-always",
+                    // "bypassPermissions" for ExitPlanMode), so we select by `kind`.
                     if msg.method.as_deref() == Some("session/request_permission") {
                         if let Some(id) = msg.id {
                             let title = msg.params.as_ref()
@@ -95,8 +99,26 @@ impl AcpConnection {
                                 .and_then(|t| t.get("title"))
                                 .and_then(|t| t.as_str())
                                 .unwrap_or("?");
-                            info!(title, "auto-allow permission");
-                            let reply = JsonRpcResponse::new(id, json!({"optionId": "allow_always"}));
+
+                            let options = msg.params.as_ref()
+                                .and_then(|p| p.get("options"))
+                                .and_then(|o| o.as_array());
+
+                            let picked = options.and_then(|opts| {
+                                opts.iter()
+                                    .find(|o| o.get("kind").and_then(|k| k.as_str()) == Some("allow_always"))
+                                    .or_else(|| opts.iter().find(|o| o.get("kind").and_then(|k| k.as_str()) == Some("allow_once")))
+                                    .or_else(|| opts.iter().find(|o| o.get("kind").and_then(|k| k.as_str()) != Some("reject_once")))
+                                    .and_then(|o| o.get("optionId").and_then(|v| v.as_str()))
+                            }).unwrap_or("allow_always");
+
+                            info!(title, picked, "auto-allow permission");
+                            let reply = JsonRpcResponse::new(id, json!({
+                                "outcome": {
+                                    "outcome": "selected",
+                                    "optionId": picked
+                                }
+                            }));
                             if let Ok(data) = serde_json::to_string(&reply) {
                                 let mut w = stdin_clone.lock().await;
                                 let _ = w.write_all(format!("{data}\n").as_bytes()).await;
