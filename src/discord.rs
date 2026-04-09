@@ -1,10 +1,11 @@
 use crate::acp::connection::ContentBlock;
-use crate::acp::pool::SessionPool;
+use crate::acp::SessionPool;
 use crate::config::ReactionsConfig;
 use crate::format;
 use crate::reactions::StatusReactionController;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use once_cell::sync::Lazy;
 use serenity::async_trait;
 use serenity::model::channel::Message;
 use serenity::model::gateway::Ready;
@@ -14,6 +15,15 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::watch;
 use tracing::{debug, error, info};
+
+/// Reusable HTTP client for downloading Discord attachments.
+/// Built once with a 30s timeout and rustls TLS (no native-tls deps).
+static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .expect("static HTTP client must build")
+});
 
 pub struct Handler {
     pub pool: Arc<SessionPool>,
@@ -123,10 +133,8 @@ impl EventHandler for Handler {
             "processing"
         );
 
-        // If prompt is empty and no attachments, skip
-        if prompt_with_sender.trim().is_empty() && msg.attachments.is_empty() {
-            return;
-        }
+        // Note: image-only messages (no text) are intentionally allowed since
+        // prompt_with_sender always includes the non-empty sender_context XML.
 
         let thread_id = if in_thread {
             msg.channel_id.get()
@@ -210,53 +218,62 @@ impl EventHandler for Handler {
 }
 
 /// Download a Discord image attachment and encode it as an ACP image content block.
-/// Downloads a Discord image attachment and encodes it as base64.
 ///
 /// Discord attachment URLs are temporary and expire, so we must download
 /// and encode the image data immediately. The ACP ImageContent schema
 /// requires `{ data: base64_string, mimeType: "image/..." }`.
+///
+/// Security: rejects non-image attachments (by content-type or extension)
+/// and files larger than 10MB to prevent OOM/abuse.
 async fn download_and_encode_image(attachment: &serenity::model::channel::Attachment) -> Option<ContentBlock> {
-    let url = &attachment.url;
+    const MAX_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
 
-    // Skip if no URL
+    let url = &attachment.url;
     if url.is_empty() {
         return None;
     }
 
-    // Determine media type from filename or content_type
+    // Determine media type — prefer content-type header, fallback to extension
     let media_type = attachment
         .content_type
-        .clone()
+        .as_deref()
         .or_else(|| {
-            let ext = attachment
+            attachment
                 .filename
                 .rsplit('.')
                 .next()
-                .unwrap_or("")
-                .to_lowercase();
-            match ext.as_str() {
-                "png" => Some("image/png".to_string()),
-                "jpg" | "jpeg" => Some("image/jpeg".to_string()),
-                "gif" => Some("image/gif".to_string()),
-                "webp" => Some("image/webp".to_string()),
-                _ => None,
-            }
-        })
-        .unwrap_or_else(|| "image/png".to_string());
+                .and_then(|ext| match ext.to_lowercase().as_str() {
+                    "png" => Some("image/png"),
+                    "jpg" | "jpeg" => Some("image/jpeg"),
+                    "gif" => Some("image/gif"),
+                    "webp" => Some("image/webp"),
+                    _ => None,
+                })
+        });
 
-    // Download the image
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            error!("failed to build HTTP client: {}", e);
-            return None;
-        }
+    // Validate that it's actually an image
+    let Some(mime) = media_type else {
+        debug!(filename = %attachment.filename, "skipping non-image attachment (no matching content-type or extension)");
+        return None;
     };
+    if !mime.starts_with("image/") {
+        debug!(filename = %attachment.filename, mime = %mime, "skipping non-image attachment");
+        return None;
+    }
 
-    let response = match client.get(url).send().await {
+    // Size check before downloading
+    if u64::from(attachment.size) > MAX_SIZE {
+        error!(
+            filename = %attachment.filename,
+            size = attachment.size,
+            max = MAX_SIZE,
+            "image attachment exceeds 10MB limit"
+        );
+        return None;
+    }
+
+    // Download using the static reusable client
+    let response = match HTTP_CLIENT.get(url).send().await {
         Ok(resp) => resp,
         Err(e) => {
             error!("failed to download image {}: {}", url, e);
@@ -277,11 +294,19 @@ async fn download_and_encode_image(attachment: &serenity::model::channel::Attach
         }
     };
 
-    // Encode as base64
-    let encoded = BASE64.encode(bytes.as_ref());
+    // Final size check after download (defense in depth)
+    if bytes.len() as u64 > MAX_SIZE {
+        error!(
+            filename = %attachment.filename,
+            size = bytes.len(),
+            "downloaded image exceeds 10MB limit after decode"
+        );
+        return None;
+    }
 
+    let encoded = BASE64.encode(bytes.as_ref());
     Some(ContentBlock::Image {
-        media_type,
+        media_type: mime.to_string(),
         data: encoded,
     })
 }
