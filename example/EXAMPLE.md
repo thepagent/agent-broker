@@ -1,35 +1,36 @@
-# OpenAB Docker Compose 使用說明
+# OpenAB Docker Compose Usage Guide
 
-## 概述
+## Overview
 
-此 docker-compose 配置啟動兩個 AI 助手服務：
-- **kiro**: OpenAB 的 Kiro 助手
-- **claude**: OpenAB 的 Claude 助手
-## 目錄結構
+This docker-compose configuration starts two AI assistant services:
+- **kiro**: OpenAB's Kiro assistant
+- **claude**: OpenAB's Claude assistant
+
+## Directory Structure
 
 ```
 example/
 ├── data/
 │   ├── home/
-│   │   ├── agent/          # Kiro 的 home 目錄
-│   │   └── node/           # Claude 的 home 目錄
+│   │   ├── agent/          # Kiro's home directory
+│   │   └── node/           # Claude's home directory
 │   │       └── .claude/
-│   │           └── CLAUDE.md  # Claude 角色設定（佐助）
+│   │           └── CLAUDE.md  # Claude character config (Sasuke)
 │   └── config/
 │       ├── kiro/
-│       │   └── config.toml    # Kiro 配置
+│       │   └── config.toml    # Kiro configuration
 │       └── claude/
-│           └── config.toml    # Claude 配置
+│           └── config.toml    # Claude configuration
 └── docker-compose.yml
 ```
 
-## 啟動服務
+## Start Services
 
 ```bash
 docker-compose up -d
 ```
 
-## 認證登入
+## Authentication Login
 ### kiro
 ```bash
 docker-compose exec -it kiro kiro-cli login --use-device-flow
@@ -38,64 +39,65 @@ docker-compose exec -it kiro kiro-cli login --use-device-flow
 ```bash
 docker-compose exec -it claude setup-token
 ```
-## 停止服務
+
+## Stop Services
 
 ```bash
 docker-compose down
 ```
 
-## 查看日誌
+## View Logs
 
 ```bash
-# 查看所有服務
+# View all services
 docker-compose logs -f
 
-# 查看特定服務
+# View specific service
 docker-compose logs -f kiro
 docker-compose logs -f claude
 ```
 
-## 重啟服務
+## Restart Services
 
 ```bash
 docker-compose restart
 ```
 
-## 配置設定
+## Configuration Setup
 
-### Discord Bot 設定
+### Discord Bot Settings
 
-啟動前必須修改以下配置文件：
+Before starting, you must modify the following configuration files:
 
-**Kiro 配置** (`./example/data/config/kiro/config.toml`)：
+**Kiro Configuration** (`./example/data/config/kiro/config.toml`):
 ```toml
 [discord]
-bot_token = "YOUR_KIRO_BOT_TOKEN"           # 替換為你的 Kiro Discord Bot Token
-allowed_channels = ["YOUR_CHANNEL_ID"]      # 替換為允許的頻道 ID
+bot_token = "YOUR_KIRO_BOT_TOKEN"           # Replace with your Kiro Discord Bot Token
+allowed_channels = ["YOUR_CHANNEL_ID"]      # Replace with allowed channel ID
 ```
 
-**Claude 配置** (`./example/data/config/claude/config.toml`)：
+**Claude Configuration** (`./example/data/config/claude/config.toml`):
 ```toml
 [discord]
-bot_token = "YOUR_CLAUDE_BOT_TOKEN"         # 替換為你的 Claude Discord Bot Token
-allowed_channels = ["YOUR_CHANNEL_ID"]      # 替換為允許的頻道 ID
+bot_token = "YOUR_CLAUDE_BOT_TOKEN"         # Replace with your Claude Discord Bot Token
+allowed_channels = ["YOUR_CHANNEL_ID"]      # Replace with allowed channel ID
 ```
 
-### 角色設定
+### Character Settings
 
-Claude 服務使用宇智波佐助的角色設定，配置文件位於：
+The Claude service uses Uchiha Sasuke character settings, located at:
 `./example/data/home/node/.claude/CLAUDE.md`
 
-修改配置後需重啟對應服務：
+After modifying configurations, restart the corresponding service:
 ```bash
-docker-compose restart kiro    # 重啟 Kiro
-docker-compose restart claude  # 重啟 Claude
+docker-compose restart kiro    # Restart Kiro
+docker-compose restart claude  # Restart Claude
 ```
 
-## 環境變數
+## Environment Variables
 
-兩個服務都設定了 `RUST_LOG=debug` 以輸出詳細日誌。
+Both services are set with `RUST_LOG=debug` for detailed logging.
 
-## 持久化數據
+## Data Persistence
 
-所有數據都掛載到本地 `./example/data/` 目錄，容器重啟後數據不會丟失。
+All data is mounted to the local `./example/data/` directory, so data persists after container restarts.
