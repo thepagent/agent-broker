@@ -12,6 +12,31 @@ Versions follow SemVer (e.g. `0.7.0`)。tagpr 根據 PR label 自動決定版本
 
 ## Release Flow (Tag-Driven)
 
+##### Pre-release path（測試用，完整 build）
+
+```
+  ┌─────────────────────────────────────────────────────────────────┐
+  │ 1. Maintainer 手動打 pre-release tag                              │
+  │    git tag v0.7.0-rc.1 && git push origin v0.7.0-rc.1           │
+  └─────────────────────────────────────────────────────────────────┘
+        │
+        ▼
+  ┌─────────────────────────────────────────────────────────────────┐
+  │ 2. build.yml 被 tag push 觸發 (is_prerelease=true)               │
+  │    → build-image:    4 variants × 2 platforms (amd64 + arm64)   │
+  │    → merge-manifests: image tags = <sha> + 0.7.0-rc.1           │
+  │    → release-chart:  helm chart → OCI registry                   │
+  └─────────────────────────────────────────────────────────────────┘
+        │
+        ▼
+  ┌─────────────────────────────────────────────────────────────────┐
+  │ 3. 內部測試驗證 pre-release                                       │
+  │    helm install openab oci://... --version 0.7.0-rc.1            │
+  └─────────────────────────────────────────────────────────────────┘
+```
+
+##### Stable path（正式發布，promote 不 rebuild）
+
 ```
   ┌─────────────────────────────────────────────────────────────────┐
   │ 1. 貢獻者 PR merge to main                                       │
@@ -30,10 +55,11 @@ Versions follow SemVer (e.g. `0.7.0`)。tagpr 根據 PR label 自動決定版本
         │
         ▼
   ┌─────────────────────────────────────────────────────────────────┐
-  │ 3. build.yml 被 tag push 觸發                                    │
-  │    → build-image:    4 variants × 2 platforms (amd64 + arm64)   │
-  │    → merge-manifests: 建立 multi-arch manifest                   │
-  │    → release-chart:  打包 helm chart → OCI registry              │
+  │ 3. build.yml 被 tag push 觸發 (is_prerelease=false)              │
+  │    → promote-stable: 驗證 pre-release image 存在                 │
+  │      re-tag <sha> → 0.7.0 / 0.7 / latest                       │
+  │      ⚠️ 不 rebuild，跟 pre-release 是同一個 artifact              │
+  │    → release-chart: helm chart → OCI registry                    │
   └─────────────────────────────────────────────────────────────────┘
         │
         ▼
@@ -43,6 +69,10 @@ Versions follow SemVer (e.g. `0.7.0`)。tagpr 根據 PR label 自動決定版本
   │    → 附加 install instructions 到 chart release notes            │
   └─────────────────────────────────────────────────────────────────┘
 ```
+
+> ⚠️ **核心原則：測過什麼就發什麼 (what you tested is what you ship)**
+> stable release 不重新 build，直接 promote pre-release 驗證過的 image。
+> stable tag 必須打在跟 pre-release 完全相同的 commit 上，否則 promote 會驗證失敗。
 
 ## GitHub Releases
 
@@ -58,7 +88,7 @@ Versions follow SemVer (e.g. `0.7.0`)。tagpr 根據 PR label 自動決定版本
 | Workflow | 觸發條件 | 用途 |
 |---|---|---|
 | `tagpr.yml` | push to main | 自動開 Release PR、打 tag、建立 GitHub Release |
-| `build.yml` | tag push `v*` | build image + push helm chart to OCI |
+| `build.yml` | tag push `v*` | pre-release: 完整 build / stable: promote image + push chart |
 | `release.yml` | Chart.yaml 變更 push to main | chart-releaser 更新 GitHub Pages index + install instructions |
 
 ## Version 同步 (tagpr)
@@ -109,22 +139,21 @@ helm install openab openab/openab --version 0.7.0
 helm install openab oci://ghcr.io/openabdev/charts/openab --version 0.7.0
 ```
 
-## Pre-release
-
-tagpr 不支援 pre-release tag。需要手動操作：
+## Pre-release → Stable 範例
 
 ```bash
+# 1. 打 pre-release tag → 完整 build
 git tag v0.7.0-rc.1
 git push origin v0.7.0-rc.1
-```
 
-build.yml 會觸發完整 build，但 **不會** 覆蓋 `latest` 和 `major.minor` tag。
-Pre-release image 只有 `<sha>` 和 `0.7.0-rc.1` 兩個 tag。
-
-安裝 pre-release chart：
-
-```bash
+# 2. 內部測試
 helm install openab oci://ghcr.io/openabdev/charts/openab --version 0.7.0-rc.1
+
+# 3. 測試通過 → merge tagpr 的 Release PR
+#    tagpr 打 v0.7.0 tag → promote 同一個 image（不 rebuild）
+
+# 4. 外部用戶安裝（拿到的是跟 rc.1 一模一樣的 image）
+helm install openab openab/openab --version 0.7.0
 ```
 
 ## 手動操作
