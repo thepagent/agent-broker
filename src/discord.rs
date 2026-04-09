@@ -33,7 +33,10 @@ impl EventHandler for Handler {
 
         let is_mentioned = msg.mentions_user_id(bot_id)
             || msg.content.contains(&format!("<@{}>", bot_id))
-            || msg.mention_roles.iter().any(|r| msg.content.contains(&format!("<@&{}>", r)));
+            || msg
+                .mention_roles
+                .iter()
+                .any(|r| msg.content.contains(&format!("<@&{}>", r)));
 
         let in_thread = if !in_allowed_channel {
             match msg.channel_id.to_channel(&ctx.http).await {
@@ -74,7 +77,9 @@ impl EventHandler for Handler {
         }
 
         // Inject structured sender context so the downstream CLI can identify who sent the message
-        let display_name = msg.member.as_ref()
+        let display_name = msg
+            .member
+            .as_ref()
             .and_then(|m| m.nick.as_ref())
             .unwrap_or(&msg.author.name);
         let sender_ctx = serde_json::json!({
@@ -118,7 +123,13 @@ impl EventHandler for Handler {
 
         let thread_key = thread_id.to_string();
         if let Err(e) = self.pool.get_or_create(&thread_key).await {
-            let _ = edit(&ctx, thread_channel, thinking_msg.id, "⚠️ Failed to start agent.").await;
+            let _ = edit(
+                &ctx,
+                thread_channel,
+                thinking_msg.id,
+                "⚠️ Failed to start agent.",
+            )
+            .await;
             error!("pool error: {e}");
             return;
         }
@@ -175,8 +186,18 @@ impl EventHandler for Handler {
     }
 }
 
-async fn edit(ctx: &Context, ch: ChannelId, msg_id: MessageId, content: &str) -> serenity::Result<Message> {
-    ch.edit_message(&ctx.http, msg_id, serenity::builder::EditMessage::new().content(content)).await
+async fn edit(
+    ctx: &Context,
+    ch: ChannelId,
+    msg_id: MessageId,
+    content: &str,
+) -> serenity::Result<Message> {
+    ch.edit_message(
+        &ctx.http,
+        msg_id,
+        serenity::builder::EditMessage::new().content(content),
+    )
+    .await
 }
 
 async fn stream_prompt(
@@ -280,7 +301,9 @@ async fn stream_prompt(
                         AcpEvent::ToolDone { title, status, .. } => {
                             reactions.set_thinking().await;
                             let icon = if status == "completed" { "✅" } else { "❌" };
-                            if let Some(line) = tool_lines.iter_mut().rev().find(|l| l.contains(&title)) {
+                            if let Some(line) =
+                                tool_lines.iter_mut().rev().find(|l| l.contains(&title))
+                            {
                                 *line = format!("{icon} `{title}`");
                             }
                             let _ = buf_tx.send(compose_display(&tool_lines, &text_buf));

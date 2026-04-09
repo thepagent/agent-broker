@@ -1,0 +1,2 @@
+# Use rustfmt defaults. This file exists so contributors and CI know
+# the project is formatted with `cargo fmt`.

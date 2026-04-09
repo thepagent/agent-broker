@@ -71,7 +71,10 @@ impl SessionPool {
     /// Get mutable access to a connection. Caller must have called get_or_create first.
     pub async fn with_connection<F, R>(&self, thread_id: &str, f: F) -> Result<R>
     where
-        F: FnOnce(&mut AcpConnection) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<R>> + Send + '_>>,
+        F: FnOnce(
+            &mut AcpConnection,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<R>> + Send + '_>>,
     {
         let mut conns = self.connections.write().await;
         let conn = conns

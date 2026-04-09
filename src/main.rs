@@ -49,9 +49,8 @@ async fn main() -> anyhow::Result<()> {
         reactions_config: cfg.reactions,
     };
 
-    let intents = GatewayIntents::GUILD_MESSAGES
-        | GatewayIntents::MESSAGE_CONTENT
-        | GatewayIntents::GUILDS;
+    let intents =
+        GatewayIntents::GUILD_MESSAGES | GatewayIntents::MESSAGE_CONTENT | GatewayIntents::GUILDS;
 
     let mut client = Client::builder(&cfg.discord.bot_token, intents)
         .event_handler(handler)

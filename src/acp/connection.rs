@@ -90,13 +90,16 @@ impl AcpConnection {
                     // Auto-reply session/request_permission
                     if msg.method.as_deref() == Some("session/request_permission") {
                         if let Some(id) = msg.id {
-                            let title = msg.params.as_ref()
+                            let title = msg
+                                .params
+                                .as_ref()
                                 .and_then(|p| p.get("toolCall"))
                                 .and_then(|t| t.get("title"))
                                 .and_then(|t| t.as_str())
                                 .unwrap_or("?");
                             info!(title, "auto-allow permission");
-                            let reply = JsonRpcResponse::new(id, json!({"optionId": "allow_always"}));
+                            let reply =
+                                JsonRpcResponse::new(id, json!({"optionId": "allow_always"}));
                             if let Ok(data) = serde_json::to_string(&reply) {
                                 let mut w = stdin_clone.lock().await;
                                 let _ = w.write_all(format!("{data}\n").as_bytes()).await;
@@ -214,7 +217,9 @@ impl AcpConnection {
             )
             .await?;
 
-        let agent_name = resp.result.as_ref()
+        let agent_name = resp
+            .result
+            .as_ref()
             .and_then(|r| r.get("agentInfo"))
             .and_then(|a| a.get("name"))
             .and_then(|n| n.as_str())
@@ -225,13 +230,12 @@ impl AcpConnection {
 
     pub async fn session_new(&mut self, cwd: &str) -> Result<String> {
         let resp = self
-            .send_request(
-                "session/new",
-                Some(json!({"cwd": cwd, "mcpServers": []})),
-            )
+            .send_request("session/new", Some(json!({"cwd": cwd, "mcpServers": []})))
             .await?;
 
-        let session_id = resp.result.as_ref()
+        let session_id = resp
+            .result
+            .as_ref()
             .and_then(|r| r.get("sessionId"))
             .and_then(|s| s.as_str())
             .ok_or_else(|| anyhow!("no sessionId in session/new response"))?

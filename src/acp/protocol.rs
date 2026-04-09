@@ -14,7 +14,12 @@ pub struct JsonRpcRequest {
 
 impl JsonRpcRequest {
     pub fn new(id: u64, method: impl Into<String>, params: Option<Value>) -> Self {
-        Self { jsonrpc: "2.0", id, method: method.into(), params }
+        Self {
+            jsonrpc: "2.0",
+            id,
+            method: method.into(),
+            params,
+        }
     }
 }
 
@@ -27,7 +32,11 @@ pub struct JsonRpcResponse {
 
 impl JsonRpcResponse {
     pub fn new(id: u64, result: Value) -> Self {
-        Self { jsonrpc: "2.0", id, result }
+        Self {
+            jsonrpc: "2.0",
+            id,
+            result,
+        }
     }
 }
 
@@ -75,16 +84,26 @@ pub fn classify_notification(msg: &JsonRpcMessage) -> Option<AcpEvent> {
             let text = update.get("content")?.get("text")?.as_str()?;
             Some(AcpEvent::Text(text.to_string()))
         }
-        "agent_thought_chunk" => {
-            Some(AcpEvent::Thinking)
-        }
+        "agent_thought_chunk" => Some(AcpEvent::Thinking),
         "tool_call" => {
-            let title = update.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let title = update
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             Some(AcpEvent::ToolStart { title })
         }
         "tool_call_update" => {
-            let title = update.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let status = update.get("status").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let title = update
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let status = update
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             if status == "completed" || status == "failed" {
                 Some(AcpEvent::ToolDone { title, status })
             } else {
