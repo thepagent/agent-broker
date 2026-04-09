@@ -3,7 +3,7 @@ use crate::config::ReactionsConfig;
 use crate::format;
 use crate::reactions::StatusReactionController;
 use serenity::async_trait;
-use serenity::model::channel::Message;
+use serenity::model::channel::{Message, ReactionType};
 use serenity::model::gateway::Ready;
 use serenity::model::id::{ChannelId, MessageId};
 use serenity::prelude::*;
@@ -66,8 +66,8 @@ impl EventHandler for Handler {
         }
 
         if !self.allowed_users.is_empty() && !self.allowed_users.contains(&msg.author.id.get()) {
-            tracing::debug!(user_id = %msg.author.id, "user not in allowed_users, ignoring");
-            if let Err(e) = msg.react(&ctx.http, serenity::model::channel::ReactionType::Unicode("🚫".into())).await {
+            tracing::info!(user_id = %msg.author.id, "denied user, ignoring");
+            if let Err(e) = msg.react(&ctx.http, ReactionType::Unicode("🚫".into())).await {
                 tracing::warn!(error = %e, "failed to react with 🚫");
             }
             return;

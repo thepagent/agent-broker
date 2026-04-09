@@ -39,6 +39,7 @@ async fn main() -> anyhow::Result<()> {
 
     let allowed_channels = parse_id_set(&cfg.discord.allowed_channels, "allowed_channels")?;
     let allowed_users = parse_id_set(&cfg.discord.allowed_users, "allowed_users")?;
+    info!(channels = allowed_channels.len(), users = allowed_users.len(), "parsed allowlists");
 
     let handler = discord::Handler {
         pool: pool.clone(),
