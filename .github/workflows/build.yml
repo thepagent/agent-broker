@@ -26,7 +26,6 @@ jobs:
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
       chart_version: ${{ steps.resolve.outputs.chart_version }}
-      image_sha: ${{ steps.resolve.outputs.image_sha }}
       is_prerelease: ${{ steps.resolve.outputs.is_prerelease }}
     steps:
       - name: Resolve and validate tag
@@ -45,8 +44,6 @@ jobs:
           fi
 
           CHART_VERSION="${TAG#v}"
-          IMAGE_SHA="${{ github.sha }}"
-          IMAGE_SHA="${IMAGE_SHA:0:7}"
 
           # Pre-release if version contains '-' (e.g. 0.7.0-rc.1)
           if [[ "$CHART_VERSION" == *-* ]]; then
@@ -57,7 +54,6 @@ jobs:
 
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "chart_version=${CHART_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "image_sha=${IMAGE_SHA}" >> "$GITHUB_OUTPUT"
           echo "is_prerelease=${IS_PRERELEASE}" >> "$GITHUB_OUTPUT"
 
   # ── Pre-release path: full build ──────────────────────────────
@@ -184,6 +180,10 @@ jobs:
       contents: read
       packages: write
     steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v4
@@ -192,27 +192,41 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Find pre-release image
+        id: find-prerelease
+        run: |
+          CHART_VERSION="${{ needs.resolve-tag.outputs.chart_version }}"
+          # Find latest pre-release tag matching this version (e.g. v0.7.0-rc.1)
+          PRERELEASE_TAG=$(git tag -l "v${CHART_VERSION}-*" --sort=-v:refname | head -1)
+          if [ -z "$PRERELEASE_TAG" ]; then
+            echo "::error::No pre-release tag found for v${CHART_VERSION}-*. Run a pre-release build first."
+            exit 1
+          fi
+          PRERELEASE_VERSION="${PRERELEASE_TAG#v}"
+          echo "Found pre-release: ${PRERELEASE_TAG} (${PRERELEASE_VERSION})"
+          echo "prerelease_version=${PRERELEASE_VERSION}" >> "$GITHUB_OUTPUT"
+
       - name: Verify pre-release image exists
         run: |
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.variant.suffix }}"
-          IMAGE_SHA="${{ needs.resolve-tag.outputs.image_sha }}"
-          echo "Checking ${IMAGE}:${IMAGE_SHA} ..."
-          docker buildx imagetools inspect "${IMAGE}:${IMAGE_SHA}" || \
-            { echo "::error::Image ${IMAGE}:${IMAGE_SHA} not found — build a pre-release on this commit first"; exit 1; }
+          PRERELEASE_VERSION="${{ steps.find-prerelease.outputs.prerelease_version }}"
+          echo "Checking ${IMAGE}:${PRERELEASE_VERSION} ..."
+          docker buildx imagetools inspect "${IMAGE}:${PRERELEASE_VERSION}" || \
+            { echo "::error::Image ${IMAGE}:${PRERELEASE_VERSION} not found — build the pre-release first"; exit 1; }
 
       - name: Promote to stable tags
         run: |
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.variant.suffix }}"
-          IMAGE_SHA="${{ needs.resolve-tag.outputs.image_sha }}"
+          PRERELEASE_VERSION="${{ steps.find-prerelease.outputs.prerelease_version }}"
           CHART_VERSION="${{ needs.resolve-tag.outputs.chart_version }}"
           MAJOR_MINOR="${CHART_VERSION%.*}"
 
-          echo "Promoting ${IMAGE}:${IMAGE_SHA} → ${CHART_VERSION}, ${MAJOR_MINOR}, latest"
+          echo "Promoting ${IMAGE}:${PRERELEASE_VERSION} → ${CHART_VERSION}, ${MAJOR_MINOR}, latest"
           docker buildx imagetools create \
             -t "${IMAGE}:${CHART_VERSION}" \
             -t "${IMAGE}:${MAJOR_MINOR}" \
             -t "${IMAGE}:latest" \
-            "${IMAGE}:${IMAGE_SHA}"
+            "${IMAGE}:${PRERELEASE_VERSION}"
 
   # ── Chart release (runs after either path) ───────────────────
 
