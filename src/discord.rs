@@ -15,6 +15,7 @@ use tracing::{error, info};
 pub struct Handler {
     pub pool: Arc<SessionPool>,
     pub allowed_channels: HashSet<u64>,
+    pub allowed_users: HashSet<u64>,
     pub reactions_config: ReactionsConfig,
 }
 
@@ -61,6 +62,14 @@ impl EventHandler for Handler {
             return;
         }
         if !in_thread && !is_mentioned {
+            return;
+        }
+
+        if !self.allowed_users.is_empty() && !self.allowed_users.contains(&msg.author.id.get()) {
+            tracing::debug!(user_id = %msg.author.id, "user not in allowed_users, ignoring");
+            if let Err(e) = msg.react(&ctx.http, serenity::model::channel::ReactionType::Unicode("🚫".into())).await {
+                tracing::warn!(error = %e, "failed to react with 🚫");
+            }
             return;
         }
 
