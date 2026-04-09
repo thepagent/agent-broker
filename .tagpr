@@ -1,0 +1,8 @@
+# tagpr configuration
+# see: https://github.com/Songmu/tagpr
+
+[tagpr]
+versionFile = "Cargo.toml"
+tagPrefix = "v"
+releaseBranch = "main"
+changelog = true
