@@ -7,11 +7,11 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Version tag (e.g. v0.7.0-beta.1 or v0.7.0)'
+        description: 'Version tag (e.g. v0.7.0)'
         required: true
         type: string
       dry_run:
-        description: 'Dry run (build only, no push or chart bump)'
+        description: 'Dry run (build only, no push)'
         required: false
         type: boolean
         default: false
@@ -26,8 +26,7 @@ jobs:
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
       chart_version: ${{ steps.resolve.outputs.chart_version }}
-      image_sha: ${{ steps.resolve.outputs.image_sha }}
-      is_beta: ${{ steps.resolve.outputs.is_beta }}
+      is_prerelease: ${{ steps.resolve.outputs.is_prerelease }}
     steps:
       - name: Resolve and validate tag
         id: resolve
@@ -45,24 +44,20 @@ jobs:
           fi
 
           CHART_VERSION="${TAG#v}"
-          IMAGE_SHA="${{ github.sha }}"
-          IMAGE_SHA="${IMAGE_SHA:0:7}"
 
-          # Beta if version contains '-' (e.g. 0.7.0-beta.1)
+          # Pre-release if version contains '-' (e.g. 0.7.0-rc.1)
           if [[ "$CHART_VERSION" == *-* ]]; then
-            IS_BETA="true"
+            IS_PRERELEASE="true"
           else
-            IS_BETA="false"
+            IS_PRERELEASE="false"
           fi
 
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "chart_version=${CHART_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "image_sha=${IMAGE_SHA}" >> "$GITHUB_OUTPUT"
-          echo "is_beta=${IS_BETA}" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=${IS_PRERELEASE}" >> "$GITHUB_OUTPUT"
 
   build-image:
     needs: resolve-tag
-    if: ${{ needs.resolve-tag.outputs.is_beta == 'true' }}
     strategy:
       matrix:
         variant:
@@ -78,11 +73,11 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: docker/setup-buildx-action@v3
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
@@ -90,7 +85,7 @@ jobs:
 
       - name: Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.variant.suffix }}
 
@@ -122,7 +117,7 @@ jobs:
 
   merge-manifests:
     needs: [resolve-tag, build-image]
-    if: ${{ inputs.dry_run != true && needs.resolve-tag.outputs.is_beta == 'true' }}
+    if: ${{ inputs.dry_run != true }}
     strategy:
       matrix:
         variant:
@@ -144,15 +139,28 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
+      - name: Docker metadata (stable)
+        if: ${{ needs.resolve-tag.outputs.is_prerelease == 'false' }}
+        id: meta-stable
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.variant.suffix }}
+          tags: |
+            type=sha,prefix=
+            type=semver,pattern={{version}},value=${{ needs.resolve-tag.outputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.resolve-tag.outputs.tag }}
+            type=raw,value=latest
+
+      - name: Docker metadata (pre-release)
+        if: ${{ needs.resolve-tag.outputs.is_prerelease == 'true' }}
+        id: meta-prerelease
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.variant.suffix }}
           tags: |
@@ -165,128 +173,27 @@ jobs:
           docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.variant.suffix }}@sha256:%s ' *)
 
-  promote-stable:
-    needs: resolve-tag
-    if: ${{ inputs.dry_run != true && needs.resolve-tag.outputs.is_beta == 'false' }}
-    strategy:
-      matrix:
-        variant:
-          - { suffix: "" }
-          - { suffix: "-codex" }
-          - { suffix: "-claude" }
-          - { suffix: "-gemini" }
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: docker/setup-buildx-action@v3
-
-      - uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Verify beta image exists
-        run: |
-          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.variant.suffix }}"
-          IMAGE_SHA="${{ needs.resolve-tag.outputs.image_sha }}"
-          echo "Checking ${IMAGE}:${IMAGE_SHA} ..."
-          docker buildx imagetools inspect "${IMAGE}:${IMAGE_SHA}" || \
-            { echo "::error::Image ${IMAGE}:${IMAGE_SHA} not found — build a beta on this commit first"; exit 1; }
-
-      - name: Promote to stable tags
-        run: |
-          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.variant.suffix }}"
-          IMAGE_SHA="${{ needs.resolve-tag.outputs.image_sha }}"
-          CHART_VERSION="${{ needs.resolve-tag.outputs.chart_version }}"
-          MAJOR_MINOR="${CHART_VERSION%.*}"
-
-          echo "Promoting ${IMAGE}:${IMAGE_SHA} → ${CHART_VERSION}, ${MAJOR_MINOR}, latest"
-          docker buildx imagetools create \
-            -t "${IMAGE}:${CHART_VERSION}" \
-            -t "${IMAGE}:${MAJOR_MINOR}" \
-            -t "${IMAGE}:latest" \
-            "${IMAGE}:${IMAGE_SHA}"
-
-  release-chart-beta:
+  release-chart:
     needs: [resolve-tag, merge-manifests]
-    if: ${{ inputs.dry_run != true && needs.resolve-tag.outputs.is_beta == 'true' }}
+    if: ${{ inputs.dry_run != true }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Helm
         uses: azure/setup-helm@v4
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push beta chart to OCI
+      - name: Build and push chart to OCI
         run: |
           CHART_VERSION="${{ needs.resolve-tag.outputs.chart_version }}"
-          IMAGE_SHA="${{ needs.resolve-tag.outputs.image_sha }}"
-
-          sed -i "s/^version: .*/version: ${CHART_VERSION}/" charts/openab/Chart.yaml
-          sed -i "s/^appVersion: .*/appVersion: \"${IMAGE_SHA}\"/" charts/openab/Chart.yaml
-          sed -i "s|repository: .*|repository: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}|" charts/openab/values.yaml
-          sed -i "s/tag: .*/tag: \"${IMAGE_SHA}\"/" charts/openab/values.yaml
-
           helm package charts/openab
           helm push openab-${CHART_VERSION}.tgz oci://ghcr.io/${{ github.repository_owner }}/charts
-
-  bump-chart-stable:
-    needs: [resolve-tag, promote-stable]
-    if: ${{ inputs.dry_run != true && needs.resolve-tag.outputs.is_beta == 'false' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - name: Generate App token
-        id: app-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Update Chart.yaml and values.yaml
-        run: |
-          CHART_VERSION="${{ needs.resolve-tag.outputs.chart_version }}"
-          IMAGE_SHA="${{ needs.resolve-tag.outputs.image_sha }}"
-          sed -i "s/^version: .*/version: ${CHART_VERSION}/" charts/openab/Chart.yaml
-          sed -i "s/^appVersion: .*/appVersion: \"${IMAGE_SHA}\"/" charts/openab/Chart.yaml
-          sed -i "s|repository: .*|repository: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}|" charts/openab/values.yaml
-          sed -i "s/tag: .*/tag: \"${IMAGE_SHA}\"/" charts/openab/values.yaml
-
-      - name: Create and auto-merge bump PR
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          CHART_VERSION="${{ needs.resolve-tag.outputs.chart_version }}"
-          IMAGE_SHA="${{ needs.resolve-tag.outputs.image_sha }}"
-          BRANCH="chore/chart-${CHART_VERSION}"
-          git config user.name "openab-app[bot]"
-          git config user.email "274185012+openab-app[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH"
-          git add charts/openab/Chart.yaml charts/openab/values.yaml
-          git commit -m "chore: bump chart to ${CHART_VERSION}
-
-          image: ${IMAGE_SHA}"
-          git push origin "$BRANCH"
-          PR_URL=$(gh pr create \
-            --title "chore: bump chart to ${CHART_VERSION}" \
-            --body "Auto-generated chart version bump for image \`${IMAGE_SHA}\`." \
-            --base main --head "$BRANCH")
-          gh pr merge "$PR_URL" --squash --delete-branch
