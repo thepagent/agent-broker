@@ -1,5 +1,5 @@
 use crate::acp::connection::ContentBlock;
-use crate::acp::pool::SessionPool;
+use crate::acp::{classify_notification, AcpEvent, SessionPool};
 use crate::config::ReactionsConfig;
 use crate::format;
 use crate::reactions::StatusReactionController;
@@ -12,6 +12,7 @@ use serenity::model::id::{ChannelId, MessageId};
 use serenity::prelude::*;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use tokio::sync::watch;
 use tracing::{debug, error, info};
 
@@ -210,6 +211,20 @@ impl EventHandler for Handler {
 }
 
 /// Download a Discord image attachment and encode it as an ACP image content block.
+/// Max image size: 10MB raw bytes (Discord allows 25MB, base64 adds ~33% overhead)
+const MAX_IMAGE_SIZE: usize = 10 * 1024 * 1024;
+
+/// Singleton HTTP client with connection pooling
+fn http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("static HTTP client must be buildable")
+    })
+}
+
 async fn download_and_encode_image(attachment: &serenity::model::channel::Attachment) -> Option<ContentBlock> {
     let url = &attachment.url;
 
@@ -239,19 +254,8 @@ async fn download_and_encode_image(attachment: &serenity::model::channel::Attach
         })
         .unwrap_or_else(|| "image/png".to_string());
 
-    // Download the image
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            error!("failed to build HTTP client: {}", e);
-            return None;
-        }
-    };
-
-    let response = match client.get(url).send().await {
+    // Download the image (use shared connection-pooled client)
+    let response = match http_client().get(url).send().await {
         Ok(resp) => resp,
         Err(e) => {
             error!("failed to download image {}: {}", url, e);
@@ -271,6 +275,17 @@ async fn download_and_encode_image(attachment: &serenity::model::channel::Attach
             return None;
         }
     };
+
+    // Reject oversized images before base64 encoding
+    if bytes.len() > MAX_IMAGE_SIZE {
+        error!(
+            "image too large ({} bytes, max {}): {}",
+            bytes.len(),
+            MAX_IMAGE_SIZE,
+            url
+        );
+        return None;
+    }
 
     // Encode as base64
     let encoded = BASE64.encode(bytes.as_ref());
@@ -364,9 +379,9 @@ async fn stream_prompt(
                     break;
                 }
 
-                if let Some(event) = crate::acp::classify_notification(&notification) {
+                if let Some(event) = classify_notification(&notification) {
                     match event {
-                        crate::acp::AcpEvent::Text(t) => {
+                        AcpEvent::Text(t) => {
                             if !got_first_text {
                                 got_first_text = true;
                                 // Reaction: back to thinking after tools
@@ -374,15 +389,15 @@ async fn stream_prompt(
                             text_buf.push_str(&t);
                             let _ = buf_tx.send(compose_display(&tool_lines, &text_buf));
                         }
-                        crate::acp::AcpEvent::Thinking => {
+                        AcpEvent::Thinking => {
                             reactions.set_thinking().await;
                         }
-                        crate::acp::AcpEvent::ToolStart { title, .. } if !title.is_empty() => {
+                        AcpEvent::ToolStart { title, .. } if !title.is_empty() => {
                             reactions.set_tool(&title).await;
                             tool_lines.push(format!("🔧 `{title}`..."));
                             let _ = buf_tx.send(compose_display(&tool_lines, &text_buf));
                         }
-                        crate::acp::AcpEvent::ToolDone { title, status, .. } => {
+                        AcpEvent::ToolDone { title, status, .. } => {
                             reactions.set_thinking().await;
                             let icon = if status == "completed" { "✅" } else { "❌" };
                             if let Some(line) = tool_lines.iter_mut().rev().find(|l| l.contains(&title)) {

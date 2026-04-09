@@ -15,5 +15,5 @@ uuid = { version = "1", features = ["v4"] }
 regex = "1"
 anyhow = "1"
 rand = "0.8"
-reqwest = { version = "0.12", features = ["blocking"] }
+reqwest = "0.12"
 base64 = "0.22"
