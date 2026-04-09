@@ -6,7 +6,6 @@ mod reactions;
 
 use serenity::prelude::*;
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::info;
 
@@ -19,12 +18,11 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let config_path = std::env::args()
+    let config_source = std::env::args()
         .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("config.toml"));
+        .unwrap_or_else(|| "config.toml".into());
 
-    let cfg = config::load_config(&config_path)?;
+    let cfg = config::load_config_from_source(&config_source).await?;
     info!(
         agent_cmd = %cfg.agent.command,
         pool_max = cfg.pool.max_sessions,
