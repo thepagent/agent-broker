@@ -127,7 +127,8 @@ impl EventHandler for Handler {
 
         let thread_key = thread_id.to_string();
         if let Err(e) = self.pool.get_or_create(&thread_key).await {
-            let _ = edit(&ctx, thread_channel, thinking_msg.id, "⚠️ Failed to start agent.").await;
+            let msg = format_user_error(&e.to_string());
+            let _ = edit(&ctx, thread_channel, thinking_msg.id, &format!("⚠️ {}", msg)).await;
             error!("pool error: {e}");
             return;
         }
@@ -268,7 +269,7 @@ async fn stream_prompt(
                 if notification.id.is_some() {
                     // Capture error from ACP response to display in Discord
                     if let Some(ref err) = notification.error {
-                        response_error = Some(format_error(err.code, &err.message));
+                        response_error = Some(format_coded_error(err.code, &err.message));
                     }
                     break;
                 }
@@ -350,11 +351,53 @@ fn compose_display(tool_lines: &[String], text: &str) -> String {
     out
 }
 
-/// Format error from ACP agent for display in Discord.
+/// Format any error for user display in Discord.
 ///
-/// Provider-agnostic: error codes are protocol-level (JSON-RPC), not provider-specific.
-/// Only the message text (which comes from the upstream agent) is passed through verbatim.
-fn format_error(code: i64, message: &str) -> String {
+/// Handles two error categories:
+/// - **Coded errors** (code != 0): JSON-RPC or HTTP status codes from upstream agent.
+/// - **Startup/connection errors** (code == 0): Errors from pool.rs or connection.rs
+///   where only the message string is available.
+///
+/// Provider-agnostic: no provider-specific strings, message text passed through verbatim.
+pub fn format_user_error(message: &str) -> String {
+    let msg_lower = message.to_lowercase();
+
+    // Startup / connection errors (code == 0 from anyhow)
+    if msg_lower.contains("timeout waiting for") {
+        let method = message
+            .split("timeout waiting for ")
+            .nth(1)
+            .unwrap_or("request");
+        return format!("**Request Timeout**\nTimeout waiting for {}, please try again.", method);
+    }
+    if msg_lower.contains("connection closed") || msg_lower.contains("channel closed") {
+        return "**Connection Lost**\nThe connection to the agent was lost, please try again.".to_string();
+    }
+    if msg_lower.contains("failed to spawn") || msg_lower.contains("no such file") {
+        let cmd = message
+            .split_whitespace()
+            .find(|w| w.contains("claude") || w.contains("agent"))
+            .unwrap_or("the agent");
+        return format!("**Agent Not Found**\nCould not start {} — please check your configuration.", cmd);
+    }
+    if msg_lower.contains("pool exhausted") {
+        return "**Service Busy**\nAll agent sessions are in use, please try again shortly.".to_string();
+    }
+    if msg_lower.contains("invalid api key") || msg_lower.contains("unauthorized") {
+        return "**Unauthorized**\nPlease check your API key configuration.".to_string();
+    }
+
+    // Unknown error — pass through as-is
+    if message.is_empty() {
+        "**Error**\nAn unknown error occurred.".to_string()
+    } else {
+        format!("**Error**\n{}", message)
+    }
+}
+
+/// Format coded error from ACP agent for display in Discord.
+/// Used for response errors that have a JSON-RPC or HTTP status code.
+fn format_coded_error(code: i64, message: &str) -> String {
     let prefix = match code {
         400 => "**Bad Request**",
         401 => "**Unauthorized**",
