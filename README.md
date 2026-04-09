@@ -1,6 +1,6 @@
 # OpenAB — Open Agent Broker
 
-A lightweight, secure, cloud-native ACP harness that bridges Discord and any [Agent Client Protocol](https://github.com/anthropics/agent-protocol)-compatible coding CLI (Kiro CLI, Claude Code, Codex, Gemini, etc.) over stdio JSON-RPC — delivering the next-generation development experience.
+A lightweight, secure, cloud-native ACP harness that bridges Discord and any [Agent Client Protocol](https://github.com/anthropics/agent-protocol)-compatible coding CLI (Kiro CLI, Claude Code, Codex, Gemini, OpenCode, etc.) over stdio JSON-RPC — delivering the next-generation development experience.
 
 🪼 **Join our community!** Come say hi on Discord — we'd love to have you: **[🪼 OpenAB — Official](https://discord.gg/YNksK9M6)** 🎉
 
@@ -17,7 +17,7 @@ A lightweight, secure, cloud-native ACP harness that bridges Discord and any [Ag
 
 ## Features
 
-- **Pluggable agent backend** — swap between Kiro CLI, Claude Code, Codex, Gemini via config
+- **Pluggable agent backend** — swap between Kiro CLI, Claude Code, Codex, Gemini, OpenCode via config
 - **@mention trigger** — mention the bot in an allowed channel to start a conversation
 - **Thread-based multi-turn** — auto-creates threads; no @mention needed for follow-ups
 - **Edit-streaming** — live-updates the Discord message every 1.5s as tokens arrive
@@ -84,7 +84,7 @@ The bot creates a thread. After that, just type in the thread — no @mention ne
 
 ## Pluggable Agent Backends
 
-Supports Kiro CLI, Claude Code, Codex, Gemini, and any ACP-compatible CLI.
+Supports Kiro CLI, Claude Code, Codex, Gemini, OpenCode, and any ACP-compatible CLI.
 
 | Agent key | CLI | ACP Adapter | Auth |
 |-----------|-----|-------------|------|
@@ -92,6 +92,7 @@ Supports Kiro CLI, Claude Code, Codex, Gemini, and any ACP-compatible CLI.
 | `codex` | Codex | [@zed-industries/codex-acp](https://github.com/zed-industries/codex-acp) | `codex login --device-auth` |
 | `claude` | Claude Code | [@agentclientprotocol/claude-agent-acp](https://github.com/agentclientprotocol/claude-agent-acp) | `claude setup-token` |
 | `gemini` | Gemini CLI | Native `gemini --acp` | Google OAuth or `GEMINI_API_KEY` |
+| `opencode` | OpenCode | Native `opencode acp` | `opencode auth login` |
 
 ### Helm Install (recommended)
 
@@ -115,18 +116,25 @@ helm install openab openab/openab \
   --set agents.claude.command=claude-agent-acp \
   --set agents.claude.workingDir=/home/node
 
-# Multi-agent (kiro + claude in one release)
+# OpenCode only (disable default kiro)
+helm install openab openab/openab \
+  --set agents.kiro.enabled=false \
+  --set agents.opencode.preset=opencode \
+  --set agents.opencode.discord.botToken="$DISCORD_BOT_TOKEN" \
+  --set-string 'agents.opencode.discord.allowedChannels[0]=YOUR_CHANNEL_ID'
+
+# Multi-agent (kiro + opencode in one release)
 helm install openab openab/openab \
   --set agents.kiro.discord.botToken="$KIRO_BOT_TOKEN" \
   --set-string 'agents.kiro.discord.allowedChannels[0]=KIRO_CHANNEL_ID' \
-  --set agents.claude.discord.botToken="$CLAUDE_BOT_TOKEN" \
-  --set-string 'agents.claude.discord.allowedChannels[0]=CLAUDE_CHANNEL_ID' \
-  --set agents.claude.image=ghcr.io/openabdev/openab-claude:78f8d2c \
-  --set agents.claude.command=claude-agent-acp \
-  --set agents.claude.workingDir=/home/node
+  --set agents.opencode.preset=opencode \
+  --set agents.opencode.discord.botToken="$OPENCODE_BOT_TOKEN" \
+  --set-string 'agents.opencode.discord.allowedChannels[0]=OPENCODE_CHANNEL_ID'
 ```
 
-Each agent key in `agents` map creates its own Deployment, ConfigMap, Secret, and PVC. Set `agents.<name>.enabled: false` to skip creating resources for an agent.
+Each agent key in `agents` map creates its own Deployment, ConfigMap, Secret, and PVC. Set `agents.<name>.enabled: false` to skip creating resources for an agent. Set `agents.<name>.preset` to `kiro`, `codex`, `claude`, `gemini`, or `opencode` to auto-configure the bundled image, command, args, and working directory.
+
+For OpenCode auth, run `kubectl exec -it deployment/openab-opencode -- opencode auth login`, then `kubectl rollout restart deployment/openab-opencode`.
 
 ### Manual config.toml
 
@@ -157,6 +165,12 @@ command = "gemini"
 args = ["--acp"]
 working_dir = "/home/node"
 env = { GEMINI_API_KEY = "${GEMINI_API_KEY}" }
+
+# OpenCode
+[agent]
+command = "opencode"
+args = ["acp"]
+working_dir = "/home/node"
 ```
 
 ## Configuration Reference
@@ -200,7 +214,7 @@ error_hold_ms = 2500                  # keep error emoji for 2.5s
 
 ## Kubernetes Deployment
 
-The Docker image bundles both `openab` and `kiro-cli` in a single container (openab spawns kiro-cli as a child process).
+The default Docker image bundles both `openab` and `kiro-cli` in a single container (openab spawns kiro-cli as a child process).
 
 ### Pod Architecture
 
@@ -251,7 +265,15 @@ The Docker image bundles both `openab` and `kiro-cli` in a single container (ope
 
 ### Install with Your Coding CLI
 
-See the **[Helm chart docs](https://openabdev.github.io/openab)** for per-agent install commands (Kiro CLI, Claude Code, Codex, Gemini) and values reference.
+Use one of these prompts with any coding CLI (Kiro CLI, Claude Code, Codex, Gemini, OpenCode, etc.) on the host that has `helm` and `kubectl` access to your cluster:
+
+**Kiro CLI (default):**
+> Install openab on my local k8s cluster using the Helm chart from https://openabdev.github.io/openab. Set `agents.kiro.discord.botToken` from the `DISCORD_BOT_TOKEN` environment variable and `agents.kiro.discord.allowedChannels[0]` to <REPLACE_WITH_YOUR_CHANNEL_ID>. After install, follow the NOTES output to authenticate, then restart the deployment.
+
+**OpenCode:**
+> Install openab on my local k8s cluster using the Helm chart from https://openabdev.github.io/openab. Disable the default `kiro` agent, create an `opencode` agent with `agents.opencode.preset=opencode`, set `agents.opencode.discord.botToken` from the `DISCORD_BOT_TOKEN` environment variable, and set `agents.opencode.discord.allowedChannels[0]` to <REPLACE_WITH_YOUR_CHANNEL_ID>. After install, run `kubectl exec -it deployment/openab-opencode -- opencode auth login`, then restart `deployment/openab-opencode`.
+
+For Codex, Claude Code, and Gemini, use the same `agents.<name>.preset=<preset>` pattern.
 
 ### Build & Push
 

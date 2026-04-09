@@ -21,6 +21,7 @@ agents:
     enabled: true    # set to false to skip creating resources for this agent
     # To add a second agent, uncomment and fill in the block below:
     # claude:
+    #   preset: claude
     #   command: claude-agent-acp
     #   args: []
     #   discord:
@@ -48,6 +49,7 @@ agents:
     #   tolerations: []
     #   affinity: {}
     #   image: "ghcr.io/openabdev/openab-claude:latest"
+    preset: ""               # optional: kiro, codex, claude, gemini, or opencode
     image: ""
     command: kiro-cli
     args:

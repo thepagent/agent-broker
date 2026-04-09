@@ -5,28 +5,34 @@ openab {{ .Chart.AppVersion }} has been installed!
 Agents deployed:
 {{- range $name, $cfg := .Values.agents }}
 {{- if ne (include "openab.agentEnabled" $cfg) "false" }}
-  • {{ $name }} ({{ $cfg.command }})
+{{- $d := dict "ctx" $ "agent" $name "cfg" $cfg }}
+{{- $deployment := include "openab.agentFullname" $d }}
+{{- $cmd := include "openab.agentCommand" $d | trim }}
+  • {{ $name }} ({{ $cmd }})
 {{- if not $cfg.discord.botToken }}
     ⚠️  No bot token provided. Create the secret manually:
-    kubectl create secret generic {{ include "openab.agentFullname" (dict "ctx" $ "agent" $name) }} \
+    kubectl create secret generic {{ $deployment }} \
       --from-literal=discord-bot-token="YOUR_TOKEN"
 {{- end }}
 
-{{- if eq $cfg.command "kiro-cli" }}
+{{- if eq $cmd "kiro-cli" }}
     Authenticate:
-    kubectl exec -it deployment/{{ include "openab.agentFullname" (dict "ctx" $ "agent" $name) }} -- kiro-cli login --use-device-flow
-{{- else if eq $cfg.command "codex-acp" }}
+    kubectl exec -it deployment/{{ $deployment }} -- kiro-cli login --use-device-flow
+{{- else if eq $cmd "codex-acp" }}
     Authenticate:
-    kubectl exec -it deployment/{{ include "openab.agentFullname" (dict "ctx" $ "agent" $name) }} -- codex login --device-auth
-{{- else if eq $cfg.command "claude-agent-acp" }}
+    kubectl exec -it deployment/{{ $deployment }} -- codex login --device-auth
+{{- else if eq $cmd "claude-agent-acp" }}
     Authenticate:
-    kubectl exec -it deployment/{{ include "openab.agentFullname" (dict "ctx" $ "agent" $name) }} -- claude setup-token
-{{- else if eq $cfg.command "gemini" }}
+    kubectl exec -it deployment/{{ $deployment }} -- claude setup-token
+{{- else if eq $cmd "gemini" }}
     Authenticate:
-    kubectl exec -it deployment/{{ include "openab.agentFullname" (dict "ctx" $ "agent" $name) }} -- gemini
+    kubectl exec -it deployment/{{ $deployment }} -- gemini
+{{- else if eq $cmd "opencode" }}
+    Authenticate:
+    kubectl exec -it deployment/{{ $deployment }} -- opencode auth login
 {{- end }}
 
     Restart after auth:
-    kubectl rollout restart deployment/{{ include "openab.agentFullname" (dict "ctx" $ "agent" $name) }}
+    kubectl rollout restart deployment/{{ $deployment }}
 {{- end }}
 {{- end }}
