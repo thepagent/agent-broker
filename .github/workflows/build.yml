@@ -144,9 +144,52 @@ jobs:
           docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.variant.suffix }}@sha256:%s ' *)
 
-  bump-chart:
+  release-chart-beta:
     needs: merge-manifests
-    if: inputs.dry_run != true
+    if: ${{ inputs.dry_run != true && contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve version tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push beta chart to OCI
+        run: |
+          TAG="${{ steps.tag.outputs.value }}"
+          CHART_VERSION="${TAG#v}"
+          IMAGE_SHA="${{ github.sha }}"
+          IMAGE_SHA="${IMAGE_SHA:0:7}"
+
+          sed -i "s/^version: .*/version: ${CHART_VERSION}/" charts/openab/Chart.yaml
+          sed -i "s/^appVersion: .*/appVersion: \"${IMAGE_SHA}\"/" charts/openab/Chart.yaml
+          sed -i "s|repository: .*|repository: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}|" charts/openab/values.yaml
+          sed -i "s/tag: .*/tag: \"${IMAGE_SHA}\"/" charts/openab/values.yaml
+
+          helm package charts/openab
+          helm push openab-${CHART_VERSION}.tgz oci://ghcr.io/${{ github.repository_owner }}/charts
+
+  bump-chart-stable:
+    needs: merge-manifests
+    if: ${{ inputs.dry_run != true && !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -172,25 +215,12 @@ jobs:
             echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Parse chart version from tag
-        id: version
-        run: |
-          # Strip leading 'v' → chart version (e.g. v0.7.0-beta.1 → 0.7.0-beta.1)
-          chart_version="${{ steps.tag.outputs.value }}"
-          chart_version="${chart_version#v}"
-          echo "chart_version=${chart_version}" >> "$GITHUB_OUTPUT"
-
-      - name: Resolve image SHA
-        id: image-sha
-        run: |
-          IMAGE_SHA="${{ github.sha }}"
-          IMAGE_SHA="${IMAGE_SHA:0:7}"
-          echo "sha=${IMAGE_SHA}" >> "$GITHUB_OUTPUT"
-
       - name: Update Chart.yaml and values.yaml
         run: |
-          IMAGE_SHA="${{ steps.image-sha.outputs.sha }}"
-          CHART_VERSION="${{ steps.version.outputs.chart_version }}"
+          TAG="${{ steps.tag.outputs.value }}"
+          CHART_VERSION="${TAG#v}"
+          IMAGE_SHA="${{ github.sha }}"
+          IMAGE_SHA="${IMAGE_SHA:0:7}"
           sed -i "s/^version: .*/version: ${CHART_VERSION}/" charts/openab/Chart.yaml
           sed -i "s/^appVersion: .*/appVersion: \"${IMAGE_SHA}\"/" charts/openab/Chart.yaml
           sed -i "s|repository: .*|repository: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}|" charts/openab/values.yaml
@@ -200,8 +230,10 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          CHART_VERSION="${{ steps.version.outputs.chart_version }}"
-          IMAGE_SHA="${{ steps.image-sha.outputs.sha }}"
+          TAG="${{ steps.tag.outputs.value }}"
+          CHART_VERSION="${TAG#v}"
+          IMAGE_SHA="${{ github.sha }}"
+          IMAGE_SHA="${IMAGE_SHA:0:7}"
           BRANCH="chore/chart-${CHART_VERSION}"
           git config user.name "openab-app[bot]"
           git config user.email "274185012+openab-app[bot]@users.noreply.github.com"
