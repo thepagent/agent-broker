@@ -1,11 +1,11 @@
 use crate::acp::connection::ContentBlock;
-use crate::acp::SessionPool;
+use crate::acp::{classify_notification, AcpEvent, SessionPool};
 use crate::config::ReactionsConfig;
 use crate::format;
 use crate::reactions::StatusReactionController;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use serenity::async_trait;
 use serenity::model::channel::Message;
 use serenity::model::gateway::Ready;
@@ -18,7 +18,7 @@ use tracing::{debug, error, info};
 
 /// Reusable HTTP client for downloading Discord attachments.
 /// Built once with a 30s timeout and rustls TLS (no native-tls deps).
-static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
@@ -83,6 +83,11 @@ impl EventHandler for Handler {
             msg.content.trim().to_string()
         };
 
+        // No text and no image attachments → skip to avoid wasting session slots
+        if prompt.is_empty() && msg.attachments.is_empty() {
+            return;
+        }
+
         // Build content blocks: text + image attachments
         let mut content_blocks = vec![];
 
@@ -135,6 +140,7 @@ impl EventHandler for Handler {
 
         // Note: image-only messages (no text) are intentionally allowed since
         // prompt_with_sender always includes the non-empty sender_context XML.
+        // The guard above (prompt.is_empty() && no attachments) handles stickers/embeds.
 
         let thread_id = if in_thread {
             msg.channel_id.get()
@@ -394,9 +400,9 @@ async fn stream_prompt(
                     break;
                 }
 
-                if let Some(event) = crate::acp::classify_notification(&notification) {
+                if let Some(event) = classify_notification(&notification) {
                     match event {
-                        crate::acp::AcpEvent::Text(t) => {
+                        AcpEvent::Text(t) => {
                             if !got_first_text {
                                 got_first_text = true;
                                 // Reaction: back to thinking after tools
@@ -404,15 +410,15 @@ async fn stream_prompt(
                             text_buf.push_str(&t);
                             let _ = buf_tx.send(compose_display(&tool_lines, &text_buf));
                         }
-                        crate::acp::AcpEvent::Thinking => {
+                        AcpEvent::Thinking => {
                             reactions.set_thinking().await;
                         }
-                        crate::acp::AcpEvent::ToolStart { title, .. } if !title.is_empty() => {
+                        AcpEvent::ToolStart { title, .. } if !title.is_empty() => {
                             reactions.set_tool(&title).await;
                             tool_lines.push(format!("🔧 `{title}`..."));
                             let _ = buf_tx.send(compose_display(&tool_lines, &text_buf));
                         }
-                        crate::acp::AcpEvent::ToolDone { title, status, .. } => {
+                        AcpEvent::ToolDone { title, status, .. } => {
                             reactions.set_thinking().await;
                             let icon = if status == "completed" { "✅" } else { "❌" };
                             if let Some(line) = tool_lines.iter_mut().rev().find(|l| l.contains(&title)) {

@@ -767,7 +767,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64",
- "once_cell",
  "rand 0.8.5",
  "regex",
  "reqwest",
