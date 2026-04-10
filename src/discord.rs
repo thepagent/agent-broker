@@ -238,12 +238,9 @@ async fn stream_prompt(
                         if buf_rx.has_changed().unwrap_or(false) {
                             let content = buf_rx.borrow_and_update().clone();
                             if content != last_content {
-                                let display = if content.len() > 1900 {
-                                    let mut end = 1900;
-                                    while !content.is_char_boundary(end) {
-                                        end -= 1;
-                                    }
-                                    format!("{}…", &content[..end])
+                                let display = if content.chars().count() > 1900 {
+                                    let truncated: String = content.chars().take(1900).collect();
+                                    format!("{truncated}…")
                                 } else {
                                     content.clone()
                                 };
