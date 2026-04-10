@@ -239,7 +239,11 @@ async fn stream_prompt(
                             let content = buf_rx.borrow_and_update().clone();
                             if content != last_content {
                                 let display = if content.len() > 1900 {
-                                    format!("{}…", &content[..1900])
+                                    let mut end = 1900;
+                                    while !content.is_char_boundary(end) {
+                                        end -= 1;
+                                    }
+                                    format!("{}…", &content[..end])
                                 } else {
                                     content.clone()
                                 };
