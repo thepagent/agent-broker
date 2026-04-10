@@ -9,6 +9,7 @@ use serenity::model::gateway::Ready;
 use serenity::model::id::{ChannelId, MessageId};
 use serenity::prelude::*;
 use std::collections::HashSet;
+use std::sync::LazyLock;
 use std::sync::Arc;
 use tokio::sync::watch;
 use tracing::{error, info};
@@ -356,9 +357,12 @@ fn compose_display(tool_lines: &[String], text: &str) -> String {
     out
 }
 
+static MENTION_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"<@[!&]?\d+>").unwrap()
+});
+
 fn strip_mention(content: &str) -> String {
-    let re = regex::Regex::new(r"<@[!&]?\d+>").unwrap();
-    re.replace_all(content, "").trim().to_string()
+    MENTION_RE.replace_all(content, "").trim().to_string()
 }
 
 fn shorten_thread_name(prompt: &str) -> String {
