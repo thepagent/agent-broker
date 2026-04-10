@@ -330,7 +330,7 @@ mod tests {
                 let mut text = String::new();
 
                 loop {
-                    let Some(notification) = timeout(Duration::from_secs(30), rx.recv()).await?
+                    let Some(notification) = timeout(Duration::from_secs(std::env::var("QWEN_SMOKE_TEST_TIMEOUT").unwrap_or("30".to_string()).parse::<u64>().unwrap_or(30)), rx.recv()).await?
                     else {
                         break;
                     };

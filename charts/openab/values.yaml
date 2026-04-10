@@ -21,7 +21,7 @@ agents:
     # qwen:
     #   image:
     #     repository: ghcr.io/openabdev/openab-qwen
-    #     tag: "78f8d2c"
+    #     tag: "latest"
     #   command: qwen
     #   args:
     #     - --acp

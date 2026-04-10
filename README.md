@@ -182,7 +182,7 @@ env = { GEMINI_API_KEY = "${GEMINI_API_KEY}" }
 The repository includes a bootstrap script that installs system dependencies, builds `openab`, installs Gemini CLI, writes `/etc/openab/config.toml`, and creates a `systemd` service:
 
 ```bash
-git clone https://github.com/Joseph19820124/openab
+git clone https://github.com/openabdev/openab
 cd openab
 edit scripts/install-openab-gemini.sh   # set DISCORD_BOT_TOKEN, DISCORD_CHANNEL_ID, GEMINI_API_KEY
 sudo ./scripts/install-openab-gemini.sh
