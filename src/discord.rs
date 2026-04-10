@@ -1,4 +1,5 @@
 use crate::acp::{classify_notification, AcpEvent, SessionPool};
+use crate::acp::pool::PoolProgress;
 use crate::config::ReactionsConfig;
 use crate::format;
 use crate::reactions::StatusReactionController;
@@ -126,9 +127,24 @@ impl EventHandler for Handler {
         };
 
         let thread_key = thread_id.to_string();
-        if let Err(e) = self.pool.get_or_create(&thread_key).await {
-            let _ = edit(&ctx, thread_channel, thinking_msg.id, "⚠️ Failed to start agent.").await;
+        let progress_ctx = ctx.clone();
+        // ChannelId is Copy, so this doesn't move thread_channel
+        let progress_channel = thread_channel;
+        let progress_msg_id = thinking_msg.id;
+        if let Err(e) = self.pool.get_or_create(&thread_key, |stage| {
+            let ctx = progress_ctx.clone();
+            async move {
+                let status = match stage {
+                    PoolProgress::Spawning => "⏳ Starting agent...",
+                    PoolProgress::Initializing => "⏳ Initializing...",
+                    PoolProgress::CreatingSession => "⏳ Creating session...",
+                };
+                let _ = edit(&ctx, progress_channel, progress_msg_id, status).await;
+            }
+        }).await {
             error!("pool error: {e}");
+            let user_msg = sanitize_pool_error(&e);
+            let _ = edit(&ctx, thread_channel, thinking_msg.id, &format!("⚠️ Failed to start agent: {user_msg}")).await;
             return;
         }
 
@@ -337,6 +353,26 @@ fn compose_display(tool_lines: &[String], text: &str) -> String {
     }
     out.push_str(text.trim_end());
     out
+}
+
+fn sanitize_pool_error(e: &anyhow::Error) -> String {
+    let msg = e.to_string();
+    let lower = msg.to_lowercase();
+    // Only pass through known safe complete phrases
+    let safe_phrases = [
+        "timeout waiting for",
+        "connection closed",
+        "pool exhausted",
+        "no such file or directory",
+        "failed to spawn",
+        "auth expired",
+        "json-rpc error",
+    ];
+    if safe_phrases.iter().any(|p| lower.contains(p)) {
+        msg
+    } else {
+        "unexpected error (check server logs)".to_string()
+    }
 }
 
 fn strip_mention(content: &str) -> String {
