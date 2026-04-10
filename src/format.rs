@@ -1,6 +1,7 @@
-/// Split text into chunks at line boundaries, each <= limit bytes (UTF-8 safe).
+/// Split text into chunks at line boundaries, each <= limit Unicode characters (UTF-8 safe).
+/// Discord's message limit counts Unicode characters, not bytes.
 pub fn split_message(text: &str, limit: usize) -> Vec<String> {
-    if text.len() <= limit {
+    if text.chars().count() <= limit {
         return vec![text.to_string()];
     }
 
@@ -8,8 +9,10 @@ pub fn split_message(text: &str, limit: usize) -> Vec<String> {
     let mut current = String::new();
 
     for line in text.split('\n') {
+        let line_chars = line.chars().count();
+        let current_chars = current.chars().count();
         // +1 for the newline
-        if !current.is_empty() && current.len() + line.len() + 1 > limit {
+        if !current.is_empty() && current_chars + line_chars + 1 > limit {
             chunks.push(current);
             current = String::new();
         }
@@ -17,9 +20,9 @@ pub fn split_message(text: &str, limit: usize) -> Vec<String> {
             current.push('\n');
         }
         // If a single line exceeds limit, hard-split on char boundaries
-        if line.len() > limit {
+        if line_chars > limit {
             for ch in line.chars() {
-                if current.len() + ch.len_utf8() > limit {
+                if current.chars().count() + 1 > limit {
                     chunks.push(current);
                     current = String::new();
                 }
@@ -35,14 +38,11 @@ pub fn split_message(text: &str, limit: usize) -> Vec<String> {
     chunks
 }
 
-/// Truncate a string to at most `limit` bytes on a char boundary.
-pub fn truncate_utf8(s: &str, limit: usize) -> &str {
-    if s.len() <= limit {
-        return s;
+/// Truncate a string to at most `limit` Unicode characters.
+/// Discord's message limit counts Unicode characters, not bytes.
+pub fn truncate_chars(s: &str, limit: usize) -> &str {
+    match s.char_indices().nth(limit) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
     }
-    let mut end = limit;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    &s[..end]
 }

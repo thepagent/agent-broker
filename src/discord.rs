@@ -229,8 +229,8 @@ async fn stream_prompt(
                         if buf_rx.has_changed().unwrap_or(false) {
                             let content = buf_rx.borrow_and_update().clone();
                             if content != last_content {
-                                let display = if content.len() > 1900 {
-                                    let truncated = format::truncate_utf8(&content, 1900);
+                                let display = if content.chars().count() > 1900 {
+                                    let truncated = format::truncate_chars(&content, 1900);
                                     format!("{truncated}…")
                                 } else {
                                     content.clone()
