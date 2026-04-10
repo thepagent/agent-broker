@@ -1,6 +1,7 @@
 use crate::acp::{classify_notification, AcpEvent, SessionPool};
-use crate::config::ReactionsConfig;
+use crate::config::{MarkdownConfig, ReactionsConfig};
 use crate::format;
+use crate::markdown;
 use crate::reactions::StatusReactionController;
 use serenity::async_trait;
 use serenity::model::channel::Message;
@@ -16,6 +17,7 @@ pub struct Handler {
     pub pool: Arc<SessionPool>,
     pub allowed_channels: HashSet<u64>,
     pub reactions_config: ReactionsConfig,
+    pub markdown_config: MarkdownConfig,
 }
 
 #[async_trait]
@@ -143,6 +145,7 @@ impl EventHandler for Handler {
             thread_channel,
             thinking_msg.id,
             reactions.clone(),
+            self.markdown_config.tables,
         )
         .await;
 
@@ -187,6 +190,7 @@ async fn stream_prompt(
     channel: ChannelId,
     msg_id: MessageId,
     reactions: Arc<StatusReactionController>,
+    table_mode: markdown::TableMode,
 ) -> anyhow::Result<()> {
     let prompt = prompt.to_string();
     let reactions = reactions.clone();
@@ -296,6 +300,7 @@ async fn stream_prompt(
 
             // Final edit
             let final_content = compose_display(&tool_lines, &text_buf);
+            let final_content = markdown::convert_tables(&final_content, table_mode);
             let final_content = if final_content.is_empty() {
                 "_(no response)_".to_string()
             } else {

@@ -2,6 +2,7 @@ mod acp;
 mod config;
 mod discord;
 mod format;
+mod markdown;
 mod reactions;
 
 use serenity::prelude::*;
@@ -47,6 +48,7 @@ async fn main() -> anyhow::Result<()> {
         pool: pool.clone(),
         allowed_channels,
         reactions_config: cfg.reactions,
+        markdown_config: cfg.markdown,
     };
 
     let intents = GatewayIntents::GUILD_MESSAGES
