@@ -215,7 +215,8 @@ async fn stream_prompt(
                                 // Truncate if over Discord's limit — the final edit handles
                                 // proper multi-message splitting after streaming completes.
                                 let display = if content.len() > 1900 {
-                                    format!("{}…", &content[..1900])
+                                    let end = content.floor_char_boundary(1900);
+                                    format!("{}…", &content[..end])
                                 } else {
                                     content.clone()
                                 };
