@@ -108,7 +108,7 @@ Qwen Code can be deployed as its own agent entry:
 ```bash
 helm install openab openab/openab \
   --set agents.qwen.image.repository=ghcr.io/openabdev/openab-qwen \
-  --set agents.qwen.image.tag=78f8d2c \
+  --set agents.qwen.image.tag=latest \
   --set agents.qwen.command=qwen \
   --set-json 'agents.qwen.args=["--acp"]' \
   --set agents.qwen.workingDir=/home/node \
