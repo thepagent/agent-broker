@@ -10,7 +10,7 @@ use serenity::prelude::*;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::watch;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 pub struct Handler {
     pub pool: Arc<SessionPool>,
@@ -22,7 +22,17 @@ pub struct Handler {
 #[async_trait]
 impl EventHandler for Handler {
     async fn message(&self, ctx: Context, msg: Message) {
+        debug!(
+            msg_id = %msg.id,
+            channel = %msg.channel_id,
+            author = %msg.author.id,
+            is_bot = msg.author.bot,
+            content_len = msg.content.len(),
+            content_bytes = ?msg.content.as_bytes(),
+            "DIAG: message() entered"
+        );
         if msg.author.bot {
+            debug!(msg_id = %msg.id, "DIAG: skipping bot author");
             return;
         }
 
@@ -82,8 +92,17 @@ impl EventHandler for Handler {
             return;
         }
 
+        debug!(
+            msg_id = %msg.id,
+            prompt = %prompt,
+            prompt_bytes = ?prompt.as_bytes(),
+            starts_with_bang_model = prompt.starts_with("!model"),
+            "DIAG: pre-intercept prompt parsed"
+        );
+
         // Handle !model command (intercept before normal prompt flow)
         if prompt.starts_with("!model") {
+            debug!(msg_id = %msg.id, "DIAG: !model intercept fired");
             let arg = prompt[6..].trim().to_string();
             let thread_key = msg.channel_id.get().to_string();
 
@@ -143,6 +162,7 @@ impl EventHandler for Handler {
                 Err(e) => format!("⚠️ {e}"),
             };
             let _ = msg.channel_id.say(&ctx.http, text).await;
+            debug!(msg_id = %msg.id, "DIAG: !model intercept returning");
             return;
         }
 
@@ -206,6 +226,8 @@ impl EventHandler for Handler {
             self.reactions_config.timing.clone(),
         ));
         reactions.set_queued().await;
+
+        debug!(msg_id = %msg.id, thread_key = %thread_key, "DIAG: about to call stream_prompt (NOT !model path)");
 
         // Stream prompt with live edits
         let result = stream_prompt(
