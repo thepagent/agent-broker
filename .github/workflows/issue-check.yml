@@ -109,10 +109,14 @@ jobs:
                 });
               }
               if (labels.includes('incomplete')) {
-                await github.rest.issues.removeLabel({
-                  ...context.repo,
-                  issue_number: issue.number,
-                  name: 'incomplete'
-                });
+                try {
+                  await github.rest.issues.removeLabel({
+                    ...context.repo,
+                    issue_number: issue.number,
+                    name: 'incomplete'
+                  });
+                } catch (e) {
+                  if (e.status !== 404) throw e;
+                }
               }
             }
