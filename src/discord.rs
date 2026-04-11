@@ -10,7 +10,7 @@ use serenity::prelude::*;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::watch;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 pub struct Handler {
     pub pool: Arc<SessionPool>,
@@ -22,7 +22,7 @@ pub struct Handler {
 #[async_trait]
 impl EventHandler for Handler {
     async fn message(&self, ctx: Context, msg: Message) {
-        debug!(
+        info!(
             msg_id = %msg.id,
             channel = %msg.channel_id,
             author = %msg.author.id,
@@ -32,7 +32,7 @@ impl EventHandler for Handler {
             "DIAG: message() entered"
         );
         if msg.author.bot {
-            debug!(msg_id = %msg.id, "DIAG: skipping bot author");
+            info!(msg_id = %msg.id, "DIAG: skipping bot author");
             return;
         }
 
@@ -52,15 +52,15 @@ impl EventHandler for Handler {
                     let result = gc
                         .parent_id
                         .map_or(false, |pid| self.allowed_channels.contains(&pid.get()));
-                    tracing::debug!(channel_id = %msg.channel_id, parent_id = ?gc.parent_id, result, "thread check");
+                    tracing::info!(channel_id = %msg.channel_id, parent_id = ?gc.parent_id, result, "thread check");
                     result
                 }
                 Ok(other) => {
-                    tracing::debug!(channel_id = %msg.channel_id, kind = ?other, "not a guild channel");
+                    tracing::info!(channel_id = %msg.channel_id, kind = ?other, "not a guild channel");
                     false
                 }
                 Err(e) => {
-                    tracing::debug!(channel_id = %msg.channel_id, error = %e, "to_channel failed");
+                    tracing::info!(channel_id = %msg.channel_id, error = %e, "to_channel failed");
                     false
                 }
             }
@@ -92,7 +92,7 @@ impl EventHandler for Handler {
             return;
         }
 
-        debug!(
+        info!(
             msg_id = %msg.id,
             prompt = %prompt,
             prompt_bytes = ?prompt.as_bytes(),
@@ -102,7 +102,7 @@ impl EventHandler for Handler {
 
         // Handle !model command (intercept before normal prompt flow)
         if prompt.starts_with("!model") {
-            debug!(msg_id = %msg.id, "DIAG: !model intercept fired");
+            info!(msg_id = %msg.id, "DIAG: !model intercept fired");
             let arg = prompt[6..].trim().to_string();
             let thread_key = msg.channel_id.get().to_string();
 
@@ -162,7 +162,7 @@ impl EventHandler for Handler {
                 Err(e) => format!("⚠️ {e}"),
             };
             let _ = msg.channel_id.say(&ctx.http, text).await;
-            debug!(msg_id = %msg.id, "DIAG: !model intercept returning");
+            info!(msg_id = %msg.id, "DIAG: !model intercept returning");
             return;
         }
 
@@ -185,7 +185,7 @@ impl EventHandler for Handler {
             prompt
         );
 
-        tracing::debug!(prompt = %prompt_with_sender, in_thread, "processing");
+        tracing::info!(prompt = %prompt_with_sender, in_thread, "processing");
 
         let thread_id = if in_thread {
             msg.channel_id.get()
@@ -227,7 +227,7 @@ impl EventHandler for Handler {
         ));
         reactions.set_queued().await;
 
-        debug!(msg_id = %msg.id, thread_key = %thread_key, "DIAG: about to call stream_prompt (NOT !model path)");
+        info!(msg_id = %msg.id, thread_key = %thread_key, "DIAG: about to call stream_prompt (NOT !model path)");
 
         // Stream prompt with live edits
         let result = stream_prompt(
