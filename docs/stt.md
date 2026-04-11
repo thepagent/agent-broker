@@ -141,4 +141,4 @@ When disabled, audio attachments are silently skipped with no impact on existing
 - openab sends `response_format=json` in the transcription request to ensure the response is always parseable JSON. Some local whisper servers default to plain text output without this parameter.
 - The actual MIME type from the Discord attachment is passed through to the STT API (e.g. `audio/ogg`, `audio/mp4`, `audio/wav`).
 - Environment variables in config values are expanded via `${VAR}` syntax (e.g. `api_key = "${GROQ_API_KEY}"`).
-- The `api_key` field is auto-detected from the `GROQ_API_KEY` environment variable if not set in config. If neither is available, openab will refuse to start with `stt.enabled = true`.
+- The `api_key` field is auto-detected from the `GROQ_API_KEY` environment variable when using the default Groq endpoint. If you set a custom `base_url` (e.g. local server), auto-detect is disabled to avoid leaking the Groq key to unrelated endpoints — you must set `api_key` explicitly.
