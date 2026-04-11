@@ -120,7 +120,11 @@ async fn get_or_create_thread(bot: &Bot, msg: &Message, is_kiro_cmd: bool) -> an
             .map(|u| u.first_name.clone())
             .unwrap_or_else(|| "User".to_string());
         let prompt_preview: String = msg.text().unwrap_or("").chars().take(30).collect();
-        let topic_name: String = format!("{}: {}", user_name, prompt_preview).chars().take(128).collect();
+        let topic_name: String = if prompt_preview.is_empty() {
+            format!("📷 {}", user_name)
+        } else {
+            format!("{}: {}", user_name, prompt_preview)
+        }.chars().take(128).collect();
 
         let topic = bot.create_forum_topic(chat_id, topic_name, 0x6FB9F0u32, "").await?;
         let thread_id = topic.thread_id;
@@ -419,7 +423,8 @@ async fn handle_message(
                             silent_mode = false;
                         } else {
                             // plain message or @mention in #general → buffer silently (no topic)
-                            silent_mode = !is_mentioned;
+                            // Exception: photos always get a topic so the model can describe them.
+                            silent_mode = image.is_none() && !is_mentioned;
                         }
                     } else {
                         silent_mode = in_real_topic && !is_mentioned;
@@ -430,8 +435,8 @@ async fn handle_message(
 
             let chat_id = msg.chat.id;
 
-            // In personal mode every message can create a topic; in team mode only !kiro.
-            let may_create_topic = is_kiro_cmd || mode == ChatMode::Personal;
+            // In personal mode every message can create a topic; in team mode only !kiro or photos.
+            let may_create_topic = is_kiro_cmd || mode == ChatMode::Personal || image.is_some();
 
             // Resolve thread context
             let ctx = match get_or_create_thread(&bot, &msg, may_create_topic).await {
