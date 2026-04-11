@@ -3,7 +3,7 @@
 
 [tagpr]
 versionFile = "Cargo.toml,charts/openab/Chart.yaml"
-tagPrefix = "v"
+vPrefix = true
 releaseBranch = "main"
 changelog = true
 postVersionCommand = "sed -i 's/^appVersion: .*/appVersion: \"'\"$TAGPR_NEXT_VERSION\"'\"/' charts/openab/Chart.yaml"
