@@ -159,6 +159,27 @@ working_dir = "/home/node"
 env = { GEMINI_API_KEY = "${GEMINI_API_KEY}" }
 ```
 
+### SSH Sandbox (Local Deployments)
+
+For local deployments, you can run the agent inside an isolated VM or container using SSH as a transparent stdio transport — no changes to OpenAB are needed. SSH is a byte pipe over stdin/stdout, which is exactly how `AcpConnection` communicates with agents.
+
+```toml
+[agent]
+command = "ssh"
+args = [
+  "-T",                                     # no PTY — required, PTY corrupts JSON-RPC
+  "-o", "BatchMode=yes",                    # fail-fast, no interactive prompts
+  "-o", "ServerAliveInterval=30",           # keep-alive for long sessions
+  "-o", "ServerAliveCountMax=3",
+  "-o", "StrictHostKeyChecking=accept-new", # daemon has no terminal for prompts
+  "user@sandbox-host",
+  "claude", "--acp"
+]
+working_dir = "/tmp"
+```
+
+See [docs/ssh-sandbox.md](docs/ssh-sandbox.md) for setup details, MCP server access patterns, and known limitations.
+
 ## Configuration Reference
 
 ```toml
