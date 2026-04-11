@@ -14,3 +14,9 @@ body:
       description: Why do you need this?
     validations:
       required: true
+  - type: textarea
+    attributes:
+      label: Proposed Solution
+      description: Do you have any ideas on how this could be implemented?
+    validations:
+      required: false
