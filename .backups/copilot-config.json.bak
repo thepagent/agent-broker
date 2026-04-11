@@ -1,7 +1,7 @@
 {
   "firstLaunchAt": "2026-04-08T18:53:32.210Z",
   "banner": "never",
-  "model": "gpt-5.3-codex",
+  "model": "gpt-5-mini",
   "effortLevel": "xhigh",
   "trusted_folders": [
     "C:\\Users\\Administrator"
