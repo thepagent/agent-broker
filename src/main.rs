@@ -66,6 +66,22 @@ async fn main() -> anyhow::Result<()> {
         .event_handler(handler)
         .await?;
 
+    // Warmup: spawn a background session so the model cache is populated
+    // before the first /model autocomplete fires. Without this, the first user
+    // to open the autocomplete picker would see an empty list (since spawning
+    // an agent takes ~10s — far over Discord's 3s autocomplete deadline).
+    let warmup_pool = pool.clone();
+    tokio::spawn(async move {
+        info!("[warmup] preloading model cache");
+        match warmup_pool.get_or_create("__warmup__").await {
+            Ok(()) => {
+                let count = warmup_pool.cached_models().await.len();
+                info!(count, "[warmup] model cache populated");
+            }
+            Err(e) => warn!(error = %e, "[warmup] failed to preload model cache"),
+        }
+    });
+
     // Spawn cleanup task
     let cleanup_pool = pool.clone();
     let cleanup_handle = tokio::spawn(async move {
