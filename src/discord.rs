@@ -1,8 +1,11 @@
-use crate::acp::{classify_notification, AcpEvent, SessionPool};
+use crate::acp::{classify_notification, AcpEvent, ContentBlock, SessionPool};
 use crate::config::ReactionsConfig;
 use crate::error_display::{format_coded_error, format_user_error};
 use crate::format;
 use crate::reactions::StatusReactionController;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
+use std::sync::LazyLock;
 use serenity::async_trait;
 use serenity::model::channel::{Message, ReactionType};
 use serenity::model::gateway::Ready;
@@ -12,7 +15,16 @@ use std::collections::HashSet;
 use std::sync::LazyLock;
 use std::sync::Arc;
 use tokio::sync::watch;
-use tracing::{error, info};
+use tracing::{debug, error, info};
+
+/// Reusable HTTP client for downloading Discord attachments.
+/// Built once with a 30s timeout and rustls TLS (no native-tls deps).
+static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .expect("static HTTP client must build")
+});
 
 pub struct Handler {
     pub pool: Arc<SessionPool>,
@@ -80,9 +92,14 @@ impl EventHandler for Handler {
         } else {
             msg.content.trim().to_string()
         };
-        if prompt.is_empty() {
+
+        // No text and no image attachments → skip to avoid wasting session slots
+        if prompt.is_empty() && msg.attachments.is_empty() {
             return;
         }
+
+        // Build content blocks: text + image attachments
+        let mut content_blocks = vec![];
 
         // Inject structured sender context so the downstream CLI can identify who sent the message
         let display_name = msg.member.as_ref()
@@ -103,7 +120,37 @@ impl EventHandler for Handler {
             prompt
         );
 
-        tracing::debug!(prompt = %prompt_with_sender, in_thread, "processing");
+        // Add text block (always, even if empty, we still send for sender context)
+        content_blocks.push(ContentBlock::Text {
+            text: prompt_with_sender.clone(),
+        });
+
+        // Add image attachments
+        if !msg.attachments.is_empty() {
+            for attachment in &msg.attachments {
+                if let Some(content_block) = download_and_encode_image(attachment).await {
+                    debug!(url = %attachment.url, filename = %attachment.filename, "adding image attachment");
+                    content_blocks.push(content_block);
+                } else {
+                    error!(
+                        url = %attachment.url,
+                        filename = %attachment.filename,
+                        "failed to download image attachment"
+                    );
+                }
+            }
+        }
+
+        tracing::debug!(
+            text_len = prompt_with_sender.len(),
+            num_attachments = msg.attachments.len(),
+            in_thread,
+            "processing"
+        );
+
+        // Note: image-only messages (no text) are intentionally allowed since
+        // prompt_with_sender always includes the non-empty sender_context XML.
+        // The guard above (prompt.is_empty() && no attachments) handles stickers/embeds.
 
         let thread_id = if in_thread {
             msg.channel_id.get()
@@ -146,11 +193,11 @@ impl EventHandler for Handler {
         ));
         reactions.set_queued().await;
 
-        // Stream prompt with live edits
+        // Stream prompt with live edits (pass content blocks instead of just text)
         let result = stream_prompt(
             &self.pool,
             &thread_key,
-            &prompt_with_sender,
+            content_blocks,
             &ctx,
             thread_channel,
             thinking_msg.id,
@@ -187,6 +234,103 @@ impl EventHandler for Handler {
     }
 }
 
+/// Download a Discord image attachment and encode it as an ACP image content block.
+///
+/// Discord attachment URLs are temporary and expire, so we must download
+/// and encode the image data immediately. The ACP ImageContent schema
+/// requires `{ data: base64_string, mimeType: "image/..." }`.
+///
+/// Security: rejects non-image attachments (by content-type or extension)
+/// and files larger than 10MB to prevent OOM/abuse.
+async fn download_and_encode_image(attachment: &serenity::model::channel::Attachment) -> Option<ContentBlock> {
+    const MAX_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
+
+    let url = &attachment.url;
+    if url.is_empty() {
+        return None;
+    }
+
+    // Determine media type — prefer content-type header, fallback to extension
+    let media_type = attachment
+        .content_type
+        .as_deref()
+        .or_else(|| {
+            attachment
+                .filename
+                .rsplit('.')
+                .next()
+                .and_then(|ext| match ext.to_lowercase().as_str() {
+                    "png" => Some("image/png"),
+                    "jpg" | "jpeg" => Some("image/jpeg"),
+                    "gif" => Some("image/gif"),
+                    "webp" => Some("image/webp"),
+                    _ => None,
+                })
+        });
+
+    // Validate that it's actually an image
+    let Some(mime) = media_type else {
+        debug!(filename = %attachment.filename, "skipping non-image attachment (no matching content-type or extension)");
+        return None;
+    };
+    // Strip MIME type parameters (e.g. "image/jpeg; charset=utf-8" → "image/jpeg")
+    // Downstream LLM APIs (Claude, OpenAI, Gemini) reject MIME types with parameters
+    let mime = mime.split(';').next().unwrap_or(mime).trim();
+    if !mime.starts_with("image/") {
+        debug!(filename = %attachment.filename, mime = %mime, "skipping non-image attachment");
+        return None;
+    }
+
+    // Size check before downloading
+    if u64::from(attachment.size) > MAX_SIZE {
+        error!(
+            filename = %attachment.filename,
+            size = attachment.size,
+            max = MAX_SIZE,
+            "image attachment exceeds 10MB limit"
+        );
+        return None;
+    }
+
+    // Download using the static reusable client
+    let response = match HTTP_CLIENT.get(url).send().await {
+        Ok(resp) => resp,
+        Err(e) => {
+            error!("failed to download image {}: {}", url, e);
+            return None;
+        }
+    };
+
+    if !response.status().is_success() {
+        error!("HTTP error downloading image {}: {}", url, response.status());
+        return None;
+    }
+
+    let bytes = match response.bytes().await {
+        Ok(b) => b,
+        Err(e) => {
+            error!("failed to read image bytes from {}: {}", url, e);
+            return None;
+        }
+    };
+
+    // Final size check after download (defense in depth)
+    if bytes.len() as u64 > MAX_SIZE {
+        error!(
+            filename = %attachment.filename,
+            size = bytes.len(),
+            "downloaded image exceeds 10MB limit after decode"
+        );
+        return None;
+    }
+
+    let encoded = BASE64.encode(bytes.as_ref());
+    Some(ContentBlock::Image {
+        media_type: mime.to_string(),
+        data: encoded,
+    })
+}
+
 async fn edit(ctx: &Context, ch: ChannelId, msg_id: MessageId, content: &str) -> serenity::Result<Message> {
     ch.edit_message(&ctx.http, msg_id, serenity::builder::EditMessage::new().content(content)).await
 }
@@ -194,24 +338,23 @@ async fn edit(ctx: &Context, ch: ChannelId, msg_id: MessageId, content: &str) ->
 async fn stream_prompt(
     pool: &SessionPool,
     thread_key: &str,
-    prompt: &str,
+    content_blocks: Vec<ContentBlock>,
     ctx: &Context,
     channel: ChannelId,
     msg_id: MessageId,
     reactions: Arc<StatusReactionController>,
 ) -> anyhow::Result<()> {
-    let prompt = prompt.to_string();
     let reactions = reactions.clone();
 
     pool.with_connection(thread_key, |conn| {
-        let prompt = prompt.clone();
+        let content_blocks = content_blocks.clone();
         let ctx = ctx.clone();
         let reactions = reactions.clone();
         Box::pin(async move {
             let reset = conn.session_reset;
             conn.session_reset = false;
 
-            let (mut rx, _) = conn.session_prompt(&prompt).await?;
+            let (mut rx, _): (_, _) = conn.session_prompt(content_blocks).await?;
             reactions.set_thinking().await;
 
             let initial = if reset {
