@@ -24,6 +24,11 @@ const SDK_PATH =
 
 const sdkPromise = import('file:///' + SDK_PATH);
 
+// Default model applied to every new session the bridge creates. Override
+// via COPILOT_DEFAULT_MODEL env var. Intent: Discord use-case is quick Q&A
+// → cheap model; terminal copilot-cli keeps its own config-level default.
+const DEFAULT_MODEL = process.env.COPILOT_DEFAULT_MODEL || 'gpt-5-mini';
+
 // ---- stdio JSON-RPC plumbing ---------------------------------------
 
 let stdinBuf = '';
@@ -197,13 +202,24 @@ async function handleSessionNew(params) {
     );
   });
 
+  // Apply the bridge default model. Best-effort: if the model isn't
+  // available or switchTo fails, keep whatever the CLI default was.
+  let appliedDefault = false;
+  try {
+    await session.rpc.model.switchTo({ modelId: DEFAULT_MODEL });
+    appliedDefault = true;
+    logInfo(`session/new default model → ${DEFAULT_MODEL}`);
+  } catch (e) {
+    logError(`default model switch failed (${DEFAULT_MODEL}): ${e.message}`);
+  }
+
   // Extract models + mode info from session for ACP initial response.
   let models = null;
   try {
-    const cur = await session.rpc.model.getCurrent();
+    const cur = await session.rpc.model.getCurrent().catch(() => ({}));
     const listed = await c.listModels();
     models = {
-      currentModelId: cur?.modelId || 'default',
+      currentModelId: appliedDefault ? DEFAULT_MODEL : (cur?.modelId || 'default'),
       availableModels: (listed || []).map(m => ({
         modelId: m.id || m.modelId,
         name: m.name || m.id,
@@ -212,7 +228,7 @@ async function handleSessionNew(params) {
     };
   } catch (_) {}
 
-  logInfo(`session/new id=${session.sessionId}`);
+  logInfo(`session/new id=${session.sessionId} default=${DEFAULT_MODEL}`);
   return {
     sessionId: session.sessionId,
     models,
