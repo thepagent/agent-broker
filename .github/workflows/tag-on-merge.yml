@@ -27,6 +27,10 @@ jobs:
         run: |
           # release/v0.8.0-rc.1 → v0.8.0-rc.1
           VERSION="${GITHUB_HEAD_REF#release/}"
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "::error::Invalid version format '${VERSION}'. Expected v{major}.{minor}.{patch}[-prerelease]"
+            exit 1
+          fi
           git config user.name "openab-app[bot]"
           git config user.email "274185012+openab-app[bot]@users.noreply.github.com"
           git tag "$VERSION"

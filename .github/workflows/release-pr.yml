@@ -55,12 +55,15 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "::notice::Release version: ${VERSION}"
 
+      - uses: dtolnay/rust-toolchain@stable
+
       - name: Update version files
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           sed -i "s/^version = .*/version = \"${VERSION}\"/" Cargo.toml
           sed -i "s/^version: .*/version: ${VERSION}/" charts/openab/Chart.yaml
           sed -i "s/^appVersion: .*/appVersion: \"${VERSION}\"/" charts/openab/Chart.yaml
+          cargo generate-lockfile
 
       - name: Create release PR
         env:
