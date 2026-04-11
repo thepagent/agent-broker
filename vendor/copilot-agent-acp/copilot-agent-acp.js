@@ -472,7 +472,7 @@ const SLASH_REGISTRY = [
     call: async (s, a) => (await s.session.rpc.plan.update({ content: a[0] || '' }), true),
     format: () => '✅ Plan updated' },
 
-  { name: 'plan-delete', desc: 'Delete session plan', args: 'none',
+  { name: 'plan-delete', desc: 'Delete session plan', args: 'none', dangerous: true,
     call: async (s) => (await s.session.rpc.plan.delete(), true),
     format: () => '✅ Plan deleted' },
 
@@ -500,7 +500,7 @@ const SLASH_REGISTRY = [
       : s.session.rpc.agent.getCurrent(),
     format: (r) => r.selected ? `✅ Agent → \`${r.selected}\`` : `🤖 Current agent: \`${r?.name || '(none)'}\`` },
 
-  { name: 'agent-deselect', desc: 'Clear agent selection', args: 'none',
+  { name: 'agent-deselect', desc: 'Clear agent selection', args: 'none', dangerous: true,
     call: async (s) => (await s.session.rpc.agent.deselect(), true),
     format: () => '✅ Agent deselected' },
 
@@ -518,7 +518,7 @@ const SLASH_REGISTRY = [
     call: async (s, a) => (await s.session.rpc.skills.enable({ name: a[0] }), { enabled: a[0] }),
     format: (r) => `✅ Skill \`${r.enabled}\` enabled` },
 
-  { name: 'skill-off', desc: 'Disable a skill', args: 'single',
+  { name: 'skill-off', desc: 'Disable a skill', args: 'single', dangerous: true,
     call: async (s, a) => (await s.session.rpc.skills.disable({ name: a[0] }), { disabled: a[0] }),
     format: (r) => `✅ Skill \`${r.disabled}\` disabled` },
 
@@ -532,7 +532,7 @@ const SLASH_REGISTRY = [
     call: async (s, a) => (await s.session.rpc.mcp.enable({ name: a[0] }), { enabled: a[0] }),
     format: (r) => `✅ MCP \`${r.enabled}\` enabled` },
 
-  { name: 'mcp-off', desc: 'Disable an MCP server', args: 'single',
+  { name: 'mcp-off', desc: 'Disable an MCP server', args: 'single', dangerous: true,
     call: async (s, a) => (await s.session.rpc.mcp.disable({ name: a[0] }), { disabled: a[0] }),
     format: (r) => `✅ MCP \`${r.disabled}\` disabled` },
 
@@ -548,16 +548,16 @@ const SLASH_REGISTRY = [
       (r?.extensions || []).map(x => `• ${x.name}`).join('\n') },
 
   // ---- Session: lifecycle ----
-  { name: 'compact', desc: 'LLM-compact session history', args: 'none',
+  { name: 'compact', desc: 'LLM-compact session history', args: 'none', dangerous: true,
     call: async (s) => s.session.rpc.compaction.compact(),
     format: (r) => `✅ Compacted — ${r?.tokensRemoved || 0} tokens removed` },
 
-  { name: 'fleet', desc: 'Start parallel subagents', args: 'rest',
+  { name: 'fleet', desc: 'Start parallel subagents', args: 'rest', dangerous: true,
     call: async (s, a) => s.session.rpc.fleet.start({ prompt: a[0] || '' }),
     format: (r) => `🚀 Fleet started\n\`\`\`json\n${JSON.stringify(r, null, 2).slice(0, 1500)}\n\`\`\`` },
 
   // ---- Session: shell (owner-only, allowlist enforced at OpenAB layer) ----
-  { name: 'shell', desc: 'Execute a shell command directly', args: 'rest',
+  { name: 'shell', desc: 'Execute a shell command directly', args: 'rest', dangerous: true,
     call: async (s, a) => s.session.rpc.shell.exec({ command: a[0] || '' }),
     format: (r) => {
       const out = r?.output || r?.stdout || JSON.stringify(r, null, 2);
@@ -571,8 +571,13 @@ const SLASH_REGISTRY = [
     format: (reg) => {
       const lines = reg
         .filter(e => e.name !== 'help')
-        .map(e => `• \`/${e.name}\` — ${e.desc}`);
-      return `🛠 **Bridge slash commands** (${lines.length})\n${lines.join('\n')}\n\n_Unknown slash commands fall through to the LLM._`;
+        .map(e => {
+          const marker = e.dangerous ? ' ⚠️' : '';
+          return `• \`/${e.name}\`${marker} — ${e.desc}`;
+        });
+      return `🛠 **Bridge slash commands** (${lines.length})\n${lines.join('\n')}\n\n` +
+        `_Unknown slash commands fall through to the LLM._\n` +
+        `_⚠️ = destructive, requires \`--confirm\` suffix._`;
     } },
 ];
 
@@ -600,17 +605,34 @@ function parseSlashArgs(spec, raw) {
 /// Try to handle a slash command typed as prompt text. Returns a string to
 /// display to the user, or null if the command isn't recognized (so the
 /// caller falls back to normal LLM processing).
+///
+/// Dangerous commands (flagged `dangerous: true` in the registry) require
+/// a `--confirm` flag anywhere in the args to execute. Without it, the
+/// dispatcher returns a warning explaining how to confirm.
 async function handleSlashCommand(sessionId, state, raw) {
   const parts = raw.slice(1).trim().split(/\s+/);
   const cmd = parts[0]?.toLowerCase();
-  const args = parts.slice(1);
+  const rawArgs = parts.slice(1);
   if (!cmd) return null;
 
   const entry = SLASH_REGISTRY.find(e => e.name === cmd);
   if (!entry) return null; // unknown — fall through to LLM
 
+  // Separate --confirm from real args
+  const hasConfirm = rawArgs.includes('--confirm');
+  const argsNoConfirm = rawArgs.filter(a => a !== '--confirm');
+
+  if (entry.dangerous && !hasConfirm) {
+    const preview = argsNoConfirm.length > 0
+      ? `\n**Command:** \`/${cmd} ${argsNoConfirm.join(' ')}\``
+      : `\n**Command:** \`/${cmd}\``;
+    return `⚠️ **\`/${cmd}\` is a destructive command.**${preview}\n\n` +
+      `To execute, append **\`--confirm\`**:\n` +
+      `\`\`\`\n/${cmd}${argsNoConfirm.length ? ' ' + argsNoConfirm.join(' ') : ''} --confirm\n\`\`\``;
+  }
+
   try {
-    const parsedArgs = parseSlashArgs(entry.args, args);
+    const parsedArgs = parseSlashArgs(entry.args, argsNoConfirm);
     const result = await entry.call(state, parsedArgs);
     if (entry.format) return entry.format(result);
     return '```json\n' + JSON.stringify(result, null, 2).slice(0, 1800) + '\n```';
