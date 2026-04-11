@@ -68,7 +68,7 @@ jobs:
 
             const missing = rules[type].filter(field => {
               const regex = new RegExp(
-                `###\\s*${field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\n([\\s\\S]*?)(?=###|$)`
+                `###\\s*${field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\n+([\\s\\S]*?)(?=\\n*###|$)`
               );
               const match = body.match(regex);
               if (!match) return true;
