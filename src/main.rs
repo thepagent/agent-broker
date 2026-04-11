@@ -52,8 +52,8 @@ async fn main() -> anyhow::Result<()> {
     };
 
     if cfg.stt.enabled {
-        // Auto-detect GROQ_API_KEY from env if api_key not set in config
-        if cfg.stt.api_key.is_empty() {
+        // Auto-detect GROQ_API_KEY from env if api_key not set and using default Groq endpoint
+        if cfg.stt.api_key.is_empty() && cfg.stt.base_url.contains("groq.com") {
             if let Ok(key) = std::env::var("GROQ_API_KEY") {
                 if !key.is_empty() {
                     info!("stt.api_key not set, using GROQ_API_KEY from environment");
