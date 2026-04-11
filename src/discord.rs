@@ -9,7 +9,8 @@ use std::sync::LazyLock;
 use serenity::async_trait;
 use serenity::builder::{
     AutocompleteChoice, CreateAutocompleteResponse, CreateCommand, CreateCommandOption,
-    CreateInteractionResponse, CreateInteractionResponseMessage, EditInteractionResponse,
+    CreateEmbed, CreateInteractionResponse, CreateInteractionResponseMessage,
+    EditInteractionResponse,
 };
 use serenity::model::application::{
     CommandDataOptionValue, CommandInteraction, CommandOptionType, Interaction,
@@ -32,17 +33,67 @@ static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
         .expect("static HTTP client must build")
 });
 
-/// Alias shortcuts shown in autocomplete and resolved by AcpConnection::resolve_model_alias.
-/// Covers both Kiro (claude-*) and Copilot (gpt-*) backends.
-const MODEL_ALIASES: &[(&str, &str)] = &[
-    ("auto", "auto"),
-    ("opus", "claude-opus-4.6"),
-    ("sonnet", "claude-sonnet-4.6"),
-    ("haiku", "claude-haiku-4.5"),
-    ("codex", "gpt-5.3-codex"),
-    ("gpt-5", "gpt-5.2"),
-    ("mini", "gpt-5.4-mini"),
-    ("gpt-4.1", "gpt-4.1"),
+/// Alias shortcuts disabled: autocomplete shows full model IDs only.
+const MODEL_ALIASES: &[(&str, &str)] = &[];
+
+/// Read-only top-level slash commands (no args, just display).
+const COPILOT_READONLY_COMMANDS: &[(&str, &str)] = &[
+    ("status",      "Show Copilot CLI version, auth, and model count"),
+    ("plugins",     "List installed Copilot plugins"),
+    ("plan",        "Read the current session plan.md"),
+    ("files",       "List files in the session workspace"),
+    ("auth",        "Show Copilot GitHub auth status"),
+];
+
+/// Map read-only command name → copilot-rpc.js subcommand.
+fn copilot_readonly_to_rpc(name: &str) -> Option<&'static str> {
+    match name {
+        "status"      => Some("status"),
+        "plugins"     => Some("plugins"),
+        "plan"        => Some("plan-read"),
+        "files"       => Some("files"),
+        "auth"        => Some("auth"),
+        _             => None,
+    }
+}
+
+/// Interactive commands that take a <name> argument + dispatch to an action RPC.
+/// Tuple: (discord_cmd, description, list_rpc_for_autocomplete, action_rpc,
+///         autocomplete_data_key, autocomplete_name_key)
+const COPILOT_INTERACTIVE_COMMANDS: &[(&str, &str, &str, &str, &str, &str)] = &[
+    ("agent",       "Select an agent by name",         "agents",     "agent-select",    "agents",  "name"),
+    ("skill-on",    "Enable a skill by name",          "skills",     "skill-enable",    "skills",  "name"),
+    ("skill-off",   "Disable a skill by name",         "skills",     "skill-disable",   "skills",  "name"),
+    ("mcp-on",      "Enable an MCP server by name",    "mcp-list",   "mcp-enable",      "servers", "name"),
+    ("mcp-off",     "Disable an MCP server by name",   "mcp-list",   "mcp-disable",     "servers", "name"),
+    ("ext-on",      "Enable an extension by name",     "extensions", "extension-enable","extensions","name"),
+    ("ext-off",     "Disable an extension by name",    "extensions", "extension-disable","extensions","name"),
+];
+
+/// Map interactive command name → (list_rpc, action_rpc, data_key, name_key).
+fn copilot_interactive_spec(name: &str) -> Option<(&'static str, &'static str, &'static str, &'static str)> {
+    for (cmd, _, list_rpc, action_rpc, data_key, name_key) in COPILOT_INTERACTIVE_COMMANDS {
+        if *cmd == name {
+            return Some((list_rpc, action_rpc, data_key, name_key));
+        }
+    }
+    None
+}
+
+/// Static mode choices (Copilot has 6 fixed modes).
+const COPILOT_MODES: &[(&str, &str)] = &[
+    ("https://agentclientprotocol.com/protocol/session-modes#agent",     "Agent (default)"),
+    ("https://agentclientprotocol.com/protocol/session-modes#plan",      "Plan Mode"),
+    ("https://agentclientprotocol.com/protocol/session-modes#autopilot", "Autopilot"),
+];
+
+/// Static choices for /reload <kind>.
+/// Each tuple: (discord_value, copilot_rpc_subcommand, label)
+const COPILOT_RELOAD_KINDS: &[(&str, &str, &str)] = &[
+    ("agents",     "agent-reload",     "Agents"),
+    ("skills",     "skill-reload",     "Skills"),
+    ("mcp",        "mcp-reload",       "MCP servers"),
+    ("extensions", "extension-reload", "Extensions"),
 ];
 
 pub struct Handler {
@@ -50,6 +101,7 @@ pub struct Handler {
     pub allowed_channels: HashSet<u64>,
     pub allowed_users: HashSet<u64>,
     pub reactions_config: ReactionsConfig,
+    pub usage_config: Option<crate::config::UsageConfig>,
 }
 
 #[async_trait]
@@ -251,23 +303,107 @@ impl EventHandler for Handler {
     async fn ready(&self, ctx: Context, ready: Ready) {
         info!(user = %ready.user.name, guilds = ready.guilds.len(), "discord bot connected");
 
-        // Register /model as a guild command in every guild we're in.
+        // Register guild commands in every guild we're in.
         // Guild commands appear instantly (vs. global commands which can take
         // up to 1 hour to propagate).
-        let cmd = CreateCommand::new("model")
+        let model_cmd = CreateCommand::new("model")
             .description("Switch or query the AI model used by this bot")
             .add_option(
                 CreateCommandOption::new(
                     CommandOptionType::String,
                     "model",
-                    "Model id or alias (auto / opus / sonnet / haiku) — leave empty to view current",
+                    "Model id — leave empty to view current",
                 )
                 .required(false)
                 .set_autocomplete(true),
             );
 
+        let mut commands = vec![model_cmd];
+
+        // Read-only info commands
+        for (name, desc) in COPILOT_READONLY_COMMANDS {
+            commands.push(CreateCommand::new(*name).description(*desc));
+        }
+
+        // Interactive commands with <name> arg + autocomplete
+        for (name, desc, _list, _action, _dk, _nk) in COPILOT_INTERACTIVE_COMMANDS {
+            commands.push(
+                CreateCommand::new(*name)
+                    .description(*desc)
+                    .add_option(
+                        CreateCommandOption::new(
+                            CommandOptionType::String,
+                            "name",
+                            "Name (autocomplete)",
+                        )
+                        .required(true)
+                        .set_autocomplete(true),
+                    ),
+            );
+        }
+
+        // /mode with static choices (Discord renders as dropdown)
+        let mode_cmd = {
+            let mut opt = CreateCommandOption::new(
+                CommandOptionType::String,
+                "mode",
+                "Session mode",
+            )
+            .required(true);
+            for (value, label) in COPILOT_MODES {
+                opt = opt.add_string_choice(*label, *value);
+            }
+            CreateCommand::new("mode")
+                .description("Switch Copilot session mode (agent / plan / autopilot)")
+                .add_option(opt)
+        };
+        commands.push(mode_cmd);
+
+        // /reload <kind> — reload agents/skills/mcp/extensions
+        let reload_cmd = {
+            let mut opt = CreateCommandOption::new(
+                CommandOptionType::String,
+                "kind",
+                "What to reload",
+            )
+            .required(true);
+            for (value, _rpc, label) in COPILOT_RELOAD_KINDS {
+                opt = opt.add_string_choice(*label, *value);
+            }
+            CreateCommand::new("reload")
+                .description("Reload Copilot agents/skills/mcp/extensions without restarting the bot")
+                .add_option(opt)
+        };
+        commands.push(reload_cmd);
+
+        // /compact — reset the current Discord thread's agent session
+        commands.push(
+            CreateCommand::new("compact")
+                .description("Compact the current thread's agent session (frees tokens by starting fresh)"),
+        );
+
+        // /new-session — explicit reset (alias semantic for compact with different wording)
+        commands.push(
+            CreateCommand::new("new-session")
+                .description("Reset the current thread's agent session completely"),
+        );
+
+        // /tokens — show current thread's session token usage (bridge-only)
+        commands.push(
+            CreateCommand::new("tokens")
+                .description("Show current thread's context window token usage"),
+        );
+
+        // Only register /usage if the user has configured it.
+        if self.usage_config.as_ref().is_some_and(|u| u.enabled && !u.runners.is_empty()) {
+            commands.push(
+                CreateCommand::new("usage")
+                    .description("Show usage quotas for configured backends"),
+            );
+        }
+
         for guild in &ready.guilds {
-            match guild.id.set_commands(&ctx.http, vec![cmd.clone()]).await {
+            match guild.id.set_commands(&ctx.http, commands.clone()).await {
                 Ok(cmds) => info!(guild_id = %guild.id, count = cmds.len(), "registered slash commands"),
                 Err(e) => error!(guild_id = %guild.id, error = %e, "failed to register slash commands"),
             }
@@ -279,8 +415,32 @@ impl EventHandler for Handler {
             Interaction::Command(cmd) if cmd.data.name == "model" => {
                 self.handle_model_command(&ctx, &cmd).await;
             }
+            Interaction::Command(cmd) if cmd.data.name == "usage" => {
+                self.handle_usage_command(&ctx, &cmd).await;
+            }
+            Interaction::Command(cmd) if copilot_readonly_to_rpc(&cmd.data.name).is_some() => {
+                self.handle_copilot_readonly(&ctx, &cmd).await;
+            }
+            Interaction::Command(cmd) if cmd.data.name == "mode" => {
+                self.handle_copilot_mode(&ctx, &cmd).await;
+            }
+            Interaction::Command(cmd) if cmd.data.name == "reload" => {
+                self.handle_copilot_reload(&ctx, &cmd).await;
+            }
+            Interaction::Command(cmd) if cmd.data.name == "compact" || cmd.data.name == "new-session" => {
+                self.handle_reset_session(&ctx, &cmd).await;
+            }
+            Interaction::Command(cmd) if cmd.data.name == "tokens" => {
+                self.handle_tokens_command(&ctx, &cmd).await;
+            }
+            Interaction::Command(cmd) if copilot_interactive_spec(&cmd.data.name).is_some() => {
+                self.handle_copilot_interactive(&ctx, &cmd).await;
+            }
             Interaction::Autocomplete(ac) if ac.data.name == "model" => {
                 self.handle_model_autocomplete(&ctx, &ac).await;
+            }
+            Interaction::Autocomplete(ac) if copilot_interactive_spec(&ac.data.name).is_some() => {
+                self.handle_copilot_interactive_autocomplete(&ctx, &ac).await;
             }
             _ => {}
         }
@@ -476,6 +636,848 @@ impl Handler {
             .edit_response(&ctx.http, EditInteractionResponse::new().content(text))
             .await;
     }
+
+    /// Handle the `/usage` slash command: run all configured usage runners
+    /// in parallel and display the results as an embed.
+    async fn handle_usage_command(&self, ctx: &Context, cmd: &CommandInteraction) {
+        // Channel allowlist
+        let channel_id = cmd.channel_id.get();
+        let in_allowed_channel =
+            self.allowed_channels.is_empty() || self.allowed_channels.contains(&channel_id);
+
+        let in_thread = if !in_allowed_channel {
+            match cmd.channel_id.to_channel(&ctx.http).await {
+                Ok(serenity::model::channel::Channel::Guild(gc)) => gc
+                    .parent_id
+                    .map_or(false, |pid| self.allowed_channels.contains(&pid.get())),
+                _ => false,
+            }
+        } else {
+            false
+        };
+
+        if !in_allowed_channel && !in_thread {
+            let _ = cmd
+                .create_response(
+                    &ctx.http,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new()
+                            .content("⚠️ This channel is not allowlisted.")
+                            .ephemeral(true),
+                    ),
+                )
+                .await;
+            return;
+        }
+
+        // User allowlist
+        if !self.allowed_users.is_empty() && !self.allowed_users.contains(&cmd.user.id.get()) {
+            let _ = cmd
+                .create_response(
+                    &ctx.http,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new()
+                            .content("🚫 You are not authorized to use this command.")
+                            .ephemeral(true),
+                    ),
+                )
+                .await;
+            return;
+        }
+
+        let Some(usage_cfg) = self.usage_config.as_ref() else {
+            let _ = cmd
+                .create_response(
+                    &ctx.http,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new()
+                            .content("⚠️ `/usage` is not configured. See `[usage]` in config.toml.")
+                            .ephemeral(true),
+                    ),
+                )
+                .await;
+            return;
+        };
+
+        if !usage_cfg.enabled || usage_cfg.runners.is_empty() {
+            let _ = cmd
+                .create_response(
+                    &ctx.http,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new()
+                            .content("⚠️ No usage runners configured.")
+                            .ephemeral(true),
+                    ),
+                )
+                .await;
+            return;
+        }
+
+        // Defer — runners may take up to `timeout_secs` each
+        if let Err(e) = cmd.defer(&ctx.http).await {
+            error!(error = %e, "failed to defer /usage response");
+            return;
+        }
+
+        let results = crate::usage::run_all(usage_cfg).await;
+        let embed = build_usage_embed(&results);
+
+        let _ = cmd
+            .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+            .await;
+    }
+
+    /// Generic handler for top-level Copilot slash commands.
+    /// Looks up the Discord command name in the dispatch table and runs copilot-rpc.js.
+    async fn handle_copilot_readonly(&self, ctx: &Context, cmd: &CommandInteraction) {
+        let Some(rpc_sub) = copilot_readonly_to_rpc(&cmd.data.name) else {
+            return;
+        };
+        let display_name = cmd.data.name.clone();
+
+        // Channel allowlist
+        let channel_id = cmd.channel_id.get();
+        let in_allowed_channel =
+            self.allowed_channels.is_empty() || self.allowed_channels.contains(&channel_id);
+        let in_thread = if !in_allowed_channel {
+            match cmd.channel_id.to_channel(&ctx.http).await {
+                Ok(serenity::model::channel::Channel::Guild(gc)) => gc
+                    .parent_id
+                    .map_or(false, |pid| self.allowed_channels.contains(&pid.get())),
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if !in_allowed_channel && !in_thread {
+            let _ = cmd.create_response(&ctx.http,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .content("⚠️ This channel is not allowlisted.")
+                        .ephemeral(true))).await;
+            return;
+        }
+        if !self.allowed_users.is_empty() && !self.allowed_users.contains(&cmd.user.id.get()) {
+            let _ = cmd.create_response(&ctx.http,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .content("🚫 You are not authorized to use this command.")
+                        .ephemeral(true))).await;
+            return;
+        }
+
+        if let Err(e) = cmd.defer(&ctx.http).await {
+            error!(error = %e, cmd = %display_name, "failed to defer response");
+            return;
+        }
+
+        let script = r"C:\Users\Administrator\openab\scripts\copilot-rpc.js";
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(45),
+            tokio::process::Command::new("node")
+                .arg(script)
+                .arg(rpc_sub)
+                .output(),
+        )
+        .await;
+
+        let embed = match output {
+            Ok(Ok(out)) if out.status.success() => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let json_line = stdout
+                    .lines()
+                    .rev()
+                    .find(|l| l.trim().starts_with('{'))
+                    .unwrap_or("")
+                    .trim();
+                build_copilot_embed(&display_name, rpc_sub, json_line)
+            }
+            Ok(Ok(out)) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                CreateEmbed::new()
+                    .title(format!("⚠️ /{display_name}"))
+                    .description(format!("exit {}: ```{}```", out.status, stderr.chars().take(500).collect::<String>()))
+                    .color(0xED4245)
+            }
+            Ok(Err(e)) => CreateEmbed::new()
+                .title(format!("⚠️ /{display_name}"))
+                .description(format!("spawn failed: {e}"))
+                .color(0xED4245),
+            Err(_) => CreateEmbed::new()
+                .title(format!("⏱️ /{display_name}"))
+                .description("timeout after 45s")
+                .color(0xED4245),
+        };
+
+        let _ = cmd
+            .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+            .await;
+    }
+
+    /// Handle /mode — set Copilot session mode via static choices.
+    async fn handle_copilot_mode(&self, ctx: &Context, cmd: &CommandInteraction) {
+        if !self.copilot_guard_ok(ctx, cmd).await {
+            return;
+        }
+        let mode_id = cmd
+            .data
+            .options
+            .first()
+            .and_then(|o| match &o.value {
+                CommandDataOptionValue::String(s) => Some(s.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        if let Err(e) = cmd.defer(&ctx.http).await {
+            error!(error = %e, "failed to defer /mode");
+            return;
+        }
+
+        let embed = run_copilot_rpc_action("mode", "mode-set", &mode_id).await;
+        let _ = cmd.edit_response(&ctx.http, EditInteractionResponse::new().embed(embed)).await;
+    }
+
+    /// Handle /reload <kind> — reload a Copilot config category via SDK RPC.
+    async fn handle_copilot_reload(&self, ctx: &Context, cmd: &CommandInteraction) {
+        if !self.copilot_guard_ok(ctx, cmd).await {
+            return;
+        }
+        let kind = cmd
+            .data
+            .options
+            .first()
+            .and_then(|o| match &o.value {
+                CommandDataOptionValue::String(s) => Some(s.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        let rpc_sub = COPILOT_RELOAD_KINDS
+            .iter()
+            .find(|(v, _, _)| *v == kind)
+            .map(|(_, rpc, _)| *rpc);
+
+        let Some(rpc_sub) = rpc_sub else {
+            let _ = cmd
+                .create_response(
+                    &ctx.http,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new()
+                            .content(format!("❌ Unknown reload kind: `{kind}`"))
+                            .ephemeral(true),
+                    ),
+                )
+                .await;
+            return;
+        };
+
+        if let Err(e) = cmd.defer(&ctx.http).await {
+            error!(error = %e, "failed to defer /reload");
+            return;
+        }
+
+        // reload commands take no arg, but run_copilot_rpc_action expects one.
+        // Pass an empty string; copilot-rpc.js ignores args for reload subcommands.
+        let script = r"C:\Users\Administrator\openab\scripts\copilot-rpc.js";
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(45),
+            tokio::process::Command::new("node")
+                .arg(script)
+                .arg(rpc_sub)
+                .output(),
+        )
+        .await;
+
+        let embed = match output {
+            Ok(Ok(out)) if out.status.success() => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let json_line = stdout
+                    .lines()
+                    .rev()
+                    .find(|l| l.trim().starts_with('{'))
+                    .unwrap_or("")
+                    .trim();
+                let parsed: Result<serde_json::Value, _> = serde_json::from_str(json_line);
+                match parsed {
+                    Ok(v) if v.get("ok").and_then(|b| b.as_bool()) == Some(true) => CreateEmbed::new()
+                        .title("✅ /reload")
+                        .description(format!("Reloaded: **{kind}**"))
+                        .color(0x2ECC71),
+                    Ok(v) => CreateEmbed::new()
+                        .title("⚠️ /reload")
+                        .description(format!(
+                            "```{}```",
+                            v.get("error").and_then(|s| s.as_str()).unwrap_or("unknown error")
+                        ))
+                        .color(0xED4245),
+                    Err(e) => CreateEmbed::new()
+                        .title("⚠️ /reload")
+                        .description(format!("invalid JSON: {e}"))
+                        .color(0xED4245),
+                }
+            }
+            Ok(Ok(out)) => CreateEmbed::new()
+                .title("⚠️ /reload")
+                .description(format!(
+                    "exit {}: ```{}```",
+                    out.status,
+                    String::from_utf8_lossy(&out.stderr).chars().take(400).collect::<String>()
+                ))
+                .color(0xED4245),
+            Ok(Err(e)) => CreateEmbed::new()
+                .title("⚠️ /reload")
+                .description(format!("spawn failed: {e}"))
+                .color(0xED4245),
+            Err(_) => CreateEmbed::new()
+                .title("⏱️ /reload")
+                .description("timeout after 45s")
+                .color(0xED4245),
+        };
+
+        let _ = cmd.edit_response(&ctx.http, EditInteractionResponse::new().embed(embed)).await;
+    }
+
+    /// Handle /compact and /new-session — drop the current thread's AcpConnection.
+    /// Both commands have the same effect (fresh session on next message) but
+    /// are presented with different wording to match user mental models.
+    async fn handle_reset_session(&self, ctx: &Context, cmd: &CommandInteraction) {
+        if !self.copilot_guard_ok(ctx, cmd).await {
+            return;
+        }
+
+        let cmd_name = cmd.data.name.clone();
+        let thread_key = cmd.channel_id.get().to_string();
+        let dropped = self.pool.drop_session(&thread_key).await;
+
+        let (title, body, color) = if dropped {
+            (
+                format!("✅ /{cmd_name}"),
+                "Session reset — your next message in this thread will start a fresh agent session.".to_string(),
+                0x2ECC71,
+            )
+        } else {
+            (
+                format!("ℹ️ /{cmd_name}"),
+                "No active session to reset. Your next message will start fresh anyway.".to_string(),
+                0x5865F2,
+            )
+        };
+
+        let embed = CreateEmbed::new().title(title).description(body).color(color);
+        let _ = cmd
+            .create_response(
+                &ctx.http,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new().add_embed(embed),
+                ),
+            )
+            .await;
+    }
+
+    /// Handle /tokens — ask the bridge for current session token usage via `_meta/getUsage`.
+    /// Only works if the agent backend is the copilot-agent-acp bridge.
+    async fn handle_tokens_command(&self, ctx: &Context, cmd: &CommandInteraction) {
+        if !self.copilot_guard_ok(ctx, cmd).await {
+            return;
+        }
+
+        if let Err(e) = cmd.defer(&ctx.http).await {
+            error!(error = %e, "failed to defer /tokens");
+            return;
+        }
+
+        let thread_key = cmd.channel_id.get().to_string();
+        // Ensure a session exists so the bridge has something to report on.
+        if let Err(e) = self.pool.get_or_create(&thread_key).await {
+            let _ = cmd
+                .edit_response(
+                    &ctx.http,
+                    EditInteractionResponse::new()
+                        .content(format!("⚠️ Failed to start agent: {e}")),
+                )
+                .await;
+            return;
+        }
+
+        let usage_result = self
+            .pool
+            .with_connection(&thread_key, |conn| {
+                Box::pin(async move { conn.session_get_usage().await })
+            })
+            .await;
+
+        let embed = match usage_result {
+            Ok(v) => render_session_tokens(&v),
+            Err(e) => CreateEmbed::new()
+                .title("⚠️ /tokens")
+                .description(format!(
+                    "This backend does not support `_meta/getUsage`.\n\nError: ```{e}```\n\n\
+                     To enable: change `config-copilot.toml` agent command to `copilot-agent-acp`."
+                ))
+                .color(0xED4245),
+        };
+
+        let _ = cmd
+            .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+            .await;
+    }
+
+    /// Handle interactive commands: /agent, /skill-on, /skill-off, /mcp-on, /mcp-off, /ext-on, /ext-off.
+    async fn handle_copilot_interactive(&self, ctx: &Context, cmd: &CommandInteraction) {
+        if !self.copilot_guard_ok(ctx, cmd).await {
+            return;
+        }
+        let Some((_, action_rpc, _, _)) = copilot_interactive_spec(&cmd.data.name) else {
+            return;
+        };
+        let cmd_name = cmd.data.name.clone();
+        let name_arg = cmd
+            .data
+            .options
+            .first()
+            .and_then(|o| match &o.value {
+                CommandDataOptionValue::String(s) => Some(s.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        if name_arg.is_empty() {
+            let _ = cmd
+                .create_response(
+                    &ctx.http,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new()
+                            .content("⚠️ Missing name argument.")
+                            .ephemeral(true),
+                    ),
+                )
+                .await;
+            return;
+        }
+
+        if let Err(e) = cmd.defer(&ctx.http).await {
+            error!(error = %e, cmd = %cmd_name, "failed to defer interactive");
+            return;
+        }
+
+        let embed = run_copilot_rpc_action(&cmd_name, action_rpc, &name_arg).await;
+        let _ = cmd.edit_response(&ctx.http, EditInteractionResponse::new().embed(embed)).await;
+    }
+
+    /// Autocomplete handler for interactive commands: fetches the list RPC
+    /// and filters by the user's partial input. Falls back to empty on error.
+    async fn handle_copilot_interactive_autocomplete(
+        &self,
+        ctx: &Context,
+        ac: &CommandInteraction,
+    ) {
+        let Some((list_rpc, _, data_key, name_key)) = copilot_interactive_spec(&ac.data.name) else {
+            return;
+        };
+
+        let partial = ac
+            .data
+            .options
+            .first()
+            .and_then(|o| match &o.value {
+                CommandDataOptionValue::Autocomplete { value, .. } => Some(value.as_str()),
+                CommandDataOptionValue::String(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .unwrap_or("")
+            .to_lowercase();
+
+        // Call the Node helper to fetch the list. Autocomplete has a 3-second
+        // budget from Discord, and Copilot SDK cold-start can take ~5s — so
+        // we use a 2.8s hard timeout and return empty on miss. The user's next
+        // keystroke will retry (likely warming the Node module cache).
+        let script = r"C:\Users\Administrator\openab\scripts\copilot-rpc.js";
+        let output = tokio::time::timeout(
+            std::time::Duration::from_millis(2800),
+            tokio::process::Command::new("node")
+                .arg(script)
+                .arg(list_rpc)
+                .output(),
+        )
+        .await;
+
+        let mut choices: Vec<AutocompleteChoice> = Vec::new();
+        if let Ok(Ok(out)) = output {
+            if out.status.success() {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let json_line = stdout
+                    .lines()
+                    .rev()
+                    .find(|l| l.trim().starts_with('{'))
+                    .unwrap_or("")
+                    .trim();
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_line) {
+                    if let Some(arr) = v.pointer(&format!("/data/{data_key}")).and_then(|a| a.as_array()) {
+                        for item in arr {
+                            if let Some(name) = item.get(name_key).and_then(|n| n.as_str()) {
+                                if partial.is_empty() || name.to_lowercase().contains(&partial) {
+                                    let label = name.chars().take(100).collect::<String>();
+                                    choices.push(AutocompleteChoice::new(label.clone(), label));
+                                    if choices.len() >= 25 {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let response = CreateInteractionResponse::Autocomplete(
+            CreateAutocompleteResponse::new().set_choices(choices),
+        );
+        if let Err(e) = ac.create_response(&ctx.http, response).await {
+            warn!(error = %e, "failed to send interactive autocomplete");
+        }
+    }
+
+    /// Shared allowlist guard for all Copilot slash commands.
+    /// Returns true if the interaction may proceed; sends an ephemeral error otherwise.
+    async fn copilot_guard_ok(&self, ctx: &Context, cmd: &CommandInteraction) -> bool {
+        let channel_id = cmd.channel_id.get();
+        let in_allowed_channel =
+            self.allowed_channels.is_empty() || self.allowed_channels.contains(&channel_id);
+        let in_thread = if !in_allowed_channel {
+            match cmd.channel_id.to_channel(&ctx.http).await {
+                Ok(serenity::model::channel::Channel::Guild(gc)) => gc
+                    .parent_id
+                    .map_or(false, |pid| self.allowed_channels.contains(&pid.get())),
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if !in_allowed_channel && !in_thread {
+            let _ = cmd
+                .create_response(
+                    &ctx.http,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new()
+                            .content("⚠️ This channel is not allowlisted.")
+                            .ephemeral(true),
+                    ),
+                )
+                .await;
+            return false;
+        }
+        if !self.allowed_users.is_empty() && !self.allowed_users.contains(&cmd.user.id.get()) {
+            let _ = cmd
+                .create_response(
+                    &ctx.http,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new()
+                            .content("🚫 You are not authorized to use this command.")
+                            .ephemeral(true),
+                    ),
+                )
+                .await;
+            return false;
+        }
+        true
+    }
+}
+
+/// Run a copilot-rpc.js action that takes one argument, return a rendered embed.
+async fn run_copilot_rpc_action(display_name: &str, rpc_sub: &str, arg: &str) -> CreateEmbed {
+    let script = r"C:\Users\Administrator\openab\scripts\copilot-rpc.js";
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(45),
+        tokio::process::Command::new("node")
+            .arg(script)
+            .arg(rpc_sub)
+            .arg(arg)
+            .output(),
+    )
+    .await;
+
+    match output {
+        Ok(Ok(out)) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let json_line = stdout
+                .lines()
+                .rev()
+                .find(|l| l.trim().starts_with('{'))
+                .unwrap_or("")
+                .trim();
+            let parsed: Result<serde_json::Value, _> = serde_json::from_str(json_line);
+            match parsed {
+                Ok(v) if v.get("ok").and_then(|b| b.as_bool()) == Some(true) => {
+                    CreateEmbed::new()
+                        .title(format!("✅ /{display_name}"))
+                        .description(format!("Applied: `{arg}`"))
+                        .color(0x2ECC71)
+                }
+                Ok(v) => {
+                    let err = v.get("error").and_then(|s| s.as_str()).unwrap_or("unknown error");
+                    CreateEmbed::new()
+                        .title(format!("⚠️ /{display_name}"))
+                        .description(format!("```{err}```"))
+                        .color(0xED4245)
+                }
+                Err(e) => CreateEmbed::new()
+                    .title(format!("⚠️ /{display_name}"))
+                    .description(format!("invalid JSON: {e}"))
+                    .color(0xED4245),
+            }
+        }
+        Ok(Ok(out)) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            CreateEmbed::new()
+                .title(format!("⚠️ /{display_name}"))
+                .description(format!("exit {}: ```{}```", out.status, stderr.chars().take(400).collect::<String>()))
+                .color(0xED4245)
+        }
+        Ok(Err(e)) => CreateEmbed::new()
+            .title(format!("⚠️ /{display_name}"))
+            .description(format!("spawn failed: {e}"))
+            .color(0xED4245),
+        Err(_) => CreateEmbed::new()
+            .title(format!("⏱️ /{display_name}"))
+            .description("timeout after 45s")
+            .color(0xED4245),
+    }
+}
+
+/// Render an embed from the Node helper's JSON output.
+///
+/// `display_name` = the Discord command the user invoked (for error/title display)
+/// `rpc_sub` = the subcommand passed to copilot-rpc.js (determines renderer)
+fn build_copilot_embed(display_name: &str, rpc_sub: &str, json_line: &str) -> CreateEmbed {
+    let parsed: Result<serde_json::Value, _> = serde_json::from_str(json_line);
+    let v = match parsed {
+        Ok(v) => v,
+        Err(e) => {
+            return CreateEmbed::new()
+                .title(format!("⚠️ /{display_name}"))
+                .description(format!(
+                    "invalid JSON from helper: {e}\n\n```{}```",
+                    json_line.chars().take(300).collect::<String>()
+                ))
+                .color(0xED4245);
+        }
+    };
+
+    if v.get("ok").and_then(|b| b.as_bool()) != Some(true) {
+        let err = v.get("error").and_then(|s| s.as_str()).unwrap_or("unknown");
+        return CreateEmbed::new()
+            .title(format!("⚠️ /{display_name}"))
+            .description(format!("```{err}```"))
+            .color(0xED4245);
+    }
+
+    let data = v.get("data").cloned().unwrap_or(serde_json::Value::Null);
+    let title = format!("⚡ /{display_name}");
+
+    match rpc_sub {
+        "usage" => render_usage(&data),
+        "status" => render_status(&data),
+        "models" => render_list(&title, &data, "models", "id"),
+        "agents" => render_list(&title, &data, "agents", "name"),
+        "skills" => render_list(&title, &data, "skills", "name"),
+        "plugins" => render_list(&title, &data, "plugins", "name"),
+        "extensions" => render_list(&title, &data, "extensions", "name"),
+        "mcp-list" => render_list(&title, &data, "servers", "name"),
+        "files" => render_list(&title, &data, "files", "path"),
+        _ => {
+            let pretty = serde_json::to_string_pretty(&data).unwrap_or_else(|_| format!("{data:?}"));
+            let body = pretty.chars().take(3800).collect::<String>();
+            CreateEmbed::new()
+                .title(title)
+                .description(format!("```json\n{body}\n```"))
+                .color(0x24292F)
+        }
+    }
+}
+
+/// Render session token usage from the bridge's `_meta/getUsage` response.
+fn render_session_tokens(data: &serde_json::Value) -> CreateEmbed {
+    let session_usage = data.get("session_usage");
+    let account_quota = data.get("account_quota");
+
+    let mut embed = CreateEmbed::new()
+        .title("🧮 Session Token Usage")
+        .color(0x24292F);
+
+    // Session-level token info
+    if let Some(su) = session_usage.filter(|v| !v.is_null()) {
+        let token_limit = su.get("tokenLimit").and_then(|v| v.as_u64()).unwrap_or(0);
+        let current = su.get("currentTokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let system_t = su.get("systemTokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let conv_t = su.get("conversationTokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let tools_t = su
+            .get("toolDefinitionsTokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let msgs = su.get("messagesLength").and_then(|v| v.as_u64()).unwrap_or(0);
+
+        let pct = if token_limit > 0 {
+            (current as f64 / token_limit as f64 * 100.0).round() as i64
+        } else {
+            0
+        };
+        let bar = progress_bar(pct as u32);
+
+        let body = format!(
+            "{bar} `{pct}%`\n\
+             **Context:** {:.1}k / {:.0}k\n\
+             • System: {:.1}k\n\
+             • Tools defs: {:.1}k\n\
+             • Conversation: {:.1}k\n\
+             • Messages: {msgs}",
+            current as f64 / 1000.0,
+            token_limit as f64 / 1000.0,
+            system_t as f64 / 1000.0,
+            tools_t as f64 / 1000.0,
+            conv_t as f64 / 1000.0,
+        );
+        embed = embed.field("📊 Current thread", body, false);
+    } else {
+        embed = embed.field(
+            "📊 Current thread",
+            "_(no usage captured yet — send a message first)_",
+            false,
+        );
+    }
+
+    // Account-level quota (if included)
+    if let Some(aq) = account_quota.filter(|v| !v.is_null()) {
+        if let Some(premium) = aq.pointer("/quotaSnapshots/premium_interactions") {
+            let pct = premium
+                .get("remainingPercentage")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let used = premium.get("usedRequests").and_then(|v| v.as_u64()).unwrap_or(0);
+            let entitled = premium
+                .get("entitlementRequests")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let bar = progress_bar(pct as u32);
+            embed = embed.field(
+                "🔥 Premium monthly",
+                format!("{bar} `{:>3}%`\n**{used}** / {entitled} used", pct.round() as i64),
+                false,
+            );
+        }
+    }
+
+    embed
+}
+
+fn render_usage(data: &serde_json::Value) -> CreateEmbed {
+    let snap = data.get("quotaSnapshots");
+    let mut embed = CreateEmbed::new()
+        .title("⚡ Copilot Usage Quota")
+        .color(0x24292F);
+
+    for key in ["premium_interactions", "chat", "completions"] {
+        if let Some(q) = snap.and_then(|s| s.get(key)) {
+            let pct = q.get("remainingPercentage").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let used = q.get("usedRequests").and_then(|v| v.as_u64()).unwrap_or(0);
+            let entitled = q.get("entitlementRequests").and_then(|v| v.as_u64()).unwrap_or(0);
+            let reset = q.get("resetDate").and_then(|v| v.as_str()).unwrap_or("?");
+            let bar = progress_bar(pct as u32);
+            let pretty_key = match key {
+                "premium_interactions" => "🔥 Premium interactions",
+                "chat" => "💬 Chat",
+                "completions" => "✍️ Completions",
+                _ => key,
+            };
+            let body = format!(
+                "{bar} `{:>3}%`\nUsed: **{used}** / {entitled}\nResets: {reset}",
+                pct.round() as i64
+            );
+            embed = embed.field(pretty_key, body, false);
+        }
+    }
+    embed
+}
+
+fn render_status(data: &serde_json::Value) -> CreateEmbed {
+    let cli_ver = data.pointer("/cli/version").and_then(|v| v.as_str()).unwrap_or("?");
+    let proto_ver = data.pointer("/cli/protocolVersion").and_then(|v| v.as_u64()).unwrap_or(0);
+    let auth_user = data.pointer("/auth/login").and_then(|v| v.as_str()).unwrap_or("?");
+    let auth_type = data.pointer("/auth/authType").and_then(|v| v.as_str()).unwrap_or("?");
+    let auth_ok = data.pointer("/auth/isAuthenticated").and_then(|v| v.as_bool()).unwrap_or(false);
+    let model_count = data.pointer("/model_count").and_then(|v| v.as_u64()).unwrap_or(0);
+
+    CreateEmbed::new()
+        .title("⚡ Copilot Status")
+        .color(0x24292F)
+        .field("CLI", format!("v{cli_ver} (protocol {proto_ver})"), true)
+        .field("Auth", if auth_ok { format!("✅ {auth_user} ({auth_type})") } else { "❌ not authenticated".into() }, true)
+        .field("Models", format!("{model_count} available"), true)
+}
+
+fn render_list(title: &str, data: &serde_json::Value, array_key: &str, name_key: &str) -> CreateEmbed {
+    let arr = data.get(array_key).and_then(|v| v.as_array());
+    let count = arr.map(|a| a.len()).unwrap_or(0);
+    let items: Vec<String> = arr
+        .map(|a| a.iter().take(25).enumerate().map(|(i, item)| {
+            let name = item.get(name_key).and_then(|v| v.as_str()).unwrap_or("?");
+            format!("`{:>2}.` {name}", i + 1)
+        }).collect())
+        .unwrap_or_default();
+    let body = if items.is_empty() {
+        "_(empty)_".to_string()
+    } else {
+        let mut s = items.join("\n");
+        if count > items.len() {
+            s.push_str(&format!("\n… and {} more", count - items.len()));
+        }
+        s
+    };
+    CreateEmbed::new()
+        .title(format!("{title} ({count})"))
+        .description(body)
+        .color(0x24292F)
+}
+
+fn progress_bar(pct: u32) -> String {
+    let pct = pct.min(100);
+    let filled = ((pct as f64 / 10.0).round() as usize).min(10);
+    let empty = 10 - filled;
+    format!("{}{}", "█".repeat(filled), "░".repeat(empty))
+}
+
+/// Compose an embed from usage runner results. Each runner becomes one field.
+fn build_usage_embed(results: &[crate::usage::RunnerResult]) -> CreateEmbed {
+    let mut embed = CreateEmbed::new()
+        .title("📊 Agent Usage Report")
+        .color(0x5865F2);
+
+    if results.is_empty() {
+        embed = embed.description("_(no runners)_");
+        return embed;
+    }
+
+    // Pick the first successful runner's color for the embed bar
+    if let Some(crate::usage::RunnerResult::Ok { color, .. }) =
+        results.iter().find(|r| matches!(r, crate::usage::RunnerResult::Ok { .. }))
+    {
+        embed = embed.color(*color);
+    }
+
+    for r in results {
+        match r {
+            crate::usage::RunnerResult::Ok { label, rendered, .. } => {
+                let body = rendered.trim();
+                let body = if body.is_empty() { "_(empty)_" } else { body };
+                embed = embed.field(label, body, false);
+            }
+            crate::usage::RunnerResult::Err { label, reason, .. } => {
+                embed = embed.field(label, format!("⚠️ {reason}"), false);
+            }
+        }
+    }
+
+    embed
 }
 
 /// Download a Discord image attachment and encode it as an ACP image content block.
