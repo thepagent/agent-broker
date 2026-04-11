@@ -574,3 +574,87 @@ async fn get_or_create_thread(ctx: &Context, msg: &Message, prompt: &str) -> any
     Ok(thread.id.get())
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_png(width: u32, height: u32) -> Vec<u8> {
+        let img = image::RgbImage::new(width, height);
+        let mut buf = Cursor::new(Vec::new());
+        img.write_to(&mut buf, image::ImageFormat::Png).unwrap();
+        buf.into_inner()
+    }
+
+    #[test]
+    fn large_image_resized_to_max_dimension() {
+        let png = make_png(3000, 2000);
+        let (compressed, mime) = resize_and_compress(&png).unwrap();
+
+        assert_eq!(mime, "image/jpeg");
+        let result = image::load_from_memory(&compressed).unwrap();
+        assert!(result.width() <= IMAGE_MAX_DIMENSION_PX);
+        assert!(result.height() <= IMAGE_MAX_DIMENSION_PX);
+    }
+
+    #[test]
+    fn small_image_keeps_original_dimensions() {
+        let png = make_png(800, 600);
+        let (compressed, mime) = resize_and_compress(&png).unwrap();
+
+        assert_eq!(mime, "image/jpeg");
+        let result = image::load_from_memory(&compressed).unwrap();
+        assert_eq!(result.width(), 800);
+        assert_eq!(result.height(), 600);
+    }
+
+    #[test]
+    fn landscape_image_respects_aspect_ratio() {
+        let png = make_png(4000, 2000);
+        let (compressed, _) = resize_and_compress(&png).unwrap();
+
+        let result = image::load_from_memory(&compressed).unwrap();
+        assert_eq!(result.width(), IMAGE_MAX_DIMENSION_PX);
+        assert_eq!(result.height(), 600); // 2000 * (1200/4000)
+    }
+
+    #[test]
+    fn portrait_image_respects_aspect_ratio() {
+        let png = make_png(2000, 4000);
+        let (compressed, _) = resize_and_compress(&png).unwrap();
+
+        let result = image::load_from_memory(&compressed).unwrap();
+        assert_eq!(result.height(), IMAGE_MAX_DIMENSION_PX);
+        assert_eq!(result.width(), 600); // 2000 * (1200/4000)
+    }
+
+    #[test]
+    fn compressed_output_is_smaller_than_original() {
+        let png = make_png(3000, 2000);
+        let (compressed, _) = resize_and_compress(&png).unwrap();
+
+        assert!(compressed.len() < png.len(), "compressed {} should be < original {}", compressed.len(), png.len());
+    }
+
+    #[test]
+    fn gif_passes_through_unchanged() {
+        // Minimal valid GIF89a (1x1 pixel)
+        let gif: Vec<u8> = vec![
+            0x47, 0x49, 0x46, 0x38, 0x39, 0x61, // GIF89a
+            0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, // logical screen descriptor
+            0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, // image descriptor
+            0x02, 0x02, 0x44, 0x01, 0x00, // image data
+            0x3B, // trailer
+        ];
+        let (output, mime) = resize_and_compress(&gif).unwrap();
+
+        assert_eq!(mime, "image/gif");
+        assert_eq!(output, gif);
+    }
+
+    #[test]
+    fn invalid_data_returns_error() {
+        let garbage = vec![0x00, 0x01, 0x02, 0x03];
+        assert!(resize_and_compress(&garbage).is_err());
+    }
+}
