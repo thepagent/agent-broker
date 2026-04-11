@@ -18,6 +18,8 @@ pub struct DiscordConfig {
     pub bot_token: String,
     #[serde(default)]
     pub allowed_channels: Vec<String>,
+    #[serde(default = "default_auto_archive_duration")]
+    pub auto_archive_duration: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -85,6 +87,7 @@ pub struct ReactionTiming {
 
 // --- defaults ---
 
+fn default_auto_archive_duration() -> u32 { 1440 }
 fn default_working_dir() -> String { "/tmp".into() }
 fn default_max_sessions() -> usize { 10 }
 fn default_ttl_hours() -> u64 { 24 }
@@ -156,5 +159,12 @@ pub fn load_config(path: &Path) -> anyhow::Result<Config> {
     let expanded = expand_env_vars(&raw);
     let config: Config = toml::from_str(&expanded)
         .map_err(|e| anyhow::anyhow!("failed to parse {}: {e}", path.display()))?;
+    const VALID_ARCHIVE_DURATIONS: &[u32] = &[60, 1440, 4320, 10080];
+    if !VALID_ARCHIVE_DURATIONS.contains(&config.discord.auto_archive_duration) {
+        anyhow::bail!(
+            "invalid auto_archive_duration: {}. Must be one of: 60 (1h), 1440 (1d), 4320 (3d), 10080 (1w)",
+            config.discord.auto_archive_duration
+        );
+    }
     Ok(config)
 }

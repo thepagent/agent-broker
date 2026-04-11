@@ -47,6 +47,7 @@ async fn main() -> anyhow::Result<()> {
         pool: pool.clone(),
         allowed_channels,
         reactions_config: cfg.reactions,
+        auto_archive_duration: cfg.discord.auto_archive_duration,
     };
 
     let intents = GatewayIntents::GUILD_MESSAGES

@@ -1,6 +1,9 @@
 [discord]
 bot_token = "${DISCORD_BOT_TOKEN}"
 allowed_channels = ["1234567890"]
+# auto_archive_duration: minutes before an inactive thread is archived.
+# Valid values: 60 (1h), 1440 (1d), 4320 (3d), 10080 (1w). Default: 1440.
+# auto_archive_duration = 1440
 
 [agent]
 command = "kiro-cli"

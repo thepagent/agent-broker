@@ -16,6 +16,7 @@ pub struct Handler {
     pub pool: Arc<SessionPool>,
     pub allowed_channels: HashSet<u64>,
     pub reactions_config: ReactionsConfig,
+    pub auto_archive_duration: u32,
 }
 
 #[async_trait]
@@ -97,7 +98,7 @@ impl EventHandler for Handler {
         let thread_id = if in_thread {
             msg.channel_id.get()
         } else {
-            match get_or_create_thread(&ctx, &msg, &prompt).await {
+            match get_or_create_thread(&ctx, &msg, &prompt, self.auto_archive_duration).await {
                 Ok(id) => id,
                 Err(e) => {
                     error!("failed to create thread: {e}");
@@ -347,7 +348,21 @@ fn shorten_thread_name(prompt: &str) -> String {
     }
 }
 
-async fn get_or_create_thread(ctx: &Context, msg: &Message, prompt: &str) -> anyhow::Result<u64> {
+fn archive_duration_from_mins(mins: u32) -> serenity::model::channel::AutoArchiveDuration {
+    match mins {
+        60 => serenity::model::channel::AutoArchiveDuration::OneHour,
+        4320 => serenity::model::channel::AutoArchiveDuration::ThreeDays,
+        10080 => serenity::model::channel::AutoArchiveDuration::OneWeek,
+        _ => serenity::model::channel::AutoArchiveDuration::OneDay,
+    }
+}
+
+async fn get_or_create_thread(
+    ctx: &Context,
+    msg: &Message,
+    prompt: &str,
+    auto_archive_duration: u32,
+) -> anyhow::Result<u64> {
     let channel = msg.channel_id.to_channel(&ctx.http).await?;
     if let serenity::model::channel::Channel::Guild(ref gc) = channel {
         if gc.thread_metadata.is_some() {
@@ -356,6 +371,7 @@ async fn get_or_create_thread(ctx: &Context, msg: &Message, prompt: &str) -> any
     }
 
     let thread_name = shorten_thread_name(prompt);
+    let archive_duration = archive_duration_from_mins(auto_archive_duration);
 
     let thread = msg
         .channel_id
@@ -363,7 +379,7 @@ async fn get_or_create_thread(ctx: &Context, msg: &Message, prompt: &str) -> any
             &ctx.http,
             msg.id,
             serenity::builder::CreateThread::new(thread_name)
-                .auto_archive_duration(serenity::model::channel::AutoArchiveDuration::OneDay),
+                .auto_archive_duration(archive_duration),
         )
         .await?;
 
