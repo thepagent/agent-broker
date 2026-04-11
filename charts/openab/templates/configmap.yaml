@@ -14,6 +14,26 @@ data:
     {{- end }}
     {{- end }}
     allowed_channels = [{{ range $i, $ch := .Values.discord.allowedChannels }}{{ if $i }}, {{ end }}"{{ $ch }}"{{ end }}]
+    auto_archive_duration = {{ .Values.discord.autoArchiveDuration }}
+    require_mention = {{ .Values.discord.requireMention }}
+    ignore_other_mentions = {{ .Values.discord.ignoreOtherMentions }}
+    thread_name_mode = "{{ .Values.discord.threadNameMode }}"
+    {{- range $id, $cfg := .Values.discord.channels }}
+
+    [discord.channels."{{ $id }}"]
+    {{- if $cfg.autoArchiveDuration }}
+    auto_archive_duration = {{ $cfg.autoArchiveDuration }}
+    {{- end }}
+    {{- if ne (toString (default "" $cfg.requireMention)) "" }}
+    require_mention = {{ $cfg.requireMention }}
+    {{- end }}
+    {{- if ne (toString (default "" $cfg.ignoreOtherMentions)) "" }}
+    ignore_other_mentions = {{ $cfg.ignoreOtherMentions }}
+    {{- end }}
+    {{- if $cfg.threadNameMode }}
+    thread_name_mode = "{{ $cfg.threadNameMode }}"
+    {{- end }}
+    {{- end }}
 
     [agent]
     command = "{{ include "openab.agent.command" . | trim }}"

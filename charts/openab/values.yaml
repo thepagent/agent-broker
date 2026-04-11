@@ -21,6 +21,17 @@ discord:
   #   helm install ... --set-string discord.allowedChannels[0]="<CHANNEL_ID>"
   allowedChannels:
     - "YOUR_CHANNEL_ID"
+  autoArchiveDuration: 1440    # 60 (1h), 1440 (1d), 4320 (3d), 10080 (1w)
+  requireMention: true         # false = "direct mode" (any message triggers a thread)
+  ignoreOtherMentions: false   # true = skip messages mentioning other bots/users
+  threadNameMode: "truncate"   # "truncate" or "generated" (LLM generates short title)
+  # Per-channel overrides (optional):
+  # channels:
+  #   "CHANNEL_ID":
+  #     autoArchiveDuration: 60
+  #     requireMention: false
+  #     threadNameMode: "generated"
+  channels: {}
 
 agent:
   preset: ""              # kiro (default), codex, or claude — auto-configures image + command
