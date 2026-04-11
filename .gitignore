@@ -2,3 +2,15 @@
 config.toml
 *.swp
 .DS_Store
+
+# Local deployment / logs / test artifacts
+/logs/
+/logs-copilot/
+/config-copilot.toml
+/run-openab-*.bat
+/start-openab.bat
+/install-*.ps1
+/acp-*.txt
+/acp-out.txt
+/acp-err.txt
+/acp-stderr.txt
