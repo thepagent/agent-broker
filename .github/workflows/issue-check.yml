@@ -78,7 +78,7 @@ jobs:
 
             if (missing.length > 0) {
               const list = missing.map(f => `- [ ] **${f}**`).join('\n');
-              const msg = `${marker}\n⚠️ This issue is missing the following required information and will not be processed until completed:\n\n${list}\n\nPlease edit this issue to fill in the missing fields. Thank you!`;
+              const msg = `${marker}\n⚠️ This issue is missing the following required information and will not be processed until completed:\n\n${list}\n\nPlease edit this issue to fill in the missing fields. Thank you!\n\n> **Note:** Please do not modify the section headings (\`### ...\`) as they are used for automated validation.`;
 
               // Delete old, create new (so user gets notified)
               if (old) {
