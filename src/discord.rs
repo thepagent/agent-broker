@@ -372,17 +372,17 @@ fn sanitize_title(title: &str) -> String {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolState {
+enum ToolState {
     Running,
     Completed,
     Failed,
 }
 
 #[derive(Debug, Clone)]
-pub struct ToolEntry {
-    pub id: String,
-    pub title: String,
-    pub state: ToolState,
+struct ToolEntry {
+    id: String,
+    title: String,
+    state: ToolState,
 }
 
 impl ToolEntry {
