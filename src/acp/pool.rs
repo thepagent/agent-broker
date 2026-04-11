@@ -81,11 +81,12 @@ impl SessionPool {
     }
 
     pub async fn cleanup_idle(&self, ttl_secs: u64) {
-        let cutoff = Instant::now() - std::time::Duration::from_secs(ttl_secs);
+        let now = Instant::now();
+        let ttl = std::time::Duration::from_secs(ttl_secs);
         let mut conns = self.connections.write().await;
         let stale: Vec<String> = conns
             .iter()
-            .filter(|(_, c)| c.last_active < cutoff || !c.alive())
+            .filter(|(_, c)| now.saturating_duration_since(c.last_active) >= ttl || !c.alive())
             .map(|(k, _)| k.clone())
             .collect();
         for key in stale {
