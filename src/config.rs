@@ -38,7 +38,6 @@ pub struct ChannelConfig {
     pub thread_name_mode: Option<String>,
 }
 
-
 #[derive(Debug, Deserialize)]
 pub struct AgentConfig {
     pub command: String,
