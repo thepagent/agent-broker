@@ -19,11 +19,17 @@ pub struct Handler {
     pub allowed_channels: HashSet<u64>,
     pub allowed_users: HashSet<u64>,
     pub reactions_config: ReactionsConfig,
+    pub allow_bot_trigger: bool,
 }
 
 #[async_trait]
 impl EventHandler for Handler {
     async fn message(&self, ctx: Context, msg: Message) {
+        // Skip bot messages unless allow_bot_trigger is enabled
+        if msg.author.bot && !self.allow_bot_trigger {
+            return;
+        }
+
         let bot_id = ctx.cache.current_user().id;
 
         let channel_id = msg.channel_id.get();
