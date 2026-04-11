@@ -252,12 +252,28 @@ async fn handle_message(
             // Accept text messages or photos (with optional caption).
             let (prompt, image) = if let Some(photos) = msg.photo() {
                 let caption = msg.caption().unwrap_or("").to_string();
-                // Pick the largest photo size.
-                let photo = photos.iter().max_by_key(|p| p.width * p.height)
-                    .expect("photo array non-empty");
-                let file = bot.get_file(&photo.file.id).await?;
+                let photo = match photos.iter().max_by_key(|p| p.width * p.height) {
+                    Some(p) => p,
+                    None => return Ok(()),
+                };
+                let file = match bot.get_file(&photo.file.id).await {
+                    Ok(f) => f,
+                    Err(e) => {
+                        error!("get_file failed: {e}");
+                        let _ = bot.send_message(msg.chat.id, "⚠️ Failed to retrieve image.")
+                            .reply_parameters(ReplyParameters::new(msg.id))
+                            .await;
+                        return Ok(());
+                    }
+                };
                 let mut bytes: Vec<u8> = Vec::new();
-                bot.download_file(&file.path, &mut bytes).await?;
+                if let Err(e) = bot.download_file(&file.path, &mut bytes).await {
+                    error!("download_file failed: {e}");
+                    let _ = bot.send_message(msg.chat.id, "⚠️ Failed to download image.")
+                        .reply_parameters(ReplyParameters::new(msg.id))
+                        .await;
+                    return Ok(());
+                }
                 (caption, Some((bytes, "image/jpeg".to_string())))
             } else {
                 match msg.text() {

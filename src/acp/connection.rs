@@ -368,3 +368,49 @@ impl AcpConnection {
         !self._reader_handle.is_finished()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn image_block_is_valid_base64() {
+        use base64::Engine;
+        let bytes = vec![0xFFu8, 0xD8, 0xFF, 0xE0]; // JPEG magic bytes
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        let decoded = base64::engine::general_purpose::STANDARD.decode(&encoded).unwrap();
+        assert_eq!(decoded, bytes);
+    }
+
+    #[test]
+    fn prompt_parts_structure() {
+        use serde_json::json;
+        use base64::Engine;
+        let bytes = vec![1u8, 2, 3];
+        let mime = "image/jpeg".to_string();
+        let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+
+        let parts = vec![
+            json!({"type": "text", "text": "describe this"}),
+            json!({"type": "image", "mimeType": mime, "data": data}),
+        ];
+
+        assert_eq!(parts[0]["type"], "text");
+        assert_eq!(parts[1]["type"], "image");
+        assert_eq!(parts[1]["mimeType"], "image/jpeg");
+        // data field is non-empty base64
+        assert!(!parts[1]["data"].as_str().unwrap().is_empty());
+    }
+
+    #[test]
+    fn no_image_gives_single_text_part() {
+        use serde_json::json;
+        let image: Option<(Vec<u8>, String)> = None;
+        let mut parts = vec![json!({"type": "text", "text": "hello"})];
+        if let Some((bytes, mime)) = image {
+            use base64::Engine;
+            let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            parts.push(json!({"type": "image", "mimeType": mime, "data": data}));
+        }
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0]["type"], "text");
+    }
+}
