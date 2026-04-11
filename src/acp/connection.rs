@@ -360,6 +360,46 @@ impl AcpConnection {
         Ok(resp.result.unwrap_or(Value::Null))
     }
 
+    /// Query the bridge's `_meta/getRecentPermissions` extension for the
+    /// audit trail of recent tool permission requests in the current session.
+    pub async fn session_get_recent_permissions(&self) -> Result<Value> {
+        let session_id = self
+            .acp_session_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("no active session"))?
+            .clone();
+        let resp = self
+            .send_request(
+                "_meta/getRecentPermissions",
+                Some(json!({ "sessionId": session_id })),
+            )
+            .await?;
+        Ok(resp.result.unwrap_or(Value::Null))
+    }
+
+    /// Query the bridge's `_meta/compactSession` extension for real LLM-based
+    /// conversation history compaction (preserves summarized context).
+    pub async fn session_compact(&self) -> Result<Value> {
+        let session_id = self
+            .acp_session_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("no active session"))?
+            .clone();
+        let resp = self
+            .send_request(
+                "_meta/compactSession",
+                Some(json!({ "sessionId": session_id })),
+            )
+            .await?;
+        Ok(resp.result.unwrap_or(Value::Null))
+    }
+
+    /// Ping the bridge to verify it's alive and responsive.
+    pub async fn session_ping(&self) -> Result<Value> {
+        let resp = self.send_request("_meta/ping", Some(json!({}))).await?;
+        Ok(resp.result.unwrap_or(Value::Null))
+    }
+
     /// Send a prompt with content blocks (text and/or images) and return a receiver
     /// for streaming notifications. The final message on the channel will have id set
     /// (the prompt response).
