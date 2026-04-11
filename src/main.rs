@@ -90,12 +90,15 @@ async fn main() -> anyhow::Result<()> {
     // Spawn Copilot list cache refresh task. Polls copilot-rpc.js for
     // agents/skills/mcp/extensions lists every 5 minutes and stores the
     // name strings in `copilot_list_cache` for instant autocomplete lookup.
+    // Also refreshes the pool's cached_models snapshot used by /model autocomplete.
     let list_cache_refresh = copilot_list_cache.clone();
+    let list_cache_pool = pool.clone();
     let list_cache_handle = tokio::spawn(async move {
         // Initial delay so bridge/ACP session has time to warm up
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         loop {
             refresh_copilot_list_cache(&list_cache_refresh).await;
+            refresh_copilot_models(&list_cache_pool).await;
             tokio::time::sleep(std::time::Duration::from_secs(300)).await;
         }
     });
@@ -118,6 +121,52 @@ async fn main() -> anyhow::Result<()> {
     shutdown_pool.shutdown().await;
     info!("openab shut down");
     Ok(())
+}
+
+/// Background refresh for pool.cached_models used by /model autocomplete.
+/// Calls copilot-rpc.js `models` and feeds the result into the pool so that
+/// models added or removed upstream are reflected in `/model` suggestions
+/// without needing to restart OpenAB.
+async fn refresh_copilot_models(pool: &Arc<acp::SessionPool>) {
+    use tokio::process::Command as TokioCommand;
+    let script = r"C:\Users\Administrator\openab\scripts\copilot-rpc.js";
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        TokioCommand::new("node").arg(script).arg("models").output(),
+    )
+    .await;
+    let Ok(Ok(output)) = out else { return };
+    if !output.status.success() {
+        return;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let Some(json_line) = stdout.lines().rev().find(|l| l.trim().starts_with('{')) else {
+        return;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json_line.trim()) else {
+        return;
+    };
+    let Some(arr) = v.pointer("/data/models").and_then(|a| a.as_array()) else {
+        return;
+    };
+    let models: Vec<acp::connection::ModelInfo> = arr
+        .iter()
+        .filter_map(|m| {
+            let id = m.get("id").and_then(|v| v.as_str())?;
+            let name = m
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or(id)
+                .to_string();
+            Some(acp::connection::ModelInfo {
+                model_id: id.to_string(),
+                name,
+                description: String::new(),
+            })
+        })
+        .collect();
+    tracing::debug!(count = models.len(), "refreshed pool cached_models");
+    pool.set_cached_models(models).await;
 }
 
 /// Background refresh for the Copilot list cache. Calls copilot-rpc.js

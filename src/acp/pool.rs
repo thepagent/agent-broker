@@ -36,6 +36,15 @@ impl SessionPool {
         self.cached_current_model.read().await.clone()
     }
 
+    /// Replace the cached model list. Used by the background refresh task
+    /// in `main.rs` to keep `/model` autocomplete in sync with Copilot's
+    /// actual available models (handles models added/removed upstream).
+    pub async fn set_cached_models(&self, models: Vec<ModelInfo>) {
+        if !models.is_empty() {
+            *self.cached_models.write().await = models;
+        }
+    }
+
     pub async fn get_or_create(&self, thread_id: &str) -> Result<()> {
         // Check if alive connection exists
         {
