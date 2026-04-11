@@ -20,6 +20,30 @@ fn expand_env(val: &str) -> String {
 }
 use tokio::time::Instant;
 
+/// A content block for the ACP prompt — either text or image.
+/// Matches upstream openabdev/openab PR #158 interface for ACP compatibility.
+#[derive(Debug, Clone)]
+pub enum ContentBlock {
+    Text { text: String },
+    Image { media_type: String, data: String },
+}
+
+impl ContentBlock {
+    pub fn to_json(&self) -> Value {
+        match self {
+            ContentBlock::Text { text } => json!({
+                "type": "text",
+                "text": text
+            }),
+            ContentBlock::Image { media_type, data } => json!({
+                "type": "image",
+                "data": data,
+                "mimeType": media_type
+            }),
+        }
+    }
+}
+
 pub struct AcpConnection {
     _proc: Child,
     stdin: Arc<Mutex<ChildStdin>>,
@@ -237,11 +261,11 @@ impl AcpConnection {
         Ok(())
     }
 
-    pub async fn session_load(&mut self, cwd: &str, session_id: &str) -> Result<String> {
+    pub async fn session_load(&mut self, cwd: &str, session_id: &str, mcp_servers: &serde_json::Value) -> Result<String> {
         let resp = self
             .send_request(
                 "session/load",
-                Some(json!({"sessionId": session_id, "cwd": cwd, "mcpServers": []})),
+                Some(json!({"sessionId": session_id, "cwd": cwd, "mcpServers": mcp_servers})),
             )
             .await?;
         // session/load reuses the same sessionId
@@ -255,11 +279,11 @@ impl AcpConnection {
         Ok(sid)
     }
 
-    pub async fn session_new(&mut self, cwd: &str) -> Result<(String, crate::acp::pool::SlashCommands)> {
+    pub async fn session_new(&mut self, cwd: &str, mcp_servers: &serde_json::Value) -> Result<(String, crate::acp::pool::SlashCommands)> {
         let resp = self
             .send_request(
                 "session/new",
-                Some(json!({"cwd": cwd, "mcpServers": []})),
+                Some(json!({"cwd": cwd, "mcpServers": mcp_servers})),
             )
             .await?;
 

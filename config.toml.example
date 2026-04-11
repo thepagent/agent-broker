@@ -32,6 +32,16 @@ command = "kiro-cli"
 args = ["acp", "--trust-all-tools"]
 working_dir = "/home/agent"
 
+# MCP servers to expose to the agent on each session.
+# If omitted, the agent uses its own default MCP config (e.g. ~/.kiro/mcp.json).
+# Defining servers here overrides that — list every server you want available.
+#
+# Example: markitdown for document/file reading
+# [[agent.mcp_servers]]
+# name = "markitdown"
+# command = "python3"
+# args = ["/path/to/markitdown-agent/server.py"]
+
 # [agent]
 # command = "claude"
 # args = ["--acp"]

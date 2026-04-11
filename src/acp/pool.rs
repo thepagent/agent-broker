@@ -70,6 +70,20 @@ impl SessionPool {
             .unwrap_or_default()
     }
 
+    /// Build the mcpServers JSON array from config.
+    /// Empty config → empty array (kiro falls back to its own ~/.kiro/mcp.json).
+    fn mcp_servers_json(&self) -> serde_json::Value {
+        let servers: Vec<serde_json::Value> = self.config.mcp_servers.iter().map(|s| {
+            serde_json::json!({
+                "name": s.name,
+                "command": s.command,
+                "args": s.args,
+                "env": s.env,
+            })
+        }).collect();
+        serde_json::Value::Array(servers)
+    }
+
     /// Store chat context for a session so cleanup can notify the user.
     pub async fn set_pending_context(&self, session_key: &str, ctx: String) {
         let mut conns = self.connections.write().await;
@@ -152,7 +166,7 @@ impl SessionPool {
 
         let resumed = if let Some(ref sid) = prev_sid {
             if conn.supports_load_session {
-                match conn.session_load(&session_dir, sid).await {
+                match conn.session_load(&session_dir, sid, &self.mcp_servers_json()).await {
                     Ok(_) => {
                         info!(thread_id, session_id = %sid, "true resume via session/load");
                         self.prev_session_ids.write().await.remove(thread_id);
@@ -171,7 +185,7 @@ impl SessionPool {
         };
 
         if !resumed {
-            let (_, slash_cmds) = conn.session_new(&session_dir).await?;
+            let (_, slash_cmds) = conn.session_new(&session_dir, &self.mcp_servers_json()).await?;
             if !slash_cmds.is_empty() {
                 self.slash_commands.write().await.insert(thread_id.to_string(), slash_cmds);
             }

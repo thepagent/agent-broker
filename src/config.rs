@@ -52,6 +52,21 @@ pub struct AgentConfig {
     pub working_dir: String,
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// MCP servers to pass to kiro-cli on session/new and session/load.
+    /// Each entry: { command, args, env }
+    /// If empty, kiro uses its own ~/.kiro/mcp.json defaults.
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct McpServerConfig {
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
