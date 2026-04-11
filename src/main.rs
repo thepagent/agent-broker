@@ -43,12 +43,15 @@ async fn main() -> anyhow::Result<()> {
     let allowed_users = parse_id_set(&cfg.discord.allowed_users, "allowed_users")?;
     info!(channels = allowed_channels.len(), users = allowed_users.len(), "parsed allowlists");
 
+    let copilot_list_cache = Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
+
     let handler = discord::Handler {
         pool: pool.clone(),
         allowed_channels,
         allowed_users,
         reactions_config: cfg.reactions,
         usage_config: cfg.usage,
+        copilot_list_cache: copilot_list_cache.clone(),
     };
 
     let intents = GatewayIntents::GUILD_MESSAGES
@@ -84,6 +87,19 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Spawn Copilot list cache refresh task. Polls copilot-rpc.js for
+    // agents/skills/mcp/extensions lists every 5 minutes and stores the
+    // name strings in `copilot_list_cache` for instant autocomplete lookup.
+    let list_cache_refresh = copilot_list_cache.clone();
+    let list_cache_handle = tokio::spawn(async move {
+        // Initial delay so bridge/ACP session has time to warm up
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        loop {
+            refresh_copilot_list_cache(&list_cache_refresh).await;
+            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+        }
+    });
+
     // Run bot until SIGINT/SIGTERM
     let shard_manager = client.shard_manager.clone();
     let shutdown_pool = pool.clone();
@@ -98,9 +114,60 @@ async fn main() -> anyhow::Result<()> {
 
     // Cleanup
     cleanup_handle.abort();
+    list_cache_handle.abort();
     shutdown_pool.shutdown().await;
     info!("openab shut down");
     Ok(())
+}
+
+/// Background refresh for the Copilot list cache. Calls copilot-rpc.js
+/// for each list RPC and extracts item names. Silently ignores errors
+/// (the /xxx slash commands fall back to "no matches" if cache is empty).
+async fn refresh_copilot_list_cache(
+    cache: &Arc<tokio::sync::RwLock<std::collections::HashMap<String, Vec<String>>>>,
+) {
+    use tokio::process::Command as TokioCommand;
+
+    let script = r"C:\Users\Administrator\openab\scripts\copilot-rpc.js";
+    let lists: &[(&str, &str, &str)] = &[
+        // (rpc_subcommand, json_array_key, item_name_field)
+        ("agents",     "agents",     "name"),
+        ("skills",     "skills",     "name"),
+        ("mcp-list",   "servers",    "name"),
+        ("extensions", "extensions", "name"),
+    ];
+
+    for (rpc, array_key, name_key) in lists {
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            TokioCommand::new("node").arg(script).arg(rpc).output(),
+        )
+        .await;
+
+        let Ok(Ok(output)) = out else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let Some(json_line) = stdout.lines().rev().find(|l| l.trim().starts_with('{')) else {
+            continue;
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(json_line.trim()) else {
+            continue;
+        };
+        let Some(arr) = v.pointer(&format!("/data/{array_key}")).and_then(|a| a.as_array())
+        else {
+            continue;
+        };
+        let names: Vec<String> = arr
+            .iter()
+            .filter_map(|i| i.get(name_key).and_then(|n| n.as_str()).map(String::from))
+            .collect();
+        tracing::debug!(rpc = %rpc, count = names.len(), "refreshed copilot list cache");
+        cache.write().await.insert((*rpc).to_string(), names);
+    }
 }
 
 fn parse_id_set(raw: &[String], label: &str) -> anyhow::Result<HashSet<u64>> {

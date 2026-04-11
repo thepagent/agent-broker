@@ -104,6 +104,11 @@ pub struct Handler {
     pub allowed_users: HashSet<u64>,
     pub reactions_config: ReactionsConfig,
     pub usage_config: Option<crate::config::UsageConfig>,
+    /// Cache of Copilot SDK list RPCs keyed by rpc subcommand name
+    /// (e.g. "agents", "skills", "mcp-list", "extensions"). Values are
+    /// the item `name` strings for autocomplete. Refreshed every 5 min
+    /// by a background task spawned at startup.
+    pub copilot_list_cache: Arc<tokio::sync::RwLock<std::collections::HashMap<String, Vec<String>>>>,
 }
 
 #[async_trait]
@@ -396,6 +401,12 @@ impl EventHandler for Handler {
                 .description("Show current thread's context window token usage"),
         );
 
+        // /permissions — recent tool permission audit log (bridge-only)
+        commands.push(
+            CreateCommand::new("permissions")
+                .description("Show recent tool permission requests in this thread"),
+        );
+
         // Only register /usage if the user has configured it.
         if self.usage_config.as_ref().is_some_and(|u| u.enabled && !u.runners.is_empty()) {
             commands.push(
@@ -434,6 +445,9 @@ impl EventHandler for Handler {
             }
             Interaction::Command(cmd) if cmd.data.name == "tokens" => {
                 self.handle_tokens_command(&ctx, &cmd).await;
+            }
+            Interaction::Command(cmd) if cmd.data.name == "permissions" => {
+                self.handle_permissions_command(&ctx, &cmd).await;
             }
             Interaction::Command(cmd) if copilot_interactive_spec(&cmd.data.name).is_some() => {
                 self.handle_copilot_interactive(&ctx, &cmd).await;
@@ -950,6 +964,64 @@ impl Handler {
 
         let cmd_name = cmd.data.name.clone();
         let thread_key = cmd.channel_id.get().to_string();
+
+        // For /compact: try the bridge's real LLM compaction first (preserves
+        // summarized context). Fall back to drop-session if the bridge doesn't
+        // support _meta/compactSession.
+        if cmd_name == "compact" {
+            if let Err(e) = cmd.defer(&ctx.http).await {
+                error!(error = %e, "failed to defer /compact");
+                return;
+            }
+            // Ensure a session exists before trying to compact
+            if let Err(e) = self.pool.get_or_create(&thread_key).await {
+                let _ = cmd
+                    .edit_response(
+                        &ctx.http,
+                        EditInteractionResponse::new()
+                            .content(format!("⚠️ Failed to start agent: {e}")),
+                    )
+                    .await;
+                return;
+            }
+
+            let compact_res = self
+                .pool
+                .with_connection(&thread_key, |conn| {
+                    Box::pin(async move { conn.session_compact().await })
+                })
+                .await;
+
+            let embed = match compact_res {
+                Ok(v) => {
+                    let removed = v
+                        .get("tokens_removed")
+                        .and_then(|n| n.as_u64())
+                        .map(|n| format!("{n} tokens freed"))
+                        .unwrap_or_else(|| "compacted".to_string());
+                    CreateEmbed::new()
+                        .title("✅ /compact")
+                        .description(format!("LLM-compacted conversation history — **{removed}**\n_Context preserved as summary._"))
+                        .color(0x2ECC71)
+                }
+                Err(e) => {
+                    // Fall back to drop-session
+                    let dropped = self.pool.drop_session(&thread_key).await;
+                    let note = if dropped { "Session dropped (history cleared)." } else { "No active session." };
+                    CreateEmbed::new()
+                        .title("ℹ️ /compact (fallback)")
+                        .description(format!("Bridge compaction unavailable: {e}\n\n{note}"))
+                        .color(0x5865F2)
+                }
+            };
+
+            let _ = cmd
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+
+        // /new-session: hard reset, drop the pool entry.
         let dropped = self.pool.drop_session(&thread_key).await;
 
         let (title, body, color) = if dropped {
@@ -1025,6 +1097,50 @@ impl Handler {
             .await;
     }
 
+    /// Handle /permissions — show recent tool permission audit log.
+    async fn handle_permissions_command(&self, ctx: &Context, cmd: &CommandInteraction) {
+        if !self.copilot_guard_ok(ctx, cmd).await {
+            return;
+        }
+        if let Err(e) = cmd.defer(&ctx.http).await {
+            error!(error = %e, "failed to defer /permissions");
+            return;
+        }
+
+        let thread_key = cmd.channel_id.get().to_string();
+        if let Err(e) = self.pool.get_or_create(&thread_key).await {
+            let _ = cmd
+                .edit_response(
+                    &ctx.http,
+                    EditInteractionResponse::new()
+                        .content(format!("⚠️ Failed to start agent: {e}")),
+                )
+                .await;
+            return;
+        }
+
+        let result = self
+            .pool
+            .with_connection(&thread_key, |conn| {
+                Box::pin(async move { conn.session_get_recent_permissions().await })
+            })
+            .await;
+
+        let embed = match result {
+            Ok(v) => render_permissions(&v),
+            Err(e) => CreateEmbed::new()
+                .title("⚠️ /permissions")
+                .description(format!(
+                    "Backend does not support `_meta/getRecentPermissions`.\n```{e}```"
+                ))
+                .color(0xED4245),
+        };
+
+        let _ = cmd
+            .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+            .await;
+    }
+
     /// Handle interactive commands: /agent, /skill-on, /skill-off, /mcp-on, /mcp-off, /ext-on, /ext-off.
     async fn handle_copilot_interactive(&self, ctx: &Context, cmd: &CommandInteraction) {
         if !self.copilot_guard_ok(ctx, cmd).await {
@@ -1090,47 +1206,25 @@ impl Handler {
             .unwrap_or("")
             .to_lowercase();
 
-        // Call the Node helper to fetch the list. Autocomplete has a 3-second
-        // budget from Discord, and Copilot SDK cold-start can take ~5s — so
-        // we use a 2.8s hard timeout and return empty on miss. The user's next
-        // keystroke will retry (likely warming the Node module cache).
-        let script = r"C:\Users\Administrator\openab\scripts\copilot-rpc.js";
-        let output = tokio::time::timeout(
-            std::time::Duration::from_millis(2800),
-            tokio::process::Command::new("node")
-                .arg(script)
-                .arg(list_rpc)
-                .output(),
-        )
-        .await;
-
+        // Read from the background-refreshed list cache — instant, no Node
+        // subprocess spawn. The cache is populated by `refresh_copilot_list_cache`
+        // in main.rs every 5 minutes.
+        let _ = data_key;
+        let _ = name_key;
         let mut choices: Vec<AutocompleteChoice> = Vec::new();
-        if let Ok(Ok(out)) = output {
-            if out.status.success() {
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                let json_line = stdout
-                    .lines()
-                    .rev()
-                    .find(|l| l.trim().starts_with('{'))
-                    .unwrap_or("")
-                    .trim();
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_line) {
-                    if let Some(arr) = v.pointer(&format!("/data/{data_key}")).and_then(|a| a.as_array()) {
-                        for item in arr {
-                            if let Some(name) = item.get(name_key).and_then(|n| n.as_str()) {
-                                if partial.is_empty() || name.to_lowercase().contains(&partial) {
-                                    let label = name.chars().take(100).collect::<String>();
-                                    choices.push(AutocompleteChoice::new(label.clone(), label));
-                                    if choices.len() >= 25 {
-                                        break;
-                                    }
-                                }
-                            }
-                        }
+        let cache = self.copilot_list_cache.read().await;
+        if let Some(names) = cache.get(list_rpc) {
+            for name in names {
+                if partial.is_empty() || name.to_lowercase().contains(&partial) {
+                    let label = name.chars().take(100).collect::<String>();
+                    choices.push(AutocompleteChoice::new(label.clone(), label));
+                    if choices.len() >= 25 {
+                        break;
                     }
                 }
             }
         }
+        drop(cache);
 
         let response = CreateInteractionResponse::Autocomplete(
             CreateAutocompleteResponse::new().set_choices(choices),
@@ -1299,9 +1393,57 @@ fn build_copilot_embed(display_name: &str, rpc_sub: &str, json_line: &str) -> Cr
 }
 
 /// Render session token usage from the bridge's `_meta/getUsage` response.
+/// Render the bridge's `_meta/getRecentPermissions` response as an embed.
+fn render_permissions(data: &serde_json::Value) -> CreateEmbed {
+    let perms = data.get("permissions").and_then(|v| v.as_array());
+    let count = data.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+
+    let mut embed = CreateEmbed::new()
+        .title(format!("🔐 Recent Tool Permissions ({count})"))
+        .color(0x24292F);
+
+    let Some(arr) = perms else {
+        return embed.description("_(no audit data)_");
+    };
+
+    if arr.is_empty() {
+        return embed.description("_(no permissions requested yet — send a message that triggers a tool)_");
+    }
+
+    // Show the most recent 10 entries (bridge stores 50, embed space is limited)
+    let lines: Vec<String> = arr
+        .iter()
+        .rev()
+        .take(10)
+        .enumerate()
+        .map(|(i, p)| {
+            let kind = p.get("kind").and_then(|v| v.as_str()).unwrap_or("?");
+            let cmd = p.get("command").and_then(|v| v.as_str()).unwrap_or("");
+            let intention = p.get("intention").and_then(|v| v.as_str()).unwrap_or("");
+            let ts = p.get("ts").and_then(|v| v.as_str()).unwrap_or("");
+            let cmd_short: String = cmd.chars().take(120).collect();
+            let intention_short: String = intention.chars().take(80).collect();
+            format!(
+                "`{:>2}.` [{kind}] `{}`{}\n    {}",
+                i + 1,
+                cmd_short,
+                if cmd.len() > 120 { "…" } else { "" },
+                if intention.is_empty() {
+                    format!("_{ts}_")
+                } else {
+                    format!("{intention_short} · _{ts}_")
+                }
+            )
+        })
+        .collect();
+
+    embed.description(lines.join("\n\n"))
+}
+
 fn render_session_tokens(data: &serde_json::Value) -> CreateEmbed {
     let session_usage = data.get("session_usage");
     let account_quota = data.get("account_quota");
+    let cost_totals = data.get("cost_totals");
 
     let mut embed = CreateEmbed::new()
         .title("🧮 Session Token Usage")
@@ -1346,6 +1488,25 @@ fn render_session_tokens(data: &serde_json::Value) -> CreateEmbed {
             "_(no usage captured yet — send a message first)_",
             false,
         );
+    }
+
+    // Cost totals (if bridge has been tracking assistant.usage events)
+    if let Some(ct) = cost_totals.filter(|v| !v.is_null()) {
+        let turns = ct.get("turns").and_then(|v| v.as_u64()).unwrap_or(0);
+        let in_t = ct.get("inputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let out_t = ct.get("outputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let cache_r = ct.get("cacheReadTokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let cost = ct.get("cost").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let model = ct.get("lastModel").and_then(|v| v.as_str()).unwrap_or("?");
+        let body = format!(
+            "**{turns}** turns · model: `{model}`\n\
+             Input: {:.1}k · Output: {:.1}k · Cached: {:.1}k\n\
+             💰 **{cost:.2}** premium requests",
+            in_t as f64 / 1000.0,
+            out_t as f64 / 1000.0,
+            cache_r as f64 / 1000.0,
+        );
+        embed = embed.field("💸 This session", body, false);
     }
 
     // Account-level quota (if included)
