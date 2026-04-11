@@ -36,8 +36,10 @@ In short:
 
 1. Go to https://discord.com/developers/applications and create an application
 2. Bot tab → enable **Message Content Intent**
-3. OAuth2 → URL Generator → scope: `bot` → permissions: Send Messages, Send Messages in Threads, Create Public Threads, Read Message History, Add Reactions, Manage Messages
+3. OAuth2 → URL Generator → scopes: **`bot` + `applications.commands`** → permissions: Send Messages, Send Messages in Threads, Create Public Threads, Read Message History, Add Reactions, Manage Messages
 4. Invite the bot to your server using the generated URL
+
+> **Note:** `applications.commands` scope is required for the `/model` slash command. If you previously invited the bot with only `bot` scope, re-invite it using the new URL — the bot account stays the same, no data is lost.
 
 ### 2. Configure
 
@@ -81,6 +83,17 @@ In your Discord channel:
 ```
 
 The bot creates a thread. After that, just type in the thread — no @mention needed.
+
+### Slash Commands
+
+| Command | Description |
+|---------|-------------|
+| `/model` | Show the current model and list all available models |
+| `/model <model>` | Switch to a specific model. Supports aliases (`auto`, `opus`, `sonnet`, `haiku`) and full model ids — Discord's autocomplete shows the full list as you type. |
+
+The model picker uses Discord's native autocomplete: type `/m` and Discord will suggest `/model`; tab into the field and use ↑↓ to pick from the live list of available models reported by your agent backend.
+
+> Slash commands require the `applications.commands` OAuth scope (see [Create a Discord Bot](#1-create-a-discord-bot) above). If `/model` does not appear in your Discord client, re-invite the bot with the correct scope.
 
 ## Pluggable Agent Backends
 

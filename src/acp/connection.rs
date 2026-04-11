@@ -43,6 +43,13 @@ impl ContentBlock {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ModelInfo {
+    pub model_id: String,
+    pub name: String,
+    pub description: String,
+}
+
 pub struct AcpConnection {
     _proc: Child,
     stdin: Arc<Mutex<ChildStdin>>,
@@ -52,6 +59,8 @@ pub struct AcpConnection {
     pub acp_session_id: Option<String>,
     pub last_active: Instant,
     pub session_reset: bool,
+    pub current_model: String,
+    pub available_models: Vec<ModelInfo>,
     _reader_handle: JoinHandle<()>,
 }
 
@@ -186,6 +195,8 @@ impl AcpConnection {
             acp_session_id: None,
             last_active: Instant::now(),
             session_reset: false,
+            current_model: "auto".to_string(),
+            available_models: Vec::new(),
             _reader_handle: reader_handle,
         })
     }
@@ -262,7 +273,99 @@ impl AcpConnection {
 
         info!(session_id = %session_id, "session created");
         self.acp_session_id = Some(session_id.clone());
+
+        if let Some(models) = resp.result.as_ref().and_then(|r| r.get("models")) {
+            if let Some(current) = models.get("currentModelId").and_then(|v| v.as_str()) {
+                self.current_model = current.to_string();
+            }
+            if let Some(arr) = models.get("availableModels").and_then(|v| v.as_array()) {
+                self.available_models = arr
+                    .iter()
+                    .filter_map(|m| {
+                        let model_id = m.get("modelId")?.as_str()?.to_string();
+                        let name = m
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(&model_id)
+                            .to_string();
+                        let description = m
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if description.contains("[Deprecated]")
+                            || description.contains("[Internal]")
+                        {
+                            return None;
+                        }
+                        Some(ModelInfo {
+                            model_id,
+                            name,
+                            description,
+                        })
+                    })
+                    .collect();
+                info!(
+                    count = self.available_models.len(),
+                    current = %self.current_model,
+                    "parsed available models"
+                );
+            }
+        }
+
         Ok(session_id)
+    }
+
+    pub async fn session_set_model(&mut self, model_id: &str) -> Result<()> {
+        let session_id = self
+            .acp_session_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("no active session"))?
+            .clone();
+        self.send_request(
+            "session/set_model",
+            Some(json!({
+                "sessionId": session_id,
+                "modelId": model_id,
+            })),
+        )
+        .await?;
+        self.current_model = model_id.to_string();
+        Ok(())
+    }
+
+    pub fn resolve_model_alias(&self, input: &str) -> Option<String> {
+        let lower = input.to_lowercase();
+        if self.available_models.iter().any(|m| m.model_id == lower) {
+            return Some(lower);
+        }
+        // Alias table: user-friendly short names → backend modelIds.
+        // Covers both Kiro (claude-*) and Copilot (gpt-*) backends.
+        let candidate = match lower.as_str() {
+            "auto" => "auto",
+            "opus" => "claude-opus-4.6",
+            "sonnet" => "claude-sonnet-4.6",
+            "haiku" => {
+                // Prefer Copilot's claude-haiku-4.5 if present, else Kiro's
+                if self.available_models.iter().any(|m| m.model_id == "claude-haiku-4.5") {
+                    "claude-haiku-4.5"
+                } else {
+                    "claude-haiku-4.5"
+                }
+            }
+            "codex" => "gpt-5.3-codex",
+            "gpt5" | "gpt-5" => "gpt-5.2",
+            "mini" => "gpt-5.4-mini",
+            "4.1" | "gpt4" => "gpt-4.1",
+            other => other,
+        };
+        if candidate == "auto"
+            || self.available_models.iter().any(|m| m.model_id == candidate)
+        {
+            Some(candidate.to_string())
+        } else {
+            None
+        }
     }
 
     /// Send a prompt with content blocks (text and/or images) and return a receiver

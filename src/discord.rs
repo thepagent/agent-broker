@@ -7,6 +7,13 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use std::sync::LazyLock;
 use serenity::async_trait;
+use serenity::builder::{
+    AutocompleteChoice, CreateAutocompleteResponse, CreateCommand, CreateCommandOption,
+    CreateInteractionResponse, CreateInteractionResponseMessage, EditInteractionResponse,
+};
+use serenity::model::application::{
+    CommandDataOptionValue, CommandInteraction, CommandOptionType, Interaction,
+};
 use serenity::model::channel::{Message, ReactionType};
 use serenity::model::gateway::Ready;
 use serenity::model::id::{ChannelId, MessageId};
@@ -14,7 +21,7 @@ use serenity::prelude::*;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::watch;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// Reusable HTTP client for downloading Discord attachments.
 /// Built once with a 30s timeout and rustls TLS (no native-tls deps).
@@ -24,6 +31,19 @@ static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
         .build()
         .expect("static HTTP client must build")
 });
+
+/// Alias shortcuts shown in autocomplete and resolved by AcpConnection::resolve_model_alias.
+/// Covers both Kiro (claude-*) and Copilot (gpt-*) backends.
+const MODEL_ALIASES: &[(&str, &str)] = &[
+    ("auto", "auto"),
+    ("opus", "claude-opus-4.6"),
+    ("sonnet", "claude-sonnet-4.6"),
+    ("haiku", "claude-haiku-4.5"),
+    ("codex", "gpt-5.3-codex"),
+    ("gpt-5", "gpt-5.2"),
+    ("mini", "gpt-5.4-mini"),
+    ("gpt-4.1", "gpt-4.1"),
+];
 
 pub struct Handler {
     pub pool: Arc<SessionPool>,
@@ -228,8 +248,233 @@ impl EventHandler for Handler {
         }
     }
 
-    async fn ready(&self, _ctx: Context, ready: Ready) {
-        info!(user = %ready.user.name, "discord bot connected");
+    async fn ready(&self, ctx: Context, ready: Ready) {
+        info!(user = %ready.user.name, guilds = ready.guilds.len(), "discord bot connected");
+
+        // Register /model as a guild command in every guild we're in.
+        // Guild commands appear instantly (vs. global commands which can take
+        // up to 1 hour to propagate).
+        let cmd = CreateCommand::new("model")
+            .description("Switch or query the AI model used by this bot")
+            .add_option(
+                CreateCommandOption::new(
+                    CommandOptionType::String,
+                    "model",
+                    "Model id or alias (auto / opus / sonnet / haiku) — leave empty to view current",
+                )
+                .required(false)
+                .set_autocomplete(true),
+            );
+
+        for guild in &ready.guilds {
+            match guild.id.set_commands(&ctx.http, vec![cmd.clone()]).await {
+                Ok(cmds) => info!(guild_id = %guild.id, count = cmds.len(), "registered slash commands"),
+                Err(e) => error!(guild_id = %guild.id, error = %e, "failed to register slash commands"),
+            }
+        }
+    }
+
+    async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
+        match interaction {
+            Interaction::Command(cmd) if cmd.data.name == "model" => {
+                self.handle_model_command(&ctx, &cmd).await;
+            }
+            Interaction::Autocomplete(ac) if ac.data.name == "model" => {
+                self.handle_model_autocomplete(&ctx, &ac).await;
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Handler {
+    /// Resolve `partial` (the user's typing in the autocomplete field) to up
+    /// to 25 suggestions, drawing from cached aliases + cached model ids.
+    async fn handle_model_autocomplete(&self, ctx: &Context, ac: &CommandInteraction) {
+        let partial = ac
+            .data
+            .options
+            .first()
+            .and_then(|o| match &o.value {
+                CommandDataOptionValue::Autocomplete { value, .. } => Some(value.as_str()),
+                CommandDataOptionValue::String(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .unwrap_or("")
+            .to_lowercase();
+
+        let models = self.pool.cached_models().await;
+        let current = self.pool.cached_current_model().await;
+
+        let mut choices: Vec<AutocompleteChoice> = Vec::new();
+
+        // Aliases first — cheap shortcuts most users will reach for
+        for (alias, target) in MODEL_ALIASES {
+            if !partial.is_empty() && !alias.starts_with(&partial) {
+                continue;
+            }
+            // Only surface an alias if its target is actually available
+            // (or if it's "auto", which is always valid).
+            if *target != "auto" && !models.iter().any(|m| m.model_id == *target) {
+                continue;
+            }
+            let label = if *target == "auto" {
+                "auto (smart routing)".to_string()
+            } else {
+                format!("{alias} → {target}")
+            };
+            choices.push(AutocompleteChoice::new(label, (*alias).to_string()));
+            if choices.len() >= 25 {
+                break;
+            }
+        }
+
+        // Then real model ids
+        for m in &models {
+            if choices.len() >= 25 {
+                break;
+            }
+            if !partial.is_empty() && !m.model_id.to_lowercase().contains(&partial) {
+                continue;
+            }
+            let marker = if m.model_id == current { " (current)" } else { "" };
+            let label = format!("{}{marker}", m.model_id);
+            choices.push(AutocompleteChoice::new(label, m.model_id.clone()));
+        }
+
+        let response = CreateInteractionResponse::Autocomplete(
+            CreateAutocompleteResponse::new().set_choices(choices),
+        );
+        if let Err(e) = ac.create_response(&ctx.http, response).await {
+            warn!(error = %e, "failed to send autocomplete response");
+        }
+    }
+
+    /// Handle the actual /model command submission.
+    async fn handle_model_command(&self, ctx: &Context, cmd: &CommandInteraction) {
+        // Allowlist: channel
+        let channel_id = cmd.channel_id.get();
+        let in_allowed_channel =
+            self.allowed_channels.is_empty() || self.allowed_channels.contains(&channel_id);
+
+        let in_thread = if !in_allowed_channel {
+            match cmd.channel_id.to_channel(&ctx.http).await {
+                Ok(serenity::model::channel::Channel::Guild(gc)) => gc
+                    .parent_id
+                    .map_or(false, |pid| self.allowed_channels.contains(&pid.get())),
+                _ => false,
+            }
+        } else {
+            false
+        };
+
+        if !in_allowed_channel && !in_thread {
+            let _ = cmd
+                .create_response(
+                    &ctx.http,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new()
+                            .content("⚠️ This channel is not allowlisted.")
+                            .ephemeral(true),
+                    ),
+                )
+                .await;
+            return;
+        }
+
+        // Allowlist: user
+        if !self.allowed_users.is_empty() && !self.allowed_users.contains(&cmd.user.id.get()) {
+            let _ = cmd
+                .create_response(
+                    &ctx.http,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new()
+                            .content("🚫 You are not authorized to use this command.")
+                            .ephemeral(true),
+                    ),
+                )
+                .await;
+            return;
+        }
+
+        // Extract the model option (None → list current)
+        let arg = cmd.data.options.first().and_then(|o| match &o.value {
+            CommandDataOptionValue::String(s) => {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            }
+            _ => None,
+        });
+
+        // Defer the response — session spawn can take up to ~10s on cold pool
+        if let Err(e) = cmd.defer(&ctx.http).await {
+            error!(error = %e, "failed to defer /model response");
+            return;
+        }
+
+        let thread_key = cmd.channel_id.get().to_string();
+        if let Err(e) = self.pool.get_or_create(&thread_key).await {
+            let _ = cmd
+                .edit_response(
+                    &ctx.http,
+                    EditInteractionResponse::new()
+                        .content(format!("⚠️ Failed to start agent: {e}")),
+                )
+                .await;
+            return;
+        }
+
+        let reply = self
+            .pool
+            .with_connection(&thread_key, |conn| {
+                let arg = arg.clone();
+                Box::pin(async move {
+                    match arg {
+                        None => {
+                            if conn.available_models.is_empty() {
+                                return Ok::<String, anyhow::Error>(
+                                    "_(no models reported by agent — backend may not support model switching)_"
+                                        .to_string(),
+                                );
+                            }
+                            let mut out = String::from("**Available models:**\n");
+                            for m in &conn.available_models {
+                                let marker = if m.model_id == conn.current_model {
+                                    "**▶**"
+                                } else {
+                                    "•"
+                                };
+                                out.push_str(&format!(
+                                    "{} `{}` — {}\n",
+                                    marker, m.model_id, m.name
+                                ));
+                            }
+                            out.push_str(&format!("\nCurrent: `{}`", conn.current_model));
+                            Ok(out)
+                        }
+                        Some(input) => match conn.resolve_model_alias(&input) {
+                            Some(model_id) => match conn.session_set_model(&model_id).await {
+                                Ok(()) => Ok(format!("✅ Switched to `{model_id}`")),
+                                Err(e) => Ok(format!("⚠️ Failed to set model: {e}")),
+                            },
+                            None => Ok(format!("❌ Unknown model: `{input}`")),
+                        },
+                    }
+                })
+            })
+            .await;
+
+        let text = match reply {
+            Ok(t) => t,
+            Err(e) => format!("⚠️ {e}"),
+        };
+        let _ = cmd
+            .edit_response(&ctx.http, EditInteractionResponse::new().content(text))
+            .await;
     }
 }
 

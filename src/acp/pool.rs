@@ -1,4 +1,4 @@
-use crate::acp::connection::AcpConnection;
+use crate::acp::connection::{AcpConnection, ModelInfo};
 use crate::config::AgentConfig;
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
@@ -10,6 +10,11 @@ pub struct SessionPool {
     connections: RwLock<HashMap<String, AcpConnection>>,
     config: AgentConfig,
     max_sessions: usize,
+    /// Snapshot of available models from the most recent session creation.
+    /// Populated on first session_new() so slash command autocomplete can serve
+    /// suggestions without spawning a fresh agent (which takes ~10s).
+    cached_models: RwLock<Vec<ModelInfo>>,
+    cached_current_model: RwLock<String>,
 }
 
 impl SessionPool {
@@ -18,7 +23,17 @@ impl SessionPool {
             connections: RwLock::new(HashMap::new()),
             config,
             max_sessions,
+            cached_models: RwLock::new(Vec::new()),
+            cached_current_model: RwLock::new("auto".to_string()),
         }
+    }
+
+    pub async fn cached_models(&self) -> Vec<ModelInfo> {
+        self.cached_models.read().await.clone()
+    }
+
+    pub async fn cached_current_model(&self) -> String {
+        self.cached_current_model.read().await.clone()
     }
 
     pub async fn get_or_create(&self, thread_id: &str) -> Result<()> {
@@ -58,6 +73,12 @@ impl SessionPool {
 
         conn.initialize().await?;
         conn.session_new(&self.config.working_dir).await?;
+
+        // Refresh model cache snapshot for slash command autocomplete.
+        if !conn.available_models.is_empty() {
+            *self.cached_models.write().await = conn.available_models.clone();
+        }
+        *self.cached_current_model.write().await = conn.current_model.clone();
 
         let is_rebuild = conns.contains_key(thread_id);
         if is_rebuild {
