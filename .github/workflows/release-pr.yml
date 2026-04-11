@@ -42,7 +42,7 @@ jobs:
           if [ -n "${{ inputs.version }}" ]; then
             VERSION="${{ inputs.version }}"
           else
-            CURRENT=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+            CURRENT=$(grep '^version:' charts/openab/Chart.yaml | awk '{print $2}')
             BASE="${CURRENT%%-*}"
             IFS='.' read -r major minor patch <<< "$BASE"
             case "${{ inputs.bump }}" in
@@ -55,15 +55,19 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "::notice::Release version: ${VERSION}"
 
-      - uses: dtolnay/rust-toolchain@stable
+          # Determine stable version (strip pre-release suffix)
+          STABLE="${VERSION%%-*}"
+          echo "stable=${STABLE}" >> "$GITHUB_OUTPUT"
 
       - name: Update version files
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          sed -i "s/^version = .*/version = \"${VERSION}\"/" Cargo.toml
+          STABLE="${{ steps.version.outputs.stable }}"
+          # Chart.yaml always gets the full version (beta or stable)
           sed -i "s/^version: .*/version: ${VERSION}/" charts/openab/Chart.yaml
           sed -i "s/^appVersion: .*/appVersion: \"${VERSION}\"/" charts/openab/Chart.yaml
-          cargo generate-lockfile
+          # Cargo.toml only gets stable version (main stays clean)
+          sed -i "s/^version = .*/version = \"${STABLE}\"/" Cargo.toml
 
       - name: Create release PR
         env:
