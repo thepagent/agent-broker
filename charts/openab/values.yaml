@@ -1,3 +1,9 @@
+networkPolicy:
+  enabled: true
+
+serviceAccount:
+  create: true
+
 image:
   repository: ghcr.io/openabdev/openab
   # tag defaults to .Chart.AppVersion

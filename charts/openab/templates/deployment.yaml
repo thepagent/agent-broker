@@ -25,6 +25,9 @@ spec:
       labels:
         {{- include "openab.selectorLabels" $d | nindent 8 }}
     spec:
+      {{- if $.Values.serviceAccount.create }}
+      serviceAccountName: {{ include "openab.agentFullname" $d }}
+      {{- end }}
       {{- with $.Values.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}

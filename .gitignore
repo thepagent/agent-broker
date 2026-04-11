@@ -2,3 +2,12 @@
 config.toml
 *.swp
 .DS_Store
+
+# Secrets — never commit real credentials
+.env
+.env.*
+*.pem
+*.key
+**/secrets/
+kubeconfig
+kubeconfig.*
