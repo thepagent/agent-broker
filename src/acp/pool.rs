@@ -101,6 +101,13 @@ impl SessionPool {
         f(conn).await
     }
 
+    /// Drop a session for a specific thread. Returns true if one was removed.
+    /// The underlying child process is killed via `kill_on_drop`.
+    pub async fn drop_session(&self, thread_id: &str) -> bool {
+        let mut conns = self.connections.write().await;
+        conns.remove(thread_id).is_some()
+    }
+
     pub async fn cleanup_idle(&self, ttl_secs: u64) {
         let now = Instant::now();
         let ttl = std::time::Duration::from_secs(ttl_secs);
