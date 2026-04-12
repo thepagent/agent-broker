@@ -142,12 +142,15 @@ impl AcpConnection {
                             .and_then(|p| p.get("update"))
                         {
                             if upd.get("sessionUpdate").and_then(|v| v.as_str()) == Some("usage_update") {
-                                if let Some(used) = upd.get("used").and_then(|v| v.as_u64()) {
-                                    ctx_used.store(used, Ordering::Relaxed);
-                                }
-                                if let Some(size) = upd.get("size").and_then(|v| v.as_u64()) {
-                                    ctx_size.store(size, Ordering::Relaxed);
-                                }
+                                let used = upd.get("used")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                ctx_used.store(used, Ordering::Relaxed);
+
+                                let size = upd.get("size")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                ctx_size.store(size, Ordering::Relaxed);
                             }
                         }
                     }
