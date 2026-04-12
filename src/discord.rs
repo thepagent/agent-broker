@@ -1416,7 +1416,41 @@ impl Handler {
         }
 
         let results = crate::usage::run_all(usage_cfg).await;
-        let embed = build_usage_embed(&results);
+        let mut embed = build_usage_embed(&results);
+
+        // Append session-level token stats if a session exists in this thread
+        let thread_key = cmd.channel_id.get().to_string();
+        if self.pool.get_or_create(&thread_key).await.is_ok() {
+            let session_info = self
+                .pool
+                .with_connection(&thread_key, |conn| {
+                    Box::pin(async move {
+                        let model = conn.current_model.clone();
+                        let elapsed = conn.last_active.elapsed().as_secs();
+                        let usage = conn.session_get_usage().await.ok();
+                        let mut lines = vec![format!("**Model:** `{model}` • **Age:** {elapsed}s")];
+                        if let Some(v) = usage {
+                            if let Some(input) = v.get("inputTokens").and_then(|n| n.as_u64()) {
+                                if let Some(output) = v.get("outputTokens").and_then(|n| n.as_u64()) {
+                                    let total = input + output;
+                                    lines.push(format!("**Tokens:** {total} (↑{input} ↓{output})"));
+                                }
+                            }
+                            if let Some(turns) = v.get("turns").and_then(|n| n.as_u64()) {
+                                lines.push(format!("**Turns:** {turns}"));
+                            }
+                            if let Some(cost) = v.get("cost").and_then(|n| n.as_f64()) {
+                                lines.push(format!("**Cost:** ${cost:.4}"));
+                            }
+                        }
+                        Ok(lines.join("\n"))
+                    })
+                })
+                .await;
+            if let Ok(info) = session_info {
+                embed = embed.field("📡 Current Session", &info, false);
+            }
+        }
 
         let _ = cmd
             .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
