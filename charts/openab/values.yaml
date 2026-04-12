@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/openabdev/openab
-  tag: "78f8d2c"
+  tag: ""
   pullPolicy: IfNotPresent
 
 replicas: 1
