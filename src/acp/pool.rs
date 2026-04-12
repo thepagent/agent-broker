@@ -1,4 +1,4 @@
-use crate::acp::connection::{AcpConnection, ModelInfo};
+use crate::acp::connection::{AcpConnection, ModelInfo, NativeCommand};
 use crate::config::AgentConfig;
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
@@ -15,6 +15,8 @@ pub struct SessionPool {
     /// suggestions without spawning a fresh agent (which takes ~10s).
     cached_models: RwLock<Vec<ModelInfo>>,
     cached_current_model: RwLock<String>,
+    /// Native slash commands reported by the agent via `available_commands_update`.
+    cached_native_commands: RwLock<Vec<NativeCommand>>,
 }
 
 impl SessionPool {
@@ -25,6 +27,7 @@ impl SessionPool {
             max_sessions,
             cached_models: RwLock::new(Vec::new()),
             cached_current_model: RwLock::new("auto".to_string()),
+            cached_native_commands: RwLock::new(Vec::new()),
         }
     }
 
@@ -34,6 +37,10 @@ impl SessionPool {
 
     pub async fn cached_current_model(&self) -> String {
         self.cached_current_model.read().await.clone()
+    }
+
+    pub async fn cached_native_commands(&self) -> Vec<NativeCommand> {
+        self.cached_native_commands.read().await.clone()
     }
 
     /// Replace the cached model list. Used by the background refresh task
@@ -88,6 +95,15 @@ impl SessionPool {
             *self.cached_models.write().await = conn.available_models.clone();
         }
         *self.cached_current_model.write().await = conn.current_model.clone();
+
+        // Snapshot native agent commands (arrives async via available_commands_update).
+        // Give the agent a moment to push the notification after session/new.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let cmds = conn.native_commands.lock().await.clone();
+        if !cmds.is_empty() {
+            info!(count = cmds.len(), "caching native agent commands");
+            *self.cached_native_commands.write().await = cmds;
+        }
 
         let is_rebuild = conns.contains_key(thread_id);
         if is_rebuild {

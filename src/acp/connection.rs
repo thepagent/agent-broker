@@ -50,6 +50,13 @@ pub struct ModelInfo {
     pub description: String,
 }
 
+/// A native slash command exposed by the ACP agent via `available_commands_update`.
+#[derive(Debug, Clone)]
+pub struct NativeCommand {
+    pub name: String,
+    pub description: String,
+}
+
 pub struct AcpConnection {
     _proc: Child,
     stdin: Arc<Mutex<ChildStdin>>,
@@ -61,6 +68,7 @@ pub struct AcpConnection {
     pub session_reset: bool,
     pub current_model: String,
     pub available_models: Vec<ModelInfo>,
+    pub native_commands: Arc<Mutex<Vec<NativeCommand>>>,
     _reader_handle: JoinHandle<()>,
 }
 
@@ -96,10 +104,13 @@ impl AcpConnection {
         let notify_tx: Arc<Mutex<Option<mpsc::UnboundedSender<JsonRpcMessage>>>> =
             Arc::new(Mutex::new(None));
 
+        let native_commands: Arc<Mutex<Vec<NativeCommand>>> = Arc::new(Mutex::new(Vec::new()));
+
         let reader_handle = {
             let pending = pending.clone();
             let notify_tx = notify_tx.clone();
             let stdin_clone = stdin.clone();
+            let native_cmds = native_commands.clone();
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stdout);
                 let mut line = String::new();
@@ -136,6 +147,26 @@ impl AcpConnection {
                             }
                         }
                         continue;
+                    }
+
+                    // Capture native agent slash commands from available_commands_update
+                    if msg.method.as_deref() == Some("session/update") {
+                        if let Some(upd) = msg.params.as_ref()
+                            .and_then(|p| p.get("update"))
+                        {
+                            if upd.get("sessionUpdate").and_then(|v| v.as_str()) == Some("available_commands_update") {
+                                if let Some(cmds) = upd.get("availableCommands").and_then(|v| v.as_array()) {
+                                    let parsed: Vec<NativeCommand> = cmds.iter().filter_map(|c| {
+                                        let name = c.get("name")?.as_str()?.to_string();
+                                        let description = c.get("description").and_then(|d| d.as_str()).unwrap_or("").to_string();
+                                        Some(NativeCommand { name, description })
+                                    }).collect();
+                                    info!(count = parsed.len(), "captured native agent commands");
+                                    *native_cmds.lock().await = parsed;
+                                }
+                            }
+                        }
+                        // Don't consume — still forward to subscriber below
                     }
 
                     // Response (has id) → resolve pending AND forward to subscriber
@@ -197,6 +228,7 @@ impl AcpConnection {
             session_reset: false,
             current_model: "auto".to_string(),
             available_models: Vec::new(),
+            native_commands,
             _reader_handle: reader_handle,
         })
     }
@@ -224,7 +256,16 @@ impl AcpConnection {
 
         self.send_raw(&data).await?;
 
-        let timeout_secs = if method == "session/new" { 120 } else { 30 };
+        // Gemini CLI's --acp mode takes ~20-25s to cold-start (slow plugin/auth
+        // loading), so the default 30s initialize timeout is marginal. Bump to
+        // 90s for initialize and keep 120s for session/new. Other methods
+        // (prompt, set_model, etc.) stay at 30s since they run against a
+        // warm process.
+        let timeout_secs = match method {
+            "initialize" => 90,
+            "session/new" => 120,
+            _ => 30,
+        };
         let resp = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), rx)
             .await
             .map_err(|_| anyhow!("timeout waiting for {method} response"))?

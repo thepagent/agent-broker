@@ -415,6 +415,67 @@ impl EventHandler for Handler {
             );
         }
 
+        // /native — run an agent's built-in slash command (memory, extensions, etc.)
+        commands.push(
+            CreateCommand::new("native")
+                .description("Run an agent-native slash command (e.g. /memory show, /compact)")
+                .add_option(
+                    CreateCommandOption::new(
+                        CommandOptionType::String,
+                        "command",
+                        "Agent command name (autocomplete from agent's list)",
+                    )
+                    .required(true)
+                    .set_autocomplete(true),
+                )
+                .add_option(
+                    CreateCommandOption::new(
+                        CommandOptionType::String,
+                        "args",
+                        "Optional arguments",
+                    )
+                    .required(false),
+                ),
+        );
+
+        // /plan-mode — enter plan mode (send /plan prompt to the agent)
+        commands.push(
+            CreateCommand::new("plan-mode")
+                .description("Enter plan mode — agent plans before executing")
+                .add_option(
+                    CreateCommandOption::new(
+                        CommandOptionType::String,
+                        "description",
+                        "What to plan (optional)",
+                    )
+                    .required(false),
+                ),
+        );
+
+        // /mcp — list MCP servers connected to the agent
+        commands.push(
+            CreateCommand::new("mcp")
+                .description("List MCP servers and tools connected to the agent"),
+        );
+
+        // /export — export conversation history from the current thread
+        commands.push(
+            CreateCommand::new("export")
+                .description("Export the current thread's conversation as text"),
+        );
+
+        // /doctor — diagnose agent connection health
+        commands.push(
+            CreateCommand::new("doctor")
+                .description("Diagnose agent connection health (ping, session, uptime)"),
+        );
+
+        // /stats — detailed session statistics
+        commands.push(
+            CreateCommand::new("stats")
+                .description("Show detailed session statistics (uptime, messages, native commands)"),
+        );
+
         for guild in &ready.guilds {
             match guild.id.set_commands(&ctx.http, commands.clone()).await {
                 Ok(cmds) => info!(guild_id = %guild.id, count = cmds.len(), "registered slash commands"),
@@ -449,11 +510,32 @@ impl EventHandler for Handler {
             Interaction::Command(cmd) if cmd.data.name == "permissions" => {
                 self.handle_permissions_command(&ctx, &cmd).await;
             }
+            Interaction::Command(cmd) if cmd.data.name == "native" => {
+                self.handle_native_command(&ctx, &cmd).await;
+            }
+            Interaction::Command(cmd) if cmd.data.name == "plan-mode" => {
+                self.handle_plan_command(&ctx, &cmd).await;
+            }
+            Interaction::Command(cmd) if cmd.data.name == "mcp" => {
+                self.handle_mcp_command(&ctx, &cmd).await;
+            }
+            Interaction::Command(cmd) if cmd.data.name == "export" => {
+                self.handle_export_command(&ctx, &cmd).await;
+            }
+            Interaction::Command(cmd) if cmd.data.name == "doctor" => {
+                self.handle_doctor_command(&ctx, &cmd).await;
+            }
+            Interaction::Command(cmd) if cmd.data.name == "stats" => {
+                self.handle_stats_command(&ctx, &cmd).await;
+            }
             Interaction::Command(cmd) if copilot_interactive_spec(&cmd.data.name).is_some() => {
                 self.handle_copilot_interactive(&ctx, &cmd).await;
             }
             Interaction::Autocomplete(ac) if ac.data.name == "model" => {
                 self.handle_model_autocomplete(&ctx, &ac).await;
+            }
+            Interaction::Autocomplete(ac) if ac.data.name == "native" => {
+                self.handle_native_autocomplete(&ctx, &ac).await;
             }
             Interaction::Autocomplete(ac) if copilot_interactive_spec(&ac.data.name).is_some() => {
                 self.handle_copilot_interactive_autocomplete(&ctx, &ac).await;
@@ -524,6 +606,565 @@ impl Handler {
         if let Err(e) = ac.create_response(&ctx.http, response).await {
             warn!(error = %e, "failed to send autocomplete response");
         }
+    }
+
+    /// Autocomplete for /native — suggest agent-native commands.
+    async fn handle_native_autocomplete(&self, ctx: &Context, ac: &CommandInteraction) {
+        let partial = ac
+            .data
+            .options
+            .first()
+            .and_then(|o| match &o.value {
+                CommandDataOptionValue::Autocomplete { value, .. } => Some(value.as_str()),
+                CommandDataOptionValue::String(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .unwrap_or("")
+            .to_lowercase();
+
+        let cmds = self.pool.cached_native_commands().await;
+        let mut choices: Vec<AutocompleteChoice> = Vec::new();
+        for c in &cmds {
+            if choices.len() >= 25 {
+                break;
+            }
+            if !partial.is_empty() && !c.name.to_lowercase().contains(&partial) {
+                continue;
+            }
+            let label = if c.description.is_empty() {
+                c.name.clone()
+            } else {
+                format!("{} — {}", c.name, c.description.chars().take(60).collect::<String>())
+            };
+            choices.push(AutocompleteChoice::new(label, c.name.clone()));
+        }
+        let response = CreateInteractionResponse::Autocomplete(
+            CreateAutocompleteResponse::new().set_choices(choices),
+        );
+        if let Err(e) = ac.create_response(&ctx.http, response).await {
+            warn!(error = %e, "failed to send native autocomplete");
+        }
+    }
+
+    /// Handle /native <command> [args] — send as prompt to the agent which parses it.
+    async fn handle_native_command(&self, ctx: &Context, cmd: &CommandInteraction) {
+        // Allowlist: user
+        if !self.allowed_users.is_empty() {
+            if !self.allowed_users.contains(&cmd.user.id.get()) {
+                let _ = cmd
+                    .create_response(
+                        &ctx.http,
+                        CreateInteractionResponse::Message(
+                            CreateInteractionResponseMessage::new()
+                                .content("⛔ Not authorized")
+                                .ephemeral(true),
+                        ),
+                    )
+                    .await;
+                return;
+            }
+        }
+
+        let command_name = cmd
+            .data
+            .options
+            .iter()
+            .find(|o| o.name == "command")
+            .and_then(|o| o.value.as_str())
+            .unwrap_or("");
+        let args = cmd
+            .data
+            .options
+            .iter()
+            .find(|o| o.name == "args")
+            .and_then(|o| o.value.as_str())
+            .unwrap_or("");
+
+        if command_name.is_empty() {
+            let cmds = self.pool.cached_native_commands().await;
+            let list = if cmds.is_empty() {
+                "No native commands detected from this agent.".to_string()
+            } else {
+                cmds.iter()
+                    .map(|c| format!("• `{}` — {}", c.name, c.description))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            let _ = cmd
+                .create_response(
+                    &ctx.http,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new()
+                            .content(format!("**Agent Native Commands:**\n{list}"))
+                            .ephemeral(true),
+                    ),
+                )
+                .await;
+            return;
+        }
+
+        // Build the prompt text — agent CLIs parse /command internally
+        let prompt_text = if args.is_empty() {
+            format!("/{command_name}")
+        } else {
+            format!("/{command_name} {args}")
+        };
+
+        let _ = cmd
+            .create_response(
+                &ctx.http,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .content(format!("⚡ `{prompt_text}`")),
+                ),
+            )
+            .await;
+
+        // Get the thread id from the channel
+        let thread_id = cmd.channel_id.get().to_string();
+
+        // Ensure session exists
+        if let Err(e) = self.pool.get_or_create(&thread_id).await {
+            let _ = cmd
+                .channel_id
+                .say(&ctx.http, format!("⚠️ Session error: {e}"))
+                .await;
+            return;
+        }
+
+        // Send as prompt
+        use crate::acp::connection::ContentBlock;
+        let result = self
+            .pool
+            .with_connection(&thread_id, |conn| {
+                let prompt_text = prompt_text.clone();
+                Box::pin(async move {
+                    let (mut rx, _id) = conn
+                        .session_prompt(vec![ContentBlock::Text { text: prompt_text }])
+                        .await?;
+
+                    let mut reply = String::new();
+                    while let Some(msg) = rx.recv().await {
+                        // Final response (has id)
+                        if msg.id.is_some() {
+                            if let Some(result) = &msg.result {
+                                if let Some(content) = result.get("content") {
+                                    if let Some(arr) = content.as_array() {
+                                        for block in arr {
+                                            if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                                                reply.push_str(text);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                        // Streaming text chunks
+                        if let Some(params) = &msg.params {
+                            if let Some(upd) = params.get("update") {
+                                if upd.get("sessionUpdate").and_then(|v| v.as_str())
+                                    == Some("agent_message_chunk")
+                                {
+                                    if let Some(text) = upd
+                                        .get("content")
+                                        .and_then(|c| c.get("text"))
+                                        .and_then(|t| t.as_str())
+                                    {
+                                        reply.push_str(text);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    conn.prompt_done().await;
+                    Ok(reply)
+                })
+            })
+            .await;
+
+        match result {
+            Ok(reply) if reply.is_empty() => {
+                let _ = cmd.channel_id.say(&ctx.http, "✅ Command executed (no output)").await;
+            }
+            Ok(reply) => {
+                // Discord message limit is 2000 chars
+                let truncated = if reply.len() > 1900 {
+                    format!("{}…\n*(truncated)*", &reply[..1900])
+                } else {
+                    reply
+                };
+                let _ = cmd.channel_id.say(&ctx.http, &truncated).await;
+            }
+            Err(e) => {
+                let _ = cmd
+                    .channel_id
+                    .say(&ctx.http, format!("⚠️ {e}"))
+                    .await;
+            }
+        }
+    }
+
+    /// Handle /plan — send /plan to the agent as a prompt.
+    async fn handle_plan_command(&self, ctx: &Context, cmd: &CommandInteraction) {
+        if !self.copilot_guard_ok(ctx, cmd).await {
+            return;
+        }
+        let desc = cmd
+            .data
+            .options
+            .iter()
+            .find(|o| o.name == "description")
+            .and_then(|o| o.value.as_str())
+            .unwrap_or("");
+        let prompt_text = if desc.is_empty() {
+            "/plan".to_string()
+        } else {
+            format!("/plan {desc}")
+        };
+
+        let _ = cmd
+            .create_response(
+                &ctx.http,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .content(format!("📋 `{prompt_text}`")),
+                ),
+            )
+            .await;
+
+        let thread_id = cmd.channel_id.get().to_string();
+        if let Err(e) = self.pool.get_or_create(&thread_id).await {
+            let _ = cmd.channel_id.say(&ctx.http, format!("⚠️ {e}")).await;
+            return;
+        }
+
+        use crate::acp::connection::ContentBlock;
+        let result = self
+            .pool
+            .with_connection(&thread_id, |conn| {
+                let pt = prompt_text.clone();
+                Box::pin(async move {
+                    let (mut rx, _) = conn.session_prompt(vec![ContentBlock::Text { text: pt }]).await?;
+                    let mut reply = String::new();
+                    while let Some(msg) = rx.recv().await {
+                        if msg.id.is_some() {
+                            if let Some(r) = &msg.result {
+                                if let Some(arr) = r.get("content").and_then(|c| c.as_array()) {
+                                    for b in arr {
+                                        if let Some(t) = b.get("text").and_then(|t| t.as_str()) {
+                                            reply.push_str(t);
+                                        }
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                        if let Some(params) = &msg.params {
+                            if let Some(upd) = params.get("update") {
+                                if upd.get("sessionUpdate").and_then(|v| v.as_str()) == Some("agent_message_chunk") {
+                                    if let Some(t) = upd.get("content").and_then(|c| c.get("text")).and_then(|t| t.as_str()) {
+                                        reply.push_str(t);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    conn.prompt_done().await;
+                    Ok(reply)
+                })
+            })
+            .await;
+
+        match result {
+            Ok(r) if r.is_empty() => { let _ = cmd.channel_id.say(&ctx.http, "✅ Plan mode activated (no output)").await; }
+            Ok(r) => {
+                let truncated = if r.len() > 1900 { format!("{}…\n*(truncated)*", &r[..1900]) } else { r };
+                let _ = cmd.channel_id.say(&ctx.http, &truncated).await;
+            }
+            Err(e) => { let _ = cmd.channel_id.say(&ctx.http, format!("⚠️ {e}")).await; }
+        }
+    }
+
+    /// Handle /mcp — send /mcp to the agent as a prompt.
+    async fn handle_mcp_command(&self, ctx: &Context, cmd: &CommandInteraction) {
+        if !self.copilot_guard_ok(ctx, cmd).await {
+            return;
+        }
+        let _ = cmd
+            .create_response(
+                &ctx.http,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new().content("🔌 Querying MCP servers…"),
+                ),
+            )
+            .await;
+
+        let thread_id = cmd.channel_id.get().to_string();
+        if let Err(e) = self.pool.get_or_create(&thread_id).await {
+            let _ = cmd.channel_id.say(&ctx.http, format!("⚠️ {e}")).await;
+            return;
+        }
+
+        use crate::acp::connection::ContentBlock;
+        let result = self
+            .pool
+            .with_connection(&thread_id, |conn| {
+                Box::pin(async move {
+                    let (mut rx, _) = conn.session_prompt(vec![ContentBlock::Text { text: "/mcp".to_string() }]).await?;
+                    let mut reply = String::new();
+                    while let Some(msg) = rx.recv().await {
+                        if msg.id.is_some() {
+                            if let Some(r) = &msg.result {
+                                if let Some(arr) = r.get("content").and_then(|c| c.as_array()) {
+                                    for b in arr { if let Some(t) = b.get("text").and_then(|t| t.as_str()) { reply.push_str(t); } }
+                                }
+                            }
+                            break;
+                        }
+                        if let Some(params) = &msg.params {
+                            if let Some(upd) = params.get("update") {
+                                if upd.get("sessionUpdate").and_then(|v| v.as_str()) == Some("agent_message_chunk") {
+                                    if let Some(t) = upd.get("content").and_then(|c| c.get("text")).and_then(|t| t.as_str()) { reply.push_str(t); }
+                                }
+                            }
+                        }
+                    }
+                    conn.prompt_done().await;
+                    Ok(reply)
+                })
+            })
+            .await;
+
+        match result {
+            Ok(r) if r.is_empty() => { let _ = cmd.channel_id.say(&ctx.http, "ℹ️ No MCP information returned.").await; }
+            Ok(r) => {
+                let truncated = if r.len() > 1900 { format!("{}…\n*(truncated)*", &r[..1900]) } else { r };
+                let _ = cmd.channel_id.say(&ctx.http, &truncated).await;
+            }
+            Err(e) => { let _ = cmd.channel_id.say(&ctx.http, format!("⚠️ {e}")).await; }
+        }
+    }
+
+    /// Handle /export — fetch recent messages from the current thread and send as text.
+    async fn handle_export_command(&self, ctx: &Context, cmd: &CommandInteraction) {
+        if !self.copilot_guard_ok(ctx, cmd).await {
+            return;
+        }
+        if let Err(e) = cmd.defer(&ctx.http).await {
+            error!(error = %e, "failed to defer /export");
+            return;
+        }
+
+        // Fetch up to 100 recent messages from this channel
+        use serenity::builder::GetMessages;
+        let messages = match cmd
+            .channel_id
+            .messages(&ctx.http, GetMessages::new().limit(100))
+            .await
+        {
+            Ok(msgs) => msgs,
+            Err(e) => {
+                let _ = cmd
+                    .edit_response(
+                        &ctx.http,
+                        EditInteractionResponse::new().content(format!("⚠️ Failed to fetch messages: {e}")),
+                    )
+                    .await;
+                return;
+            }
+        };
+
+        let mut lines: Vec<String> = messages
+            .iter()
+            .rev()
+            .map(|m| {
+                let ts = m.timestamp.to_string();
+                let author = &m.author.name;
+                let content = if m.content.len() > 500 {
+                    format!("{}…", &m.content[..500])
+                } else {
+                    m.content.clone()
+                };
+                format!("[{ts}] {author}: {content}")
+            })
+            .collect();
+
+        if lines.is_empty() {
+            lines.push("(no messages)".to_string());
+        }
+
+        let export = lines.join("\n");
+        let truncated = if export.len() > 1900 {
+            format!("```\n{}…\n```\n*(truncated to 100 messages)*", &export[..1800])
+        } else {
+            format!("```\n{export}\n```")
+        };
+
+        let embed = CreateEmbed::new()
+            .title("📄 /export")
+            .description(truncated)
+            .color(0x5865F2);
+
+        let _ = cmd
+            .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+            .await;
+    }
+
+    /// Handle /doctor — diagnose agent connection health.
+    async fn handle_doctor_command(&self, ctx: &Context, cmd: &CommandInteraction) {
+        if !self.copilot_guard_ok(ctx, cmd).await {
+            return;
+        }
+        if let Err(e) = cmd.defer(&ctx.http).await {
+            error!(error = %e, "failed to defer /doctor");
+            return;
+        }
+
+        let thread_key = cmd.channel_id.get().to_string();
+        let mut report = String::new();
+
+        // 1. Check if a session exists for this thread
+        let session_exists = self.pool.get_or_create(&thread_key).await.is_ok();
+        report.push_str(&format!("**Session:** {}\n", if session_exists { "✅ active" } else { "❌ failed to create" }));
+
+        if session_exists {
+            // 2. Ping the agent
+            let ping_result = self
+                .pool
+                .with_connection(&thread_key, |conn| {
+                    Box::pin(async move { conn.session_ping().await })
+                })
+                .await;
+            match ping_result {
+                Ok(_) => report.push_str("**Ping:** ✅ responsive\n"),
+                Err(e) => report.push_str(&format!("**Ping:** ⚠️ {e}\n")),
+            }
+
+            // 3. Session info
+            let session_info = self
+                .pool
+                .with_connection(&thread_key, |conn| {
+                    Box::pin(async move {
+                        let sid = conn.acp_session_id.as_deref().unwrap_or("none").to_string();
+                        let model = conn.current_model.clone();
+                        let alive = conn.alive();
+                        let elapsed_secs = conn.last_active.elapsed().as_secs();
+                        let native_count = conn.native_commands.lock().await.len();
+                        Ok(format!(
+                            "**Session ID:** `{sid}`\n**Model:** `{model}`\n**Process:** {}\n**Last active:** {elapsed_secs}s ago\n**Native commands:** {native_count}\n",
+                            if alive { "✅ alive" } else { "❌ dead" }
+                        ))
+                    })
+                })
+                .await;
+            if let Ok(info) = session_info {
+                report.push_str(&info);
+            }
+        }
+
+        // 4. Pool info
+        let models = self.pool.cached_models().await;
+        let native_cmds = self.pool.cached_native_commands().await;
+        report.push_str(&format!("**Cached models:** {}\n", models.len()));
+        report.push_str(&format!("**Cached native cmds:** {}\n", native_cmds.len()));
+
+        let embed = CreateEmbed::new()
+            .title("🩺 /doctor")
+            .description(report)
+            .color(0x2ECC71);
+
+        let _ = cmd
+            .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+            .await;
+    }
+
+    /// Handle /stats — detailed session statistics.
+    async fn handle_stats_command(&self, ctx: &Context, cmd: &CommandInteraction) {
+        if !self.copilot_guard_ok(ctx, cmd).await {
+            return;
+        }
+        if let Err(e) = cmd.defer(&ctx.http).await {
+            error!(error = %e, "failed to defer /stats");
+            return;
+        }
+
+        let thread_key = cmd.channel_id.get().to_string();
+        let mut report = String::new();
+
+        // Try to get usage from bridge
+        let has_session = self.pool.get_or_create(&thread_key).await.is_ok();
+        if has_session {
+            let usage = self
+                .pool
+                .with_connection(&thread_key, |conn| {
+                    Box::pin(async move { conn.session_get_usage().await })
+                })
+                .await;
+
+            match usage {
+                Ok(v) => {
+                    if let Some(input) = v.get("inputTokens").and_then(|n| n.as_u64()) {
+                        report.push_str(&format!("**Input tokens:** {input}\n"));
+                    }
+                    if let Some(output) = v.get("outputTokens").and_then(|n| n.as_u64()) {
+                        report.push_str(&format!("**Output tokens:** {output}\n"));
+                    }
+                    if let Some(total) = v.get("totalTokens").and_then(|n| n.as_u64()) {
+                        report.push_str(&format!("**Total tokens:** {total}\n"));
+                    }
+                    if let Some(turns) = v.get("turns").and_then(|n| n.as_u64()) {
+                        report.push_str(&format!("**Turns:** {turns}\n"));
+                    }
+                    if let Some(cost) = v.get("cost").and_then(|n| n.as_f64()) {
+                        report.push_str(&format!("**Estimated cost:** ${cost:.4}\n"));
+                    }
+                    if report.is_empty() {
+                        // Dump raw JSON if structure unknown
+                        report.push_str(&format!("```json\n{}\n```", serde_json::to_string_pretty(&v).unwrap_or_default()));
+                    }
+                }
+                Err(_) => {
+                    report.push_str("_Usage stats not available from this backend._\n");
+                }
+            }
+
+            // Session metadata
+            let meta = self
+                .pool
+                .with_connection(&thread_key, |conn| {
+                    Box::pin(async move {
+                        let elapsed_secs = conn.last_active.elapsed().as_secs();
+                        let model = conn.current_model.clone();
+                        let alive = conn.alive();
+                        Ok(format!(
+                            "\n**Model:** `{model}`\n**Session age:** {elapsed_secs}s\n**Process alive:** {}\n",
+                            if alive { "✅" } else { "❌" }
+                        ))
+                    })
+                })
+                .await;
+            if let Ok(m) = meta {
+                report.push_str(&m);
+            }
+        } else {
+            report.push_str("No active session in this thread.\n");
+        }
+
+        // Native commands summary
+        let native = self.pool.cached_native_commands().await;
+        if !native.is_empty() {
+            report.push_str(&format!("\n**Native commands:** {} available via `/native`\n", native.len()));
+        }
+
+        let embed = CreateEmbed::new()
+            .title("📊 /stats")
+            .description(report)
+            .color(0x5865F2);
+
+        let _ = cmd
+            .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+            .await;
     }
 
     /// Handle the actual /model command submission.

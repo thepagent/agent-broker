@@ -6,10 +6,16 @@ config.toml
 # Local deployment / logs / test artifacts
 /logs/
 /logs-copilot/
+/logs-gemini/
+/logs-codex/
 /config-copilot.toml
+/config-gemini.toml
+/config-codex.toml
 /run-openab-*.bat
 /start-openab.bat
 /install-*.ps1
+/fix-all-tasks.ps1
+/test-system.*
 /acp-*.txt
 /acp-out.txt
 /acp-err.txt
