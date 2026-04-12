@@ -36,6 +36,9 @@ async fn main() -> anyhow::Result<()> {
         "config loaded"
     );
 
+    let backend = discord::BackendType::from_agent_config(&cfg.agent.command, &cfg.agent.args);
+    info!(?backend, "detected backend type");
+
     let pool = Arc::new(acp::SessionPool::new(cfg.agent, cfg.pool.max_sessions));
     let ttl_secs = cfg.pool.session_ttl_hours * 3600;
 
@@ -51,6 +54,7 @@ async fn main() -> anyhow::Result<()> {
         allowed_users,
         reactions_config: cfg.reactions,
         usage_config: cfg.usage,
+        backend,
         copilot_list_cache: copilot_list_cache.clone(),
     };
 

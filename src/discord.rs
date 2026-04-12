@@ -98,12 +98,46 @@ const COPILOT_RELOAD_KINDS: &[(&str, &str, &str)] = &[
     ("extensions", "extension-reload", "Extensions"),
 ];
 
+/// Backend type inferred from the agent command in config.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendType {
+    Claude,
+    Copilot,
+    Gemini,
+    Codex,
+    Other,
+}
+
+impl BackendType {
+    /// Infer backend from the agent command + args strings.
+    pub fn from_agent_config(command: &str, args: &[String]) -> Self {
+        let joined = format!("{} {}", command, args.join(" ")).to_lowercase();
+        if joined.contains("copilot") {
+            BackendType::Copilot
+        } else if joined.contains("claude") {
+            BackendType::Claude
+        } else if joined.contains("gemini") {
+            BackendType::Gemini
+        } else if joined.contains("codex") {
+            BackendType::Codex
+        } else {
+            BackendType::Other
+        }
+    }
+
+    /// Does this backend support Copilot SDK RPCs?
+    pub fn has_copilot_rpc(&self) -> bool {
+        *self == BackendType::Copilot
+    }
+}
+
 pub struct Handler {
     pub pool: Arc<SessionPool>,
     pub allowed_channels: HashSet<u64>,
     pub allowed_users: HashSet<u64>,
     pub reactions_config: ReactionsConfig,
     pub usage_config: Option<crate::config::UsageConfig>,
+    pub backend: BackendType,
     /// Cache of Copilot SDK list RPCs keyed by rpc subcommand name
     /// (e.g. "agents", "skills", "mcp-list", "extensions"). Values are
     /// the item `name` strings for autocomplete. Refreshed every 5 min
@@ -327,46 +361,50 @@ impl EventHandler for Handler {
 
         let mut commands = vec![model_cmd];
 
-        // Read-only info commands
-        for (name, desc) in COPILOT_READONLY_COMMANDS {
-            commands.push(CreateCommand::new(*name).description(*desc));
-        }
-
-        // Interactive commands with <name> arg + autocomplete
-        for (name, desc, _list, _action, _dk, _nk) in COPILOT_INTERACTIVE_COMMANDS {
-            commands.push(
-                CreateCommand::new(*name)
-                    .description(*desc)
-                    .add_option(
-                        CreateCommandOption::new(
-                            CommandOptionType::String,
-                            "name",
-                            "Name (autocomplete)",
-                        )
-                        .required(true)
-                        .set_autocomplete(true),
-                    ),
-            );
-        }
-
-        // /mode with static choices (Discord renders as dropdown)
-        let mode_cmd = {
-            let mut opt = CreateCommandOption::new(
-                CommandOptionType::String,
-                "mode",
-                "Session mode",
-            )
-            .required(true);
-            for (value, label) in COPILOT_MODES {
-                opt = opt.add_string_choice(*label, *value);
+        // Copilot-only commands: read-only info, interactive, mode, reload
+        if self.backend.has_copilot_rpc() {
+            // Read-only info commands
+            for (name, desc) in COPILOT_READONLY_COMMANDS {
+                commands.push(CreateCommand::new(*name).description(*desc));
             }
-            CreateCommand::new("mode")
-                .description("Switch Copilot session mode (agent / plan / autopilot)")
-                .add_option(opt)
-        };
-        commands.push(mode_cmd);
 
-        // /reload <kind> — reload agents/skills/mcp/extensions
+            // Interactive commands with <name> arg + autocomplete
+            for (name, desc, _list, _action, _dk, _nk) in COPILOT_INTERACTIVE_COMMANDS {
+                commands.push(
+                    CreateCommand::new(*name)
+                        .description(*desc)
+                        .add_option(
+                            CreateCommandOption::new(
+                                CommandOptionType::String,
+                                "name",
+                                "Name (autocomplete)",
+                            )
+                            .required(true)
+                            .set_autocomplete(true),
+                        ),
+                );
+            }
+
+            // /mode with static choices (Discord renders as dropdown)
+            let mode_cmd = {
+                let mut opt = CreateCommandOption::new(
+                    CommandOptionType::String,
+                    "mode",
+                    "Session mode",
+                )
+                .required(true);
+                for (value, label) in COPILOT_MODES {
+                    opt = opt.add_string_choice(*label, *value);
+                }
+                CreateCommand::new("mode")
+                    .description("Switch Copilot session mode (agent / plan / autopilot)")
+                    .add_option(opt)
+            };
+            commands.push(mode_cmd);
+        } // end Copilot-only
+
+        // /reload <kind> — reload agents/skills/mcp/extensions (Copilot-only)
+        if self.backend.has_copilot_rpc() {
         let reload_cmd = {
             let mut opt = CreateCommandOption::new(
                 CommandOptionType::String,
@@ -382,6 +420,7 @@ impl EventHandler for Handler {
                 .add_option(opt)
         };
         commands.push(reload_cmd);
+        } // end Copilot-only reload
 
         // /compact — reset the current Discord thread's agent session
         commands.push(
