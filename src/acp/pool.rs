@@ -2,15 +2,16 @@ use crate::acp::connection::AcpConnection;
 use crate::config::AgentConfig;
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
-use tokio::sync::RwLock;
+use std::sync::Arc;
+use tokio::sync::{Mutex, RwLock};
 use tokio::time::Instant;
 use tracing::{info, warn};
 
 /// Combined state protected by a single lock to prevent deadlocks.
-/// Lock ordering: always acquire `state` before any operation on either map.
+/// Lock ordering: never await a per-connection mutex while holding `state`.
 struct PoolState {
-    /// Active connections: thread_key → AcpConnection.
-    active: HashMap<String, AcpConnection>,
+    /// Active connections: thread_key → AcpConnection handle.
+    active: HashMap<String, Arc<Mutex<AcpConnection>>>,
     /// Suspended sessions: thread_key → ACP sessionId.
     /// Saved on eviction so sessions can be resumed via `session/load`.
     suspended: HashMap<String, String>,
@@ -35,43 +36,54 @@ impl SessionPool {
     }
 
     pub async fn get_or_create(&self, thread_id: &str) -> Result<()> {
-        // Check if alive connection exists
-        {
+        let (existing, saved_session_id) = {
             let state = self.state.read().await;
-            if let Some(conn) = state.active.get(thread_id) {
-                if conn.alive() {
-                    return Ok(());
-                }
-            }
-        }
+            (
+                state.active.get(thread_id).cloned(),
+                state.suspended.get(thread_id).cloned(),
+            )
+        };
 
-        // Need to create or rebuild
-        let mut state = self.state.write().await;
-
-        // Double-check after acquiring write lock
-        if let Some(conn) = state.active.get(thread_id) {
+        let had_existing = existing.is_some();
+        let mut saved_session_id = saved_session_id;
+        if let Some(conn) = existing.clone() {
+            let conn = conn.lock().await;
             if conn.alive() {
                 return Ok(());
             }
-            warn!(thread_id, "stale connection, rebuilding");
-            suspend_entry(&mut state, thread_id);
-        }
-
-        if state.active.len() >= self.max_sessions {
-            // LRU evict: suspend the oldest idle session to make room
-            let oldest = state.active
-                .iter()
-                .min_by_key(|(_, c)| c.last_active)
-                .map(|(k, _)| k.clone());
-            if let Some(key) = oldest {
-                info!(evicted = %key, "pool full, suspending oldest idle session");
-                suspend_entry(&mut state, &key);
-            } else {
-                return Err(anyhow!("pool exhausted ({} sessions)", self.max_sessions));
+            if saved_session_id.is_none() {
+                saved_session_id = conn.acp_session_id.clone();
             }
         }
 
-        let mut conn = AcpConnection::spawn(
+        // Snapshot active handles so we can inspect them outside the state lock.
+        let snapshot: Vec<(String, Arc<Mutex<AcpConnection>>)> = {
+            let state = self.state.read().await;
+            state
+                .active
+                .iter()
+                .map(|(k, v)| (k.clone(), Arc::clone(v)))
+                .collect()
+        };
+
+        let mut eviction_candidate: Option<(String, Instant, Option<String>)> = None;
+        for (key, conn) in snapshot {
+            if key == thread_id {
+                continue;
+            }
+            let Ok(conn) = conn.try_lock() else {
+                continue;
+            };
+            let candidate = (key, conn.last_active, conn.acp_session_id.clone());
+            match &eviction_candidate {
+                Some((_, oldest_last_active, _)) if candidate.1 >= *oldest_last_active => {}
+                _ => eviction_candidate = Some(candidate),
+            }
+        }
+
+        // Build the replacement connection outside the state lock so one stuck
+        // initialization does not block all unrelated sessions.
+        let mut new_conn = AcpConnection::spawn(
             &self.config.command,
             &self.config.args,
             &self.config.working_dir,
@@ -79,14 +91,12 @@ impl SessionPool {
         )
         .await?;
 
-        conn.initialize().await?;
+        new_conn.initialize().await?;
 
-        // Try to resume a suspended session via session/load
-        let saved_session_id = state.suspended.remove(thread_id);
         let mut resumed = false;
         if let Some(ref sid) = saved_session_id {
-            if conn.supports_load_session {
-                match conn.session_load(sid, &self.config.working_dir).await {
+            if new_conn.supports_load_session {
+                match new_conn.session_load(sid, &self.config.working_dir).await {
                     Ok(()) => {
                         info!(thread_id, session_id = %sid, "session resumed via session/load");
                         resumed = true;
@@ -99,39 +109,106 @@ impl SessionPool {
         }
 
         if !resumed {
-            conn.session_new(&self.config.working_dir).await?;
-            if saved_session_id.is_some() {
-                conn.session_reset = true;
+            new_conn.session_new(&self.config.working_dir).await?;
+            if had_existing || saved_session_id.is_some() {
+                new_conn.session_reset = true;
             }
         }
 
-        state.active.insert(thread_id.to_string(), conn);
+        let new_conn = Arc::new(Mutex::new(new_conn));
+
+        let mut state = self.state.write().await;
+
+        // Another task may have created a healthy connection while we were
+        // initializing this one.
+        if let Some(existing) = state.active.get(thread_id).cloned() {
+            let Ok(existing) = existing.try_lock() else {
+                return Ok(());
+            };
+            if existing.alive() {
+                return Ok(());
+            }
+            warn!(thread_id, "stale connection, rebuilding");
+            drop(existing);
+            state.active.remove(thread_id);
+        }
+
+        if state.active.len() >= self.max_sessions {
+            if let Some((key, _, sid)) = eviction_candidate {
+                if state.active.remove(&key).is_some() {
+                    info!(evicted = %key, "pool full, suspending oldest idle session");
+                    if let Some(sid) = sid {
+                        state.suspended.insert(key, sid);
+                    }
+                }
+            }
+        }
+
+        if state.active.len() >= self.max_sessions {
+            return Err(anyhow!("pool exhausted ({} sessions)", self.max_sessions));
+        }
+
+        state.suspended.remove(thread_id);
+        state.active.insert(thread_id.to_string(), new_conn);
         Ok(())
     }
 
     /// Get mutable access to a connection. Caller must have called get_or_create first.
     pub async fn with_connection<F, R>(&self, thread_id: &str, f: F) -> Result<R>
     where
-        F: FnOnce(&mut AcpConnection) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<R>> + Send + '_>>,
+        F: for<'a> FnOnce(
+            &'a mut AcpConnection,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<R>> + Send + 'a>>,
     {
-        let mut state = self.state.write().await;
-        let conn = state.active
-            .get_mut(thread_id)
-            .ok_or_else(|| anyhow!("no connection for thread {thread_id}"))?;
-        f(conn).await
+        let conn = {
+            let state = self.state.read().await;
+            state
+                .active
+                .get(thread_id)
+                .cloned()
+                .ok_or_else(|| anyhow!("no connection for thread {thread_id}"))?
+        };
+
+        let mut conn = conn.lock().await;
+        f(&mut conn).await
     }
 
     pub async fn cleanup_idle(&self, ttl_secs: u64) {
         let cutoff = Instant::now() - std::time::Duration::from_secs(ttl_secs);
+
+        let snapshot: Vec<(String, Arc<Mutex<AcpConnection>>)> = {
+            let state = self.state.read().await;
+            state
+                .active
+                .iter()
+                .map(|(k, v)| (k.clone(), Arc::clone(v)))
+                .collect()
+        };
+
+        let mut stale = Vec::new();
+        for (key, conn) in snapshot {
+            // Skip active sessions for this cleanup round instead of waiting on
+            // their per-connection mutex. A busy session is not idle.
+            let Ok(conn) = conn.try_lock() else {
+                continue;
+            };
+            if conn.last_active < cutoff || !conn.alive() {
+                stale.push((key, conn.acp_session_id.clone()));
+            }
+        }
+
+        if stale.is_empty() {
+            return;
+        }
+
         let mut state = self.state.write().await;
-        let stale: Vec<String> = state.active
-            .iter()
-            .filter(|(_, c)| c.last_active < cutoff || !c.alive())
-            .map(|(k, _)| k.clone())
-            .collect();
-        for key in stale {
-            info!(thread_id = %key, "cleaning up idle session");
-            suspend_entry(&mut state, &key);
+        for (key, sid) in stale {
+            if state.active.remove(&key).is_some() {
+                info!(thread_id = %key, "cleaning up idle session");
+                if let Some(sid) = sid {
+                    state.suspended.insert(key, sid);
+                }
+            }
         }
     }
 
@@ -140,17 +217,5 @@ impl SessionPool {
         let count = state.active.len();
         state.active.clear(); // Drop impl kills process groups
         info!(count, "pool shutdown complete");
-    }
-}
-
-/// Suspend a connection: save its sessionId to the suspended map and remove
-/// from active. The connection is dropped, triggering process group kill.
-fn suspend_entry(state: &mut PoolState, thread_id: &str) {
-    if let Some(conn) = state.active.remove(thread_id) {
-        if let Some(sid) = &conn.acp_session_id {
-            info!(thread_id, session_id = %sid, "suspending session");
-            state.suspended.insert(thread_id.to_string(), sid.clone());
-        }
-        // conn dropped here → Drop impl kills process group
     }
 }
