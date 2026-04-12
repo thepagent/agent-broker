@@ -52,6 +52,9 @@ pub struct AcpConnection {
     pub acp_session_id: Option<String>,
     pub last_active: Instant,
     pub session_reset: bool,
+    /// Context window usage from the latest `usage_update` ACP notification.
+    pub context_used: Arc<std::sync::atomic::AtomicU64>,
+    pub context_size: Arc<std::sync::atomic::AtomicU64>,
     _reader_handle: JoinHandle<()>,
 }
 
@@ -86,11 +89,15 @@ impl AcpConnection {
             Arc::new(Mutex::new(HashMap::new()));
         let notify_tx: Arc<Mutex<Option<mpsc::UnboundedSender<JsonRpcMessage>>>> =
             Arc::new(Mutex::new(None));
+        let context_used = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let context_size = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
         let reader_handle = {
             let pending = pending.clone();
             let notify_tx = notify_tx.clone();
             let stdin_clone = stdin.clone();
+            let ctx_used = context_used.clone();
+            let ctx_size = context_size.clone();
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stdout);
                 let mut line = String::new();
@@ -127,6 +134,22 @@ impl AcpConnection {
                             }
                         }
                         continue;
+                    }
+
+                    // Capture usage_update for context window tracking
+                    if msg.method.as_deref() == Some("session/update") {
+                        if let Some(upd) = msg.params.as_ref()
+                            .and_then(|p| p.get("update"))
+                        {
+                            if upd.get("sessionUpdate").and_then(|v| v.as_str()) == Some("usage_update") {
+                                if let Some(used) = upd.get("used").and_then(|v| v.as_u64()) {
+                                    ctx_used.store(used, Ordering::Relaxed);
+                                }
+                                if let Some(size) = upd.get("size").and_then(|v| v.as_u64()) {
+                                    ctx_size.store(size, Ordering::Relaxed);
+                                }
+                            }
+                        }
                     }
 
                     // Response (has id) → resolve pending AND forward to subscriber
@@ -186,6 +209,8 @@ impl AcpConnection {
             acp_session_id: None,
             last_active: Instant::now(),
             session_reset: false,
+            context_used,
+            context_size,
             _reader_handle: reader_handle,
         })
     }

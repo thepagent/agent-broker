@@ -63,6 +63,7 @@ pub enum AcpEvent {
     ToolStart { id: String, title: String },
     ToolDone { id: String, title: String, status: String },
     Status,
+    UsageUpdate { used: u64, size: u64 },
 }
 
 pub fn classify_notification(msg: &JsonRpcMessage) -> Option<AcpEvent> {
@@ -105,6 +106,11 @@ pub fn classify_notification(msg: &JsonRpcMessage) -> Option<AcpEvent> {
             }
         }
         "plan" => Some(AcpEvent::Status),
+        "usage_update" => {
+            let used = update.get("used").and_then(|v| v.as_u64()).unwrap_or(0);
+            let size = update.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(AcpEvent::UsageUpdate { used, size })
+        }
         _ => None,
     }
 }
