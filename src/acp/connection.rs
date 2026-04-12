@@ -53,6 +53,7 @@ pub struct AcpConnection {
     pub last_active: Instant,
     pub session_reset: bool,
     /// Context window usage from the latest `usage_update` ACP notification.
+    /// A value of 0 means no `usage_update` has been received yet (unknown).
     pub context_used: Arc<std::sync::atomic::AtomicU64>,
     pub context_size: Arc<std::sync::atomic::AtomicU64>,
     _reader_handle: JoinHandle<()>,

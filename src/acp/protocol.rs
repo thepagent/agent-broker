@@ -107,8 +107,8 @@ pub fn classify_notification(msg: &JsonRpcMessage) -> Option<AcpEvent> {
         }
         "plan" => Some(AcpEvent::Status),
         "usage_update" => {
-            let used = update.get("used").and_then(|v| v.as_u64()).unwrap_or(0);
-            let size = update.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
+            let used = update.get("used").and_then(|v| v.as_u64())?;
+            let size = update.get("size").and_then(|v| v.as_u64())?;
             Some(AcpEvent::UsageUpdate { used, size })
         }
         _ => None,
