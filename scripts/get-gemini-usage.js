@@ -38,8 +38,9 @@ child.stdout.on('data', chunk => {
           ok: true,
           current_model: current,
           available_models: available,
-          tier: 'Google Gemini Pro',
+          tier: 'Google One AI Premium',
           rate_limit: '1000 RPM',
+          account: 'xsx042388@gmail.com',
           status_pct: 100,
           ts: new Date().toISOString(),
         }));
