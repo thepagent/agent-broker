@@ -10,6 +10,8 @@ pub struct Config {
     #[serde(default)]
     pub pool: PoolConfig,
     #[serde(default)]
+    pub session: SessionConfig,
+    #[serde(default)]
     pub reactions: ReactionsConfig,
     #[serde(default)]
     pub stt: SttConfig,
@@ -137,6 +139,22 @@ fn default_error_hold_ms() -> u64 { 2_500 }
 impl Default for PoolConfig {
     fn default() -> Self {
         Self { max_sessions: default_max_sessions(), session_ttl_hours: default_ttl_hours() }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SessionConfig {
+    /// Directory where session metadata and transcripts are stored.
+    /// Defaults to `/data/sessions` which is inside the PVC mount.
+    #[serde(default = "default_session_dir")]
+    pub dir: String,
+}
+
+fn default_session_dir() -> String { "/data/sessions".into() }
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self { dir: default_session_dir() }
     }
 }
 

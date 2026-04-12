@@ -4,6 +4,7 @@ mod discord;
 mod error_display;
 mod format;
 mod reactions;
+mod session;
 mod stt;
 
 use serenity::prelude::*;
@@ -36,7 +37,13 @@ async fn main() -> anyhow::Result<()> {
         "config loaded"
     );
 
-    let pool = Arc::new(acp::SessionPool::new(cfg.agent, cfg.pool.max_sessions));
+    let store = Arc::new(session::SessionStore::new(&cfg.session.dir));
+    if let Err(e) = store.init().await {
+        anyhow::bail!("failed to initialise session store at {}: {e}", cfg.session.dir);
+    }
+    info!(dir = %cfg.session.dir, "session store ready");
+
+    let pool = Arc::new(acp::SessionPool::new(cfg.agent, cfg.pool.max_sessions, store.clone()));
     let ttl_secs = cfg.pool.session_ttl_hours * 3600;
 
     let allowed_channels = parse_id_set(&cfg.discord.allowed_channels, "allowed_channels")?;
@@ -61,6 +68,7 @@ async fn main() -> anyhow::Result<()> {
 
     let handler = discord::Handler {
         pool: pool.clone(),
+        store: store.clone(),
         allowed_channels,
         allowed_users,
         reactions_config: cfg.reactions,

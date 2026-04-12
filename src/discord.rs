@@ -1,5 +1,6 @@
 use crate::acp::{classify_notification, AcpEvent, ContentBlock, SessionPool};
 use crate::config::{ReactionsConfig, SttConfig};
+use crate::session::{SessionKey, SessionStore};
 use crate::error_display::{format_coded_error, format_user_error};
 use crate::format;
 use crate::reactions::StatusReactionController;
@@ -29,6 +30,7 @@ static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
 
 pub struct Handler {
     pub pool: Arc<SessionPool>,
+    pub store: Arc<SessionStore>,
     pub allowed_channels: HashSet<u64>,
     pub allowed_users: HashSet<u64>,
     pub reactions_config: ReactionsConfig,
@@ -181,13 +183,25 @@ impl EventHandler for Handler {
             }
         };
 
-        let thread_key = thread_id.to_string();
-        if let Err(e) = self.pool.get_or_create(&thread_key).await {
+        let session_key = SessionKey::discord(thread_id).to_string();
+        if let Err(e) = self.pool.get_or_create(&session_key).await {
             let msg = format_user_error(&e.to_string());
             let _ = edit(&ctx, thread_channel, thinking_msg.id, &format!("⚠️ {}", msg)).await;
             error!("pool error: {e}");
             return;
         }
+
+        // Record the user's message to the persistent transcript.
+        // We use `prompt` (mention-stripped) rather than `prompt_with_sender`
+        // so the stored text is clean and readable.
+        let store = self.store.clone();
+        let key_for_record = session_key.clone();
+        let user_text = prompt.clone();
+        tokio::spawn(async move {
+            if let Err(e) = store.append_message(&key_for_record, "user", &user_text).await {
+                tracing::warn!(error = %e, "failed to record user message to transcript");
+            }
+        });
 
         // Create reaction controller on the user's original message
         let reactions = Arc::new(StatusReactionController::new(
@@ -200,10 +214,11 @@ impl EventHandler for Handler {
         ));
         reactions.set_queued().await;
 
-        // Stream prompt with live edits (pass content blocks instead of just text)
+        // Stream prompt with live edits (pass content blocks instead of just text).
+        // Returns the final response text so we can persist it.
         let result = stream_prompt(
             &self.pool,
-            &thread_key,
+            &session_key,
             content_blocks,
             &ctx,
             thread_channel,
@@ -212,13 +227,30 @@ impl EventHandler for Handler {
         )
         .await;
 
-        match &result {
-            Ok(()) => reactions.set_done().await,
-            Err(_) => reactions.set_error().await,
+        let succeeded = result.is_ok();
+
+        if succeeded {
+            reactions.set_done().await;
+        } else {
+            reactions.set_error().await;
+        }
+
+        // Record the assistant's response to the persistent transcript.
+        if let Ok(ref response_text) = result {
+            if !response_text.is_empty() {
+                let store = self.store.clone();
+                let key_for_record = session_key.clone();
+                let text = response_text.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = store.append_message(&key_for_record, "assistant", &text).await {
+                        tracing::warn!(error = %e, "failed to record assistant message to transcript");
+                    }
+                });
+            }
         }
 
         // Hold emoji briefly then clear
-        let hold_ms = if result.is_ok() {
+        let hold_ms = if succeeded {
             self.reactions_config.timing.done_hold_ms
         } else {
             self.reactions_config.timing.error_hold_ms
@@ -416,16 +448,16 @@ async fn edit(ctx: &Context, ch: ChannelId, msg_id: MessageId, content: &str) ->
 
 async fn stream_prompt(
     pool: &SessionPool,
-    thread_key: &str,
+    session_key: &str,
     content_blocks: Vec<ContentBlock>,
     ctx: &Context,
     channel: ChannelId,
     msg_id: MessageId,
     reactions: Arc<StatusReactionController>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
     let reactions = reactions.clone();
 
-    pool.with_connection(thread_key, |conn| {
+    pool.with_connection(session_key, |conn| {
         let content_blocks = content_blocks.clone();
         let ctx = ctx.clone();
         let reactions = reactions.clone();
@@ -598,7 +630,10 @@ async fn stream_prompt(
                 }
             }
 
-            Ok(())
+            // Return the plain text portion of the response for transcript recording.
+            // We return text_buf (not final_content which includes tool lines) so the
+            // stored transcript contains clean, readable assistant text.
+            Ok(text_buf)
         })
     })
     .await

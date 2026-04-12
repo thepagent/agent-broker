@@ -316,4 +316,48 @@ impl AcpConnection {
     pub fn alive(&self) -> bool {
         !self._reader_handle.is_finished()
     }
+
+    /// Inject previous conversation history into a freshly created session.
+    ///
+    /// This is called after [`session_new`] when restoring a session from the
+    /// on-disk store (e.g. after a pod restart). The transcript is sent as a
+    /// single prompt; the agent's acknowledgment response is silently drained
+    /// so nothing is forwarded to the platform layer.
+    ///
+    /// `history` is a slice of `(role, content)` pairs where `role` is either
+    /// `"user"` or `"assistant"`.  At most the last 20 messages are meaningful
+    /// (the store already trims to that limit).
+    pub async fn session_prime_context(&mut self, history: &[(String, String)]) -> Result<()> {
+        if history.is_empty() {
+            return Ok(());
+        }
+
+        let mut ctx = String::from(
+            "[Context restoration: the following is the previous conversation history. \
+             Continue from where it left off.]\n\n",
+        );
+        for (role, content) in history {
+            let label = if role == "user" { "User" } else { "Assistant" };
+            ctx.push_str(&format!("{label}: {content}\n\n"));
+        }
+        ctx.push_str("[End of history.]");
+
+        let (mut rx, _) = self.session_prompt(vec![ContentBlock::Text { text: ctx }]).await?;
+
+        // Drain all streaming events silently; stop on final response (id set).
+        let drain = async {
+            while let Some(msg) = rx.recv().await {
+                if msg.id.is_some() {
+                    break;
+                }
+            }
+        };
+        // 60-second guard so a non-responsive agent doesn't block the pool forever.
+        if tokio::time::timeout(std::time::Duration::from_secs(60), drain).await.is_err() {
+            tracing::warn!("timeout waiting for context prime response; continuing anyway");
+        }
+
+        self.prompt_done().await;
+        Ok(())
+    }
 }
