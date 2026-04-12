@@ -8,7 +8,7 @@ RUN touch src/main.rs && cargo build --release
 
 # --- Runtime stage ---
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl procps unzip && rm -rf /var/lib/apt/lists/*
 
 # Install kiro-cli (auto-detect arch, copy binary directly)
 RUN ARCH=$(dpkg --print-architecture) && \
