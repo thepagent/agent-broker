@@ -2,6 +2,7 @@
 bot_token = "${DISCORD_BOT_TOKEN}"
 allowed_channels = ["1234567890"]
 # allowed_users = ["<YOUR_DISCORD_USER_ID>"]  # empty or omitted = allow all users
+# allowed_bots_from = ["<DISPATCHER_BOT_ID>"]  # bot user IDs to accept messages from (default: reject all bots)
 
 [agent]
 command = "kiro-cli"

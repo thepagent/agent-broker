@@ -31,6 +31,7 @@ pub struct Handler {
     pub pool: Arc<SessionPool>,
     pub allowed_channels: HashSet<u64>,
     pub allowed_users: HashSet<u64>,
+    pub allowed_bots_from: HashSet<u64>,
     pub reactions_config: ReactionsConfig,
     pub stt_config: SttConfig,
 }
@@ -38,11 +39,23 @@ pub struct Handler {
 #[async_trait]
 impl EventHandler for Handler {
     async fn message(&self, ctx: Context, msg: Message) {
-        if msg.author.bot {
-            return;
-        }
-
         let bot_id = ctx.cache.current_user().id;
+
+        if msg.author.bot {
+            // Never process our own messages (self-loop guard)
+            if msg.author.id == bot_id {
+                return;
+            }
+            // Only accept messages from explicitly allowed bots
+            if !self.allowed_bots_from.contains(&msg.author.id.get()) {
+                return;
+            }
+            debug!(
+                author_id = %msg.author.id,
+                author_name = %msg.author.name,
+                "accepted message from allowed bot"
+            );
+        }
 
         let channel_id = msg.channel_id.get();
         let in_allowed_channel =

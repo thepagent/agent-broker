@@ -48,6 +48,10 @@ pub struct DiscordConfig {
     pub allowed_channels: Vec<String>,
     #[serde(default)]
     pub allowed_users: Vec<String>,
+    /// Bot user IDs whose messages should be accepted instead of ignored.
+    /// When empty (default), all bot messages are rejected.
+    #[serde(default)]
+    pub allowed_bots_from: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -24,6 +24,12 @@ data:
     {{- end }}
     {{- end }}
     allowed_users = {{ $cfg.discord.allowedUsers | default list | toJson }}
+    {{- range $cfg.discord.allowedBotsFrom }}
+    {{- if regexMatch "e\\+|E\\+" (toString .) }}
+    {{- fail (printf "discord.allowedBotsFrom contains a mangled ID: %s — use --set-string instead of --set for bot IDs" (toString .)) }}
+    {{- end }}
+    {{- end }}
+    allowed_bots_from = {{ $cfg.discord.allowedBotsFrom | default list | toJson }}
 
     [agent]
     command = "{{ $cfg.command }}"

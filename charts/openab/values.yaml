@@ -60,6 +60,8 @@ agents:
         - "YOUR_CHANNEL_ID"
       # ⚠️ Use --set-string for user IDs to avoid float64 precision loss
       allowedUsers: []  # empty = allow all users (default)
+      # ⚠️ Use --set-string for bot IDs to avoid float64 precision loss
+      allowedBotsFrom: []  # bot user IDs to accept messages from (default: reject all bots)
     workingDir: /home/agent
     env: {}
     envFrom: []
