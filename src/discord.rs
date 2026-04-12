@@ -1,5 +1,5 @@
 use crate::acp::{classify_notification, AcpEvent, ContentBlock, SessionPool};
-use crate::config::{ReactionsConfig, SttConfig};
+use crate::config::{ReactionsConfig, SttConfig, ToolDisplay};
 use crate::error_display::{format_coded_error, format_user_error};
 use crate::format;
 use crate::reactions::StatusReactionController;
@@ -614,6 +614,12 @@ fn sanitize_title(title: &str) -> String {
     title.replace('\r', "").replace('\n', " ; ").replace('`', "'")
 }
 
+/// For `ToolDisplay::Compact` mode: return the segment before the first `:`
+/// trimmed. Falls back to the whole title if there is no colon.
+fn compact_title(title: &str) -> String {
+    title.split(':').next().unwrap_or(title).trim().to_string()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToolState {
     Running,
@@ -778,5 +784,14 @@ mod tests {
     fn invalid_data_returns_error() {
         let garbage = vec![0x00, 0x01, 0x02, 0x03];
         assert!(resize_and_compress(&garbage).is_err());
+    }
+
+    #[test]
+    fn compact_title_strips_after_colon() {
+        assert_eq!(compact_title("Running: curl -s url"), "Running");
+        assert_eq!(compact_title("Edit: /path/to/file.rs"), "Edit");
+        assert_eq!(compact_title("Read file: /etc/passwd"), "Read file");
+        assert_eq!(compact_title("Terminal"), "Terminal");
+        assert_eq!(compact_title("  Running:  curl  "), "Running");
     }
 }
