@@ -130,7 +130,9 @@ impl EventHandler for Handler {
                     PoolProgress::Initializing => "⏳ Initializing...",
                     PoolProgress::CreatingSession => "⏳ Creating session...",
                 };
-                let _ = edit(&ctx, progress_channel, progress_msg_id, status).await;
+                if let Err(e) = edit(&ctx, progress_channel, progress_msg_id, status).await {
+                    tracing::warn!("failed to update progress message: {e}");
+                }
             }
         }).await {
             error!("pool error: {e}");
@@ -347,9 +349,7 @@ fn compose_display(tool_lines: &[String], text: &str) -> String {
 }
 
 fn sanitize_pool_error(e: &anyhow::Error) -> String {
-    let msg = e.to_string();
-    let lower = msg.to_lowercase();
-    // Only pass through known safe complete phrases
+    let lower = e.to_string().to_lowercase();
     let safe_phrases = [
         "timeout waiting for",
         "connection closed",
@@ -359,11 +359,11 @@ fn sanitize_pool_error(e: &anyhow::Error) -> String {
         "auth expired",
         "json-rpc error",
     ];
-    if safe_phrases.iter().any(|p| lower.contains(p)) {
-        msg
-    } else {
-        "unexpected error (check server logs)".to_string()
-    }
+    safe_phrases
+        .iter()
+        .find(|p| lower.contains(*p))
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| "unexpected error (check server logs)".to_string())
 }
 
 fn strip_mention(content: &str) -> String {

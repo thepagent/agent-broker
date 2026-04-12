@@ -87,6 +87,9 @@ impl SessionPool {
 
         // Re-acquire write lock only to insert
         let mut conns = self.connections.write().await;
+        if conns.len() >= self.max_sessions && !conns.contains_key(thread_id) {
+            return Err(anyhow!("pool exhausted ({} sessions)", self.max_sessions));
+        }
         conns.insert(thread_id.to_string(), conn);
         Ok(())
     }
