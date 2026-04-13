@@ -3,6 +3,7 @@ mod config;
 mod discord;
 mod error_display;
 mod format;
+mod markdown;
 mod reactions;
 mod stt;
 
@@ -65,6 +66,7 @@ async fn main() -> anyhow::Result<()> {
         allowed_users,
         reactions_config: cfg.reactions,
         stt_config: cfg.stt.clone(),
+        markdown_config: cfg.markdown,
     };
 
     let intents = GatewayIntents::GUILD_MESSAGES
