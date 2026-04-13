@@ -600,7 +600,7 @@ async fn stream_prompt(
                 // Append context footer to the last chunk if it fits (char count, not bytes).
                 let content = if i == last_idx {
                     if let Some(ref footer) = ctx_footer {
-                        if chunk.chars().count() + footer.chars().count() < 2000 {
+                        if chunk.chars().count() + footer.chars().count() <= 2000 {
                             format!("{chunk}{footer}")
                         } else {
                             chunk.to_string()
@@ -620,8 +620,9 @@ async fn stream_prompt(
             // If footer didn't fit in the last chunk, send as a separate message.
             if let Some(ref footer) = ctx_footer {
                 let last_chunk = chunks.last().map(|c| c.as_str()).unwrap_or("");
-                if last_chunk.chars().count() + footer.chars().count() >= 2000 {
-                    let _ = channel.say(&ctx.http, footer).await;
+                if last_chunk.chars().count() + footer.chars().count() > 2000 {
+                    let standalone = footer.trim_start_matches('\n');
+                    let _ = channel.say(&ctx.http, standalone).await;
                 }
             }
 
