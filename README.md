@@ -85,7 +85,7 @@ The bot creates a thread. After that, just type in the thread — no @mention ne
 
 ## Pluggable Agent Backends
 
-Supports Kiro CLI, Claude Code, Codex, Gemini, and any ACP-compatible CLI.
+Supports Kiro CLI, Claude Code, Codex, Gemini, GitHub Copilot, and any ACP-compatible CLI.
 
 | Agent key | CLI | ACP Adapter | Auth |
 |-----------|-----|-------------|------|
