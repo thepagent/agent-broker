@@ -9,6 +9,7 @@ use image::ImageReader;
 use std::io::Cursor;
 use std::sync::LazyLock;
 use serenity::async_trait;
+use serenity::builder::{CreateAttachment as SerenityAttachment, CreateMessage};
 use serenity::model::channel::{Message, ReactionType};
 use serenity::model::gateway::Ready;
 use serenity::model::id::{ChannelId, MessageId};
@@ -16,7 +17,7 @@ use serenity::prelude::*;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::watch;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// Reusable HTTP client for downloading Discord attachments.
 /// Built once with a 30s timeout and rustls TLS (no native-tls deps).
@@ -589,12 +590,33 @@ async fn stream_prompt(
                 final_content
             };
 
+            // Extract outbound file attachments from agent response.
+            // Pattern: ![alt text](/path/to/file) — only files from allowlisted dirs.
+            let (final_content, attachments) = extract_outbound_attachments(&final_content);
+
             let chunks = format::split_message(&final_content, 2000);
             for (i, chunk) in chunks.iter().enumerate() {
                 if i == 0 {
                     let _ = edit(&ctx, channel, current_msg_id, chunk).await;
                 } else {
                     let _ = channel.say(&ctx.http, chunk).await;
+                }
+            }
+
+            // Upload extracted attachments as separate messages
+            for attach_path in &attachments {
+                match SerenityAttachment::path(attach_path).await {
+                    Ok(file) => {
+                        let msg = CreateMessage::new().add_file(file);
+                        if let Err(e) = channel.send_message(&ctx.http, msg).await {
+                            warn!(path = %attach_path.display(), error = %e, "failed to send outbound attachment");
+                        } else {
+                            info!(path = %attach_path.display(), "outbound attachment sent");
+                        }
+                    }
+                    Err(e) => {
+                        warn!(path = %attach_path.display(), error = %e, "failed to read outbound attachment");
+                    }
                 }
             }
 
@@ -651,6 +673,74 @@ fn compose_display(tool_lines: &[ToolEntry], text: &str) -> String {
     }
     out.push_str(text.trim_end());
     out
+}
+
+/// Maximum file size for outbound attachments (25 MB — Discord limit).
+const OUTBOUND_MAX_SIZE: u64 = 25 * 1024 * 1024;
+
+/// Directories from which outbound attachments are allowed.
+/// Security: prevents agents from exfiltrating arbitrary files.
+const OUTBOUND_ALLOWED_PREFIXES: &[&str] = &[
+    "/tmp/",
+    "/var/folders/",
+];
+
+/// Regex for outbound attachment markers: `![alt](/path/to/file)`
+static OUTBOUND_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"!\[[^\]]*\]\((/[^\)]+)\)").unwrap()
+});
+
+/// Scan agent response for `![...](/path/to/file)` markers.
+/// Returns (cleaned text, list of valid file paths to upload).
+/// Only files from allowlisted directories, ≤25MB, that actually exist are included.
+fn extract_outbound_attachments(text: &str) -> (String, Vec<std::path::PathBuf>) {
+    let mut attachments = Vec::new();
+    let mut paths_to_strip = Vec::new();
+
+    for cap in OUTBOUND_RE.captures_iter(text) {
+        let full_match = cap.get(0).unwrap().as_str();
+        let path_str = &cap[1];
+        let path = std::path::PathBuf::from(path_str);
+
+        // Security: only allow files from allowlisted directories
+        let allowed = OUTBOUND_ALLOWED_PREFIXES
+            .iter()
+            .any(|prefix| path_str.starts_with(prefix));
+        if !allowed {
+            warn!(path = %path_str, "outbound attachment blocked: path not in allowlist");
+            continue;
+        }
+
+        // Validate file exists and is within size limit
+        match std::fs::metadata(&path) {
+            Ok(meta) if meta.is_file() && meta.len() <= OUTBOUND_MAX_SIZE => {
+                info!(path = %path_str, size = meta.len(), "outbound attachment found");
+                attachments.push(path);
+                paths_to_strip.push(full_match.to_string());
+            }
+            Ok(meta) if meta.len() > OUTBOUND_MAX_SIZE => {
+                warn!(path = %path_str, size = meta.len(), "outbound attachment too large (>25MB)");
+            }
+            Ok(_) => {
+                warn!(path = %path_str, "outbound attachment is not a regular file");
+            }
+            Err(e) => {
+                debug!(path = %path_str, error = %e, "outbound attachment not found, keeping as text");
+            }
+        }
+    }
+
+    // Strip matched markers from text
+    let mut cleaned = text.to_string();
+    for marker in &paths_to_strip {
+        cleaned = cleaned.replace(marker, "");
+    }
+    // Clean up leftover blank lines from stripped markers
+    while cleaned.contains("\n\n\n") {
+        cleaned = cleaned.replace("\n\n\n", "\n\n");
+    }
+
+    (cleaned.trim().to_string(), attachments)
 }
 
 static MENTION_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
@@ -778,5 +868,71 @@ mod tests {
     fn invalid_data_returns_error() {
         let garbage = vec![0x00, 0x01, 0x02, 0x03];
         assert!(resize_and_compress(&garbage).is_err());
+    }
+
+    #[test]
+    fn outbound_extracts_tmp_file() {
+        // Create a temp file
+        let path = "/tmp/openab_test_outbound.png";
+        std::fs::write(path, b"fake png data").unwrap();
+
+        let text = "Here is a screenshot:\n![screenshot](/tmp/openab_test_outbound.png)\nDone.";
+        let (cleaned, attachments) = extract_outbound_attachments(text);
+
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0], std::path::PathBuf::from(path));
+        assert!(!cleaned.contains("openab_test_outbound"));
+        assert!(cleaned.contains("Here is a screenshot:"));
+        assert!(cleaned.contains("Done."));
+
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn outbound_blocks_non_allowlisted_path() {
+        let text = "![secret](/etc/passwd)";
+        let (cleaned, attachments) = extract_outbound_attachments(text);
+
+        assert!(attachments.is_empty());
+        // Blocked markers stay in text (not stripped)
+        assert!(cleaned.contains("/etc/passwd"));
+    }
+
+    #[test]
+    fn outbound_ignores_nonexistent_file() {
+        let text = "![img](/tmp/nonexistent_file_abc123.png)";
+        let (cleaned, attachments) = extract_outbound_attachments(text);
+
+        assert!(attachments.is_empty());
+        // Non-existent files stay in text as regular markdown
+        assert!(cleaned.contains("nonexistent_file_abc123"));
+    }
+
+    #[test]
+    fn outbound_handles_multiple_attachments() {
+        let p1 = "/tmp/openab_test_multi_1.png";
+        let p2 = "/tmp/openab_test_multi_2.jpg";
+        std::fs::write(p1, b"data1").unwrap();
+        std::fs::write(p2, b"data2").unwrap();
+
+        let text = format!("A ![one]({p1}) B ![two]({p2}) C");
+        let (cleaned, attachments) = extract_outbound_attachments(&text);
+
+        assert_eq!(attachments.len(), 2);
+        assert!(cleaned.contains("A"));
+        assert!(cleaned.contains("B"));
+        assert!(cleaned.contains("C"));
+
+        std::fs::remove_file(p1).ok();
+        std::fs::remove_file(p2).ok();
+    }
+
+    #[test]
+    fn outbound_no_markers_passthrough() {
+        let text = "Just regular text with no images.";
+        let (cleaned, attachments) = extract_outbound_attachments(text);
+
+        assert!(attachments.is_empty());
+        assert_eq!(cleaned, text);
     }
 }
