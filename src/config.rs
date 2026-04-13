@@ -200,3 +200,33 @@ pub fn load_config(path: &Path) -> anyhow::Result<Config> {
         .map_err(|e| anyhow::anyhow!("failed to parse {}: {e}", path.display()))?;
     Ok(config)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_display_deserializes_all_modes() {
+        let toml_full: ReactionsConfig = toml::from_str(r#"tool_display = "full""#).unwrap();
+        assert_eq!(toml_full.tool_display, ToolDisplay::Full);
+
+        let toml_compact: ReactionsConfig = toml::from_str(r#"tool_display = "compact""#).unwrap();
+        assert_eq!(toml_compact.tool_display, ToolDisplay::Compact);
+
+        let toml_none: ReactionsConfig = toml::from_str(r#"tool_display = "none""#).unwrap();
+        assert_eq!(toml_none.tool_display, ToolDisplay::None);
+    }
+
+    #[test]
+    fn tool_display_defaults_to_compact() {
+        // Empty config → all defaults, including tool_display = compact
+        let config: ReactionsConfig = toml::from_str("").unwrap();
+        assert_eq!(config.tool_display, ToolDisplay::Compact);
+    }
+
+    #[test]
+    fn tool_display_rejects_invalid_value() {
+        let result: Result<ReactionsConfig, _> = toml::from_str(r#"tool_display = "abbreviated""#);
+        assert!(result.is_err(), "invalid tool_display value must be rejected");
+    }
+}
