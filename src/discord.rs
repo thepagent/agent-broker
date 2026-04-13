@@ -816,8 +816,8 @@ mod tests {
     }
 
     #[test]
-    fn compact_title_kiro_format() {
-        // Kiro / "Verb: command" backends: extract the label before ':'
+    fn compact_title_verb_colon_format() {
+        // "Verb: command" format: extract the short label before ':'
         assert_eq!(compact_title("Running: curl -s url"), "Running");
         assert_eq!(compact_title("Edit: /path/to/file.rs"), "Edit");
         assert_eq!(compact_title("Read file: /etc/passwd"), "Read file");
