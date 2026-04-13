@@ -150,8 +150,10 @@ impl AcpConnection {
                     if let Some(crate::acp::protocol::AcpEvent::UsageUpdate { used, size }) =
                         crate::acp::protocol::classify_notification(&msg)
                     {
-                        ctx_used.store(used, Ordering::Relaxed);
+                        // Store size before used so readers that check
+                        // `context_size == 0` as "no data yet" see size first.
                         ctx_size.store(size, Ordering::Relaxed);
+                        ctx_used.store(used, Ordering::Relaxed);
                     }
 
                     // Response (has id) → resolve pending AND forward to subscriber

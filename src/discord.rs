@@ -641,7 +641,7 @@ fn format_context_footer(ctx_used: u64, ctx_size: u64) -> Option<String> {
         return None;
     }
     let pct = ((ctx_used as u128 * 100 + ctx_size as u128 / 2) / ctx_size as u128).min(100) as u64;
-    Some(format!("-# 📊 {ctx_used}/{ctx_size} tokens ({pct}%)"))
+    Some(format!("-# 📊 Context: {ctx_used}/{ctx_size} tokens ({pct}%)"))
 }
 
 /// Flatten a tool-call title into a single line that's safe to render
@@ -829,9 +829,8 @@ mod tests {
     #[test]
     fn context_footer_normal_percentage() {
         let footer = format_context_footer(31434, 1_000_000).unwrap();
-        assert!(footer.contains("31434/1000000"));
+        assert!(footer.contains("Context: 31434/1000000"));
         assert!(footer.contains("3%"));
-        // No leading newline — callers add it
         assert!(!footer.starts_with('\n'));
     }
 
