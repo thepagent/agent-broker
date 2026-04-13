@@ -598,10 +598,11 @@ async fn stream_prompt(
             let last_idx = chunks.len().saturating_sub(1);
             for (i, chunk) in chunks.iter().enumerate() {
                 // Append context footer to the last chunk if it fits (char count, not bytes).
+                // +1 accounts for the '\n' separator between chunk and footer.
                 let content = if i == last_idx {
                     if let Some(ref footer) = ctx_footer {
-                        if chunk.chars().count() + footer.chars().count() <= 2000 {
-                            format!("{chunk}{footer}")
+                        if chunk.chars().count() + 1 + footer.chars().count() <= 2000 {
+                            format!("{chunk}\n{footer}")
                         } else {
                             chunk.to_string()
                         }
@@ -620,9 +621,8 @@ async fn stream_prompt(
             // If footer didn't fit in the last chunk, send as a separate message.
             if let Some(ref footer) = ctx_footer {
                 let last_chunk = chunks.last().map(|c| c.as_str()).unwrap_or("");
-                if last_chunk.chars().count() + footer.chars().count() > 2000 {
-                    let standalone = footer.trim_start_matches('\n');
-                    let _ = channel.say(&ctx.http, standalone).await;
+                if last_chunk.chars().count() + 1 + footer.chars().count() > 2000 {
+                    let _ = channel.say(&ctx.http, footer).await;
                 }
             }
 
@@ -635,12 +635,13 @@ async fn stream_prompt(
 /// Format a context usage footer for Discord messages.
 /// Returns `None` when `ctx_size == 0` (no `usage_update` received yet).
 /// The percentage is clamped to 100 to handle `used > size` edge cases.
+/// The returned string does NOT include a leading newline — callers add it as needed.
 fn format_context_footer(ctx_used: u64, ctx_size: u64) -> Option<String> {
     if ctx_size == 0 {
         return None;
     }
     let pct = ((ctx_used as u128 * 100 + ctx_size as u128 / 2) / ctx_size as u128).min(100) as u64;
-    Some(format!("\n-# 📊 {ctx_used}/{ctx_size} tokens ({pct}%)"))
+    Some(format!("-# 📊 {ctx_used}/{ctx_size} tokens ({pct}%)"))
 }
 
 /// Flatten a tool-call title into a single line that's safe to render
@@ -830,6 +831,8 @@ mod tests {
         let footer = format_context_footer(31434, 1_000_000).unwrap();
         assert!(footer.contains("31434/1000000"));
         assert!(footer.contains("3%"));
+        // No leading newline — callers add it
+        assert!(!footer.starts_with('\n'));
     }
 
     #[test]
