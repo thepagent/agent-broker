@@ -55,6 +55,11 @@ pub struct AcpConnection {
     /// Context window usage from the latest `usage_update` ACP notification.
     /// `context_used` may legitimately be 0 (e.g., new or empty context).
     /// Treat `context_size == 0` as meaning no `usage_update` has been received yet.
+    ///
+    /// **Consistency note:** These two fields are updated via separate relaxed
+    /// atomic stores, so readers may observe a mixed snapshot (e.g., new `used`
+    /// with old `size`). This is acceptable for best-effort display purposes;
+    /// any consumer requiring a consistent pair should use the snapshot helper.
     pub context_used: Arc<std::sync::atomic::AtomicU64>,
     pub context_size: Arc<std::sync::atomic::AtomicU64>,
     _reader_handle: JoinHandle<()>,

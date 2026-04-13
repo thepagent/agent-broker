@@ -589,24 +589,25 @@ async fn stream_prompt(
                 final_content
             };
 
-            // Build context usage footer (empty string if no data).
+            // Build context usage footer.
             let ctx_size = conn.context_size.load(std::sync::atomic::Ordering::Relaxed);
-            let ctx_footer = if ctx_size > 0 {
-                let ctx_used = conn.context_used.load(std::sync::atomic::Ordering::Relaxed);
-                let pct = (ctx_used as f64 / ctx_size as f64 * 100.0).round() as u64;
-                format!("\n-# 📊 {ctx_used}/{ctx_size} tokens ({pct}%)")
-            } else {
-                String::new()
-            };
+            let ctx_used = conn.context_used.load(std::sync::atomic::Ordering::Relaxed);
+            let ctx_footer = format_context_footer(ctx_used, ctx_size);
 
             let chunks = format::split_message(&final_content, 2000);
             let last_idx = chunks.len().saturating_sub(1);
             for (i, chunk) in chunks.iter().enumerate() {
-                // Append context footer to the last chunk if it fits.
-                let content = if i == last_idx && !ctx_footer.is_empty()
-                    && chunk.len() + ctx_footer.len() < 2000
-                {
-                    format!("{chunk}{ctx_footer}")
+                // Append context footer to the last chunk if it fits (char count, not bytes).
+                let content = if i == last_idx {
+                    if let Some(ref footer) = ctx_footer {
+                        if chunk.chars().count() + footer.chars().count() < 2000 {
+                            format!("{chunk}{footer}")
+                        } else {
+                            chunk.to_string()
+                        }
+                    } else {
+                        chunk.to_string()
+                    }
                 } else {
                     chunk.to_string()
                 };
@@ -616,11 +617,29 @@ async fn stream_prompt(
                     let _ = channel.say(&ctx.http, &content).await;
                 }
             }
+            // If footer didn't fit in the last chunk, send as a separate message.
+            if let Some(ref footer) = ctx_footer {
+                let last_chunk = chunks.last().map(|c| c.as_str()).unwrap_or("");
+                if last_chunk.chars().count() + footer.chars().count() >= 2000 {
+                    let _ = channel.say(&ctx.http, footer).await;
+                }
+            }
 
             Ok(())
         })
     })
     .await
+}
+
+/// Format a context usage footer for Discord messages.
+/// Returns `None` when `ctx_size == 0` (no `usage_update` received yet).
+/// The percentage is clamped to 100 to handle `used > size` edge cases.
+fn format_context_footer(ctx_used: u64, ctx_size: u64) -> Option<String> {
+    if ctx_size == 0 {
+        return None;
+    }
+    let pct = ((ctx_used as u128 * 100 + ctx_size as u128 / 2) / ctx_size as u128).min(100) as u64;
+    Some(format!("\n-# 📊 {ctx_used}/{ctx_size} tokens ({pct}%)"))
 }
 
 /// Flatten a tool-call title into a single line that's safe to render
@@ -797,5 +816,31 @@ mod tests {
     fn invalid_data_returns_error() {
         let garbage = vec![0x00, 0x01, 0x02, 0x03];
         assert!(resize_and_compress(&garbage).is_err());
+    }
+
+    #[test]
+    fn context_footer_none_when_size_zero() {
+        assert!(format_context_footer(0, 0).is_none());
+        assert!(format_context_footer(500, 0).is_none());
+    }
+
+    #[test]
+    fn context_footer_normal_percentage() {
+        let footer = format_context_footer(31434, 1_000_000).unwrap();
+        assert!(footer.contains("31434/1000000"));
+        assert!(footer.contains("3%"));
+    }
+
+    #[test]
+    fn context_footer_clamps_over_100() {
+        // used > size should clamp to 100%
+        let footer = format_context_footer(1_200_000, 1_000_000).unwrap();
+        assert!(footer.contains("100%"));
+    }
+
+    #[test]
+    fn context_footer_100_percent() {
+        let footer = format_context_footer(1_000_000, 1_000_000).unwrap();
+        assert!(footer.contains("100%"));
     }
 }
