@@ -107,7 +107,8 @@ impl ContentBlock {
 
 pub struct AcpConnection {
     _proc: Child,
-    child_pid: i32,
+    /// PID of the direct child, used as the process group ID for cleanup.
+    child_pgid: Option<i32>,
     stdin: Arc<Mutex<ChildStdin>>,
     next_id: AtomicU64,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<JsonRpcMessage>>>>,
@@ -135,10 +136,14 @@ impl AcpConnection {
             .stderr(std::process::Stdio::null())
             .current_dir(working_dir);
         // Create a new process group so we can kill the entire tree.
-        // SAFETY: setpgid is async-signal-safe and called before exec.
+        // SAFETY: setpgid is async-signal-safe (POSIX.1-2008) and called
+        // before exec. Return value checked — failure means the child won't
+        // have its own process group, so kill(-pgid) would be unsafe.
         unsafe {
             cmd.pre_exec(|| {
-                libc::setpgid(0, 0);
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
                 Ok(())
             });
         }
@@ -148,7 +153,8 @@ impl AcpConnection {
         let mut proc = cmd
             .spawn()
             .map_err(|e| anyhow!("failed to spawn {command}: {e}"))?;
-        let child_pid = proc.id().unwrap_or(0) as i32;
+        let child_pgid = proc.id()
+            .and_then(|pid| i32::try_from(pid).ok());
 
         let stdout = proc.stdout.take().ok_or_else(|| anyhow!("no stdout"))?;
         let stdin = proc.stdin.take().ok_or_else(|| anyhow!("no stdin"))?;
@@ -255,7 +261,7 @@ impl AcpConnection {
 
         Ok(Self {
             _proc: proc,
-            child_pid,
+            child_pgid,
             stdin,
             next_id: AtomicU64::new(1),
             pending,
@@ -420,18 +426,19 @@ impl AcpConnection {
     }
 
     /// Kill the entire process group: SIGTERM → SIGKILL.
+    /// Uses std::thread (not tokio::spawn) so SIGKILL fires even during
+    /// runtime shutdown or panic unwinding.
     fn kill_process_group(&mut self) {
-        let pid = self.child_pid;
-        if pid <= 0 {
-            return;
-        }
+        let pgid = match self.child_pgid {
+            Some(pid) if pid > 0 => pid,
+            _ => return,
+        };
         // Stage 1: SIGTERM the process group
-        unsafe { libc::kill(-pid, libc::SIGTERM); }
-        // Stage 2: SIGKILL after brief grace (best-effort, non-blocking)
-        let pid_copy = pid;
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-            unsafe { libc::kill(-pid_copy, libc::SIGKILL); }
+        unsafe { libc::kill(-pgid, libc::SIGTERM); }
+        // Stage 2: SIGKILL after brief grace (std::thread survives runtime shutdown)
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+            unsafe { libc::kill(-pgid, libc::SIGKILL); }
         });
     }
 }
