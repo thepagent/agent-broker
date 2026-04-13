@@ -24,7 +24,43 @@ helm install openab openab/openab \
 
 > Set `agents.kiro.enabled=false` to disable the default Kiro agent.
 
+## Recommended Helm configuration
+
+For real deployments, it is often useful to configure Codex runtime behavior explicitly instead of relying on the default `args = []`.
+
+```yaml
+agents:
+  codex:
+    image: ghcr.io/openabdev/openab-codex:latest
+    command: codex-acp
+    workingDir: /home/node
+    args:
+      - -c
+      - approval_policy="never"
+      - -c
+      - sandbox_mode="workspace-write"
+      - -c
+      - sandbox_workspace_write.network_access=true
+    agentsMd: |
+      Always reply in Traditional Chinese.
+      Always provide a clear completion message when a task finishes.
+```
+
+- `agents.codex.args` is passed through to Codex and becomes the `args` array in the generated `config.toml`.
+- `agents.codex.agentsMd` is mounted into the container as `AGENTS.md`, which is the supported way to persist project- or agent-specific instructions across pod restarts.
+
+If your agent needs to run networked shell commands such as `gh issue view`, `git fetch`, or API calls, make sure the selected Codex sandbox/approval settings actually allow that in your runtime.
+
+The safest working configuration depends on your container runtime. `workspace-write` is usually a good starting point, but you should verify that your environment supports it correctly before assuming Codex itself is misconfigured.
+
+For the underlying Codex settings, see the official documentation:
+
+- [Codex config.toml reference](https://developers.openai.com/codex/config-reference#configtoml)
+- [Codex sandbox and approvals](https://developers.openai.com/codex/agent-approvals-security#sandbox-and-approvals)
+
 ## Manual config.toml
+
+A minimal configuration looks like this:
 
 ```toml
 [agent]
@@ -33,8 +69,43 @@ args = []
 working_dir = "/home/node"
 ```
 
+A more explicit configuration for networked shell usage looks like this:
+
+```toml
+[agent]
+command = "codex-acp"
+args = [
+  "-c", "approval_policy=\"never\"",
+  "-c", "sandbox_mode=\"workspace-write\"",
+  "-c", "sandbox_workspace_write.network_access=true",
+]
+working_dir = "/home/node"
+```
+
 ## Authentication
+
+Authenticate Codex itself with:
 
 ```bash
 kubectl exec -it deployment/openab-codex -- codex login --device-auth
 ```
+
+If you also want to use tools such as `gh` inside the agent container, make sure they are authenticated inside the same environment and that `HOME` matches the agent working directory.
+
+```bash
+kubectl exec -it deployment/openab-codex -- env HOME=/home/node gh auth login
+```
+
+## Troubleshooting
+
+If the bot replies partially and then stops, or a Discord thread appears stuck after a networked shell command:
+
+1. Inspect the generated config inside the pod and confirm that your Helm values rendered the expected Codex args.
+
+```bash
+kubectl exec -it deployment/openab-codex -- cat /etc/openab/config.toml
+```
+
+2. Verify that the selected sandbox mode works correctly in your container runtime.
+
+3. If you changed the configuration after a stuck request, retry from a new Discord thread so you do not inherit the previous blocked session.
