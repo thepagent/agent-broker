@@ -70,8 +70,30 @@ helm install openab openab/openab \
   --set agents.cursor.command=cursor-agent \
   --set 'agents.cursor.args={acp}' \
   --set agents.cursor.persistence.enabled=true \
-  --set agents.cursor.workingDir=/home/node
+  --set agents.cursor.workingDir=/home/agent
 ```
+
+## Model Selection
+
+List available models:
+
+```bash
+cursor-agent --list-models
+# or
+cursor-agent models
+```
+
+To specify a model, pass `--model` as an arg:
+
+```toml
+[agent]
+command = "cursor-agent"
+args = ["acp", "--model", "auto"]
+```
+
+In ACP mode, `--model` can be appended after `acp`. If omitted, the account default is used.
+
+To verify which model is active, ask the agent "who are you" — the underlying model will typically self-identify (e.g. "I am Gemini, a large language model built by Google.").
 
 ## Known Limitations
 

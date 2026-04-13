@@ -16,11 +16,10 @@ RUN ARCH=$(dpkg --print-architecture) && \
     if [ "$ARCH" = "arm64" ]; then ARCH=arm64; else ARCH=x64; fi && \
     curl -fSL "https://downloads.cursor.com/lab/${CURSOR_VERSION}/linux/${ARCH}/agent-cli-package.tar.gz" \
       -o /tmp/cursor.tar.gz && \
-    mkdir -p /tmp/cursor-agent && \
-    tar xzf /tmp/cursor.tar.gz -C /tmp/cursor-agent && \
-    cp /tmp/cursor-agent/cursor-agent /usr/local/bin/ && \
-    chmod +x /usr/local/bin/cursor-agent && \
-    rm -rf /tmp/cursor-agent /tmp/cursor.tar.gz
+    tar xzf /tmp/cursor.tar.gz -C /opt && \
+    mv /opt/dist-package /opt/cursor-agent && \
+    ln -s /opt/cursor-agent/cursor-agent /usr/local/bin/cursor-agent && \
+    rm /tmp/cursor.tar.gz
 
 # Install gh CLI (for auth and token management)
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
