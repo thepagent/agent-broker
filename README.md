@@ -93,7 +93,7 @@ Supports Kiro CLI, Claude Code, Codex, Gemini, and any ACP-compatible CLI.
 | `codex` | Codex | [@zed-industries/codex-acp](https://github.com/zed-industries/codex-acp) | `codex login --device-auth` |
 | `claude` | Claude Code | [@agentclientprotocol/claude-agent-acp](https://github.com/agentclientprotocol/claude-agent-acp) | `claude setup-token` |
 | `gemini` | Gemini CLI | Native `gemini --acp` | Google OAuth or `GEMINI_API_KEY` |
-| `copilot` | GitHub Copilot CLI | Native `copilot --acp` | `gh auth login` or `copilot auth` |
+| `copilot` | GitHub Copilot CLI | Native `copilot --acp` | `gh auth login` (GitHub OAuth) |
 
 ### Helm Install (recommended)
 
@@ -167,13 +167,14 @@ working_dir = "/home/node"
 [agent]
 command = "gemini"
 args = ["--acp"]
+working_dir = "/home/node"
+env = { GEMINI_API_KEY = "${GEMINI_API_KEY}" }
 
 # GitHub Copilot (native ACP — requires copilot CLI in PATH)
 [agent]
 command = "copilot"
 args = ["--acp"]
 working_dir = "/home/node"
-env = { GEMINI_API_KEY = "${GEMINI_API_KEY}" }
 ```
 
 ## Configuration Reference
