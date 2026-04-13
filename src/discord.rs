@@ -616,10 +616,33 @@ fn sanitize_title(title: &str) -> String {
     title.replace('\r', "").replace('\n', " ; ").replace('`', "'")
 }
 
-/// For `ToolDisplay::Compact` mode: return the segment before the first `:`
-/// trimmed. Falls back to the whole title if there is no colon.
+/// For `ToolDisplay::Compact` mode: return a short label for the tool call.
+///
+/// Two title formats are in use across ACP backends:
+///
+/// - **`"Verb: command"` (Kiro and similar):** the segment before `:` is a
+///   short semantic label ("Running", "Edit", "Read file"). Detected when the
+///   colon is NOT a URL scheme separator (i.e. not followed by `//`) and the
+///   prefix is short (≤ 3 words, ≤ 20 chars).
+/// - **Raw command (claude-agent-acp):** the title is the shell command itself
+///   ("curl -s https://...", "git status"). Colons appear inside URLs, so
+///   splitting naively produces garbage ("curl -s https"). We fall back to the
+///   first word (the executable name).
 fn compact_title(title: &str) -> String {
-    title.split(':').next().unwrap_or(title).trim().to_string()
+    if let Some(idx) = title.find(':') {
+        // A URL scheme separator looks like "://"; skip it so "curl -s https://..."
+        // doesn't yield a garbled "curl -s https" prefix.
+        if !title[idx..].starts_with("://") {
+            let prefix = title[..idx].trim();
+            let word_count = prefix.split_whitespace().count();
+            // Accept as a semantic label: ≤ 3 words and ≤ 20 chars
+            if word_count <= 3 && prefix.len() <= 20 {
+                return prefix.to_string();
+            }
+        }
+    }
+    // Fallback: first word (executable name), safe for raw-command titles
+    title.split_whitespace().next().unwrap_or(title).to_string()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -793,12 +816,28 @@ mod tests {
     }
 
     #[test]
-    fn compact_title_strips_after_colon() {
+    fn compact_title_kiro_format() {
+        // Kiro / "Verb: command" backends: extract the label before ':'
         assert_eq!(compact_title("Running: curl -s url"), "Running");
         assert_eq!(compact_title("Edit: /path/to/file.rs"), "Edit");
         assert_eq!(compact_title("Read file: /etc/passwd"), "Read file");
-        assert_eq!(compact_title("Terminal"), "Terminal");
         assert_eq!(compact_title("  Running:  curl  "), "Running");
+    }
+
+    #[test]
+    fn compact_title_raw_command_format() {
+        // claude-agent-acp / raw command titles: return executable name
+        assert_eq!(compact_title("git status"), "git");
+        assert_eq!(compact_title("ls -la && echo done"), "ls");
+        assert_eq!(compact_title("pwd"), "pwd");
+        assert_eq!(compact_title("Terminal"), "Terminal");
+    }
+
+    #[test]
+    fn compact_title_url_in_command_not_truncated() {
+        // URL colons must not produce garbage like "curl -s https"
+        assert_eq!(compact_title("curl -s https://example.com"), "curl");
+        assert_eq!(compact_title("curl -s https://example.com | python3 -c 'import sys'"), "curl");
     }
 
     fn make_tool(title: &str, state: ToolState) -> ToolEntry {
