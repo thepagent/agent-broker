@@ -24,6 +24,9 @@ Agents deployed:
 {{- else if eq $cfg.command "gemini" }}
     Authenticate:
     kubectl exec -it deployment/{{ include "openab.agentFullname" (dict "ctx" $ "agent" $name) }} -- gemini
+{{- else if eq $cfg.command "cursor-agent" }}
+    Authenticate:
+    kubectl exec -it deployment/{{ include "openab.agentFullname" (dict "ctx" $ "agent" $name) }} -- cursor-agent login
 {{- end }}
 
     Restart after auth:
