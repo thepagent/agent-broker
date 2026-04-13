@@ -26,7 +26,10 @@ impl<'de> Deserialize<'de> for AllowBots {
             "off" | "none" | "false" => Ok(Self::Off),
             "mentions" => Ok(Self::Mentions),
             "all" | "true" => Ok(Self::All),
-            other => Err(serde::de::Error::unknown_variant(other, &["off", "mentions", "all"])),
+            other => Err(serde::de::Error::unknown_variant(
+                other,
+                &["off", "mentions", "all"],
+            )),
         }
     }
 }
@@ -66,8 +69,12 @@ impl Default for SttConfig {
     }
 }
 
-fn default_stt_model() -> String { "whisper-large-v3-turbo".into() }
-fn default_stt_base_url() -> String { "https://api.groq.com/openai/v1".into() }
+fn default_stt_model() -> String {
+    "whisper-large-v3-turbo".into()
+}
+fn default_stt_base_url() -> String {
+    "https://api.groq.com/openai/v1".into()
+}
 
 #[derive(Debug, Deserialize)]
 pub struct DiscordConfig {
@@ -110,12 +117,22 @@ pub struct PoolConfig {
 pub struct ReactionsConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default = "default_tool_display")]
+    pub tool_display: ToolDisplayMode,
     #[serde(default)]
     pub remove_after_reply: bool,
     #[serde(default)]
     pub emojis: ReactionEmojis,
     #[serde(default)]
     pub timing: ReactionTiming,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolDisplayMode {
+    Full,
+    Compact,
+    None,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -152,28 +169,66 @@ pub struct ReactionTiming {
 
 // --- defaults ---
 
-fn default_working_dir() -> String { "/tmp".into() }
-fn default_max_sessions() -> usize { 10 }
-fn default_ttl_hours() -> u64 { 4 }
-fn default_true() -> bool { true }
+fn default_working_dir() -> String {
+    "/tmp".into()
+}
+fn default_max_sessions() -> usize {
+    10
+}
+fn default_ttl_hours() -> u64 {
+    4
+}
+fn default_true() -> bool {
+    true
+}
+fn default_tool_display() -> ToolDisplayMode {
+    ToolDisplayMode::Compact
+}
 
-fn emoji_queued() -> String { "👀".into() }
-fn emoji_thinking() -> String { "🤔".into() }
-fn emoji_tool() -> String { "🔥".into() }
-fn emoji_coding() -> String { "👨‍💻".into() }
-fn emoji_web() -> String { "⚡".into() }
-fn emoji_done() -> String { "🆗".into() }
-fn emoji_error() -> String { "😱".into() }
+fn emoji_queued() -> String {
+    "👀".into()
+}
+fn emoji_thinking() -> String {
+    "🤔".into()
+}
+fn emoji_tool() -> String {
+    "🔥".into()
+}
+fn emoji_coding() -> String {
+    "👨‍💻".into()
+}
+fn emoji_web() -> String {
+    "⚡".into()
+}
+fn emoji_done() -> String {
+    "🆗".into()
+}
+fn emoji_error() -> String {
+    "😱".into()
+}
 
-fn default_debounce_ms() -> u64 { 700 }
-fn default_stall_soft_ms() -> u64 { 10_000 }
-fn default_stall_hard_ms() -> u64 { 30_000 }
-fn default_done_hold_ms() -> u64 { 1_500 }
-fn default_error_hold_ms() -> u64 { 2_500 }
+fn default_debounce_ms() -> u64 {
+    700
+}
+fn default_stall_soft_ms() -> u64 {
+    10_000
+}
+fn default_stall_hard_ms() -> u64 {
+    30_000
+}
+fn default_done_hold_ms() -> u64 {
+    1_500
+}
+fn default_error_hold_ms() -> u64 {
+    2_500
+}
 
 impl Default for PoolConfig {
     fn default() -> Self {
-        Self { max_sessions: default_max_sessions(), session_ttl_hours: default_ttl_hours() }
+        Self {
+            max_sessions: default_max_sessions(),
+            session_ttl_hours: default_ttl_hours(),
+        }
     }
 }
 
@@ -181,6 +236,7 @@ impl Default for ReactionsConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            tool_display: ToolDisplayMode::default(),
             remove_after_reply: false,
             emojis: ReactionEmojis::default(),
             timing: ReactionTiming::default(),
@@ -188,11 +244,22 @@ impl Default for ReactionsConfig {
     }
 }
 
+impl Default for ToolDisplayMode {
+    fn default() -> Self {
+        default_tool_display()
+    }
+}
+
 impl Default for ReactionEmojis {
     fn default() -> Self {
         Self {
-            queued: emoji_queued(), thinking: emoji_thinking(), tool: emoji_tool(),
-            coding: emoji_coding(), web: emoji_web(), done: emoji_done(), error: emoji_error(),
+            queued: emoji_queued(),
+            thinking: emoji_thinking(),
+            tool: emoji_tool(),
+            coding: emoji_coding(),
+            web: emoji_web(),
+            done: emoji_done(),
+            error: emoji_error(),
         }
     }
 }
@@ -200,8 +267,10 @@ impl Default for ReactionEmojis {
 impl Default for ReactionTiming {
     fn default() -> Self {
         Self {
-            debounce_ms: default_debounce_ms(), stall_soft_ms: default_stall_soft_ms(),
-            stall_hard_ms: default_stall_hard_ms(), done_hold_ms: default_done_hold_ms(),
+            debounce_ms: default_debounce_ms(),
+            stall_soft_ms: default_stall_soft_ms(),
+            stall_hard_ms: default_stall_hard_ms(),
+            done_hold_ms: default_done_hold_ms(),
             error_hold_ms: default_error_hold_ms(),
         }
     }
@@ -224,4 +293,21 @@ pub fn load_config(path: &Path) -> anyhow::Result<Config> {
     let config: Config = toml::from_str(&expanded)
         .map_err(|e| anyhow::anyhow!("failed to parse {}: {e}", path.display()))?;
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ReactionsConfig, ToolDisplayMode};
+
+    #[test]
+    fn reactions_tool_display_defaults_to_compact() {
+        let config: ReactionsConfig = toml::from_str("").unwrap();
+        assert_eq!(config.tool_display, ToolDisplayMode::Compact);
+    }
+
+    #[test]
+    fn reactions_tool_display_parses_none() {
+        let config: ReactionsConfig = toml::from_str("tool_display = \"none\"").unwrap();
+        assert_eq!(config.tool_display, ToolDisplayMode::None);
+    }
 }

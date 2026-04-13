@@ -1,20 +1,20 @@
 use crate::acp::{classify_notification, AcpEvent, ContentBlock, SessionPool};
-use crate::config::{AllowBots, ReactionsConfig, SttConfig};
+use crate::config::{AllowBots, ReactionsConfig, SttConfig, ToolDisplayMode};
 use crate::error_display::{format_coded_error, format_user_error};
 use crate::format;
 use crate::reactions::StatusReactionController;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use image::ImageReader;
-use std::io::Cursor;
-use std::sync::LazyLock;
 use serenity::async_trait;
 use serenity::model::channel::{Message, ReactionType};
 use serenity::model::gateway::Ready;
 use serenity::model::id::{ChannelId, MessageId};
 use serenity::prelude::*;
 use std::collections::HashSet;
+use std::io::Cursor;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use tokio::sync::watch;
 use tracing::{debug, error, info};
 
@@ -62,7 +62,10 @@ impl EventHandler for Handler {
 
         let is_mentioned = msg.mentions_user_id(bot_id)
             || msg.content.contains(&format!("<@{}>", bot_id))
-            || msg.mention_roles.iter().any(|r| msg.content.contains(&format!("<@&{}>", r)));
+            || msg
+                .mention_roles
+                .iter()
+                .any(|r| msg.content.contains(&format!("<@&{}>", r)));
 
         // Bot message gating — runs after self-ignore but before channel/user
         // allowlist checks. This ordering is intentional: channel checks below
@@ -71,7 +74,11 @@ impl EventHandler for Handler {
         if msg.author.bot {
             match self.allow_bot_messages {
                 AllowBots::Off => return,
-                AllowBots::Mentions => if !is_mentioned { return; },
+                AllowBots::Mentions => {
+                    if !is_mentioned {
+                        return;
+                    }
+                }
                 AllowBots::All => {
                     // Safety net: count consecutive messages from any bot
                     // (excluding ourselves) in recent history. If all recent
@@ -85,9 +92,12 @@ impl EventHandler for Handler {
                     // reject the message (fail-closed) to avoid unbounded
                     // loops during Discord API outages.
                     let cap = MAX_CONSECUTIVE_BOT_TURNS as usize;
-                    let history = ctx.cache.channel_messages(msg.channel_id)
+                    let history = ctx
+                        .cache
+                        .channel_messages(msg.channel_id)
                         .map(|msgs| {
-                            let mut recent: Vec<_> = msgs.iter()
+                            let mut recent: Vec<_> = msgs
+                                .iter()
                                 .filter(|(mid, _)| **mid < msg.id)
                                 .map(|(_, m)| m.clone())
                                 .collect();
@@ -100,8 +110,14 @@ impl EventHandler for Handler {
                     let recent = if let Some(cached) = history {
                         cached
                     } else {
-                        match msg.channel_id
-                            .messages(&ctx.http, serenity::builder::GetMessages::new().before(msg.id).limit(MAX_CONSECUTIVE_BOT_TURNS))
+                        match msg
+                            .channel_id
+                            .messages(
+                                &ctx.http,
+                                serenity::builder::GetMessages::new()
+                                    .before(msg.id)
+                                    .limit(MAX_CONSECUTIVE_BOT_TURNS),
+                            )
                             .await
                         {
                             Ok(msgs) => msgs,
@@ -112,18 +128,21 @@ impl EventHandler for Handler {
                         }
                     };
 
-                    let consecutive_bot = recent.iter()
+                    let consecutive_bot = recent
+                        .iter()
                         .take_while(|m| m.author.bot && m.author.id != bot_id)
                         .count();
                     if consecutive_bot >= cap {
                         tracing::warn!(channel_id = %msg.channel_id, cap, "bot turn cap reached, ignoring");
                         return;
                     }
-                },
+                }
             }
 
             // If trusted_bot_ids is set, only allow bots on the list
-            if !self.trusted_bot_ids.is_empty() && !self.trusted_bot_ids.contains(&msg.author.id.get()) {
+            if !self.trusted_bot_ids.is_empty()
+                && !self.trusted_bot_ids.contains(&msg.author.id.get())
+            {
                 tracing::debug!(bot_id = %msg.author.id, "bot not in trusted_bot_ids, ignoring");
                 return;
             }
@@ -160,7 +179,10 @@ impl EventHandler for Handler {
 
         if !self.allowed_users.is_empty() && !self.allowed_users.contains(&msg.author.id.get()) {
             tracing::info!(user_id = %msg.author.id, "denied user, ignoring");
-            if let Err(e) = msg.react(&ctx.http, ReactionType::Unicode("🚫".into())).await {
+            if let Err(e) = msg
+                .react(&ctx.http, ReactionType::Unicode("🚫".into()))
+                .await
+            {
                 tracing::warn!(error = %e, "failed to react with 🚫");
             }
             return;
@@ -181,7 +203,9 @@ impl EventHandler for Handler {
         let mut content_blocks = vec![];
 
         // Inject structured sender context so the downstream CLI can identify who sent the message
-        let display_name = msg.member.as_ref()
+        let display_name = msg
+            .member
+            .as_ref()
             .and_then(|m| m.nick.as_ref())
             .unwrap_or(&msg.author.name);
         let sender_ctx = serde_json::json!({
@@ -209,11 +233,16 @@ impl EventHandler for Handler {
             for attachment in &msg.attachments {
                 if is_audio_attachment(attachment) {
                     if self.stt_config.enabled {
-                        if let Some(transcript) = download_and_transcribe(attachment, &self.stt_config).await {
+                        if let Some(transcript) =
+                            download_and_transcribe(attachment, &self.stt_config).await
+                        {
                             debug!(filename = %attachment.filename, chars = transcript.len(), "voice transcript injected");
-                            content_blocks.insert(0, ContentBlock::Text {
-                                text: format!("[Voice message transcript]: {transcript}"),
-                            });
+                            content_blocks.insert(
+                                0,
+                                ContentBlock::Text {
+                                    text: format!("[Voice message transcript]: {transcript}"),
+                                },
+                            );
                         }
                     } else {
                         debug!(filename = %attachment.filename, "skipping audio attachment (STT disabled)");
@@ -261,7 +290,13 @@ impl EventHandler for Handler {
         let thread_key = thread_id.to_string();
         if let Err(e) = self.pool.get_or_create(&thread_key).await {
             let msg = format_user_error(&e.to_string());
-            let _ = edit(&ctx, thread_channel, thinking_msg.id, &format!("⚠️ {}", msg)).await;
+            let _ = edit(
+                &ctx,
+                thread_channel,
+                thinking_msg.id,
+                &format!("⚠️ {}", msg),
+            )
+            .await;
             error!("pool error: {e}");
             return;
         }
@@ -286,6 +321,7 @@ impl EventHandler for Handler {
             thread_channel,
             thinking_msg.id,
             reactions.clone(),
+            self.reactions_config.tool_display,
         )
         .await;
 
@@ -346,7 +382,14 @@ async fn download_and_transcribe(
     let mime_type = attachment.content_type.as_deref().unwrap_or("audio/ogg");
     let mime_type = mime_type.split(';').next().unwrap_or(mime_type).trim();
 
-    crate::stt::transcribe(&HTTP_CLIENT, stt_config, bytes, attachment.filename.clone(), mime_type).await
+    crate::stt::transcribe(
+        &HTTP_CLIENT,
+        stt_config,
+        bytes,
+        attachment.filename.clone(),
+        mime_type,
+    )
+    .await
 }
 
 /// Maximum dimension (width or height) for resized images.
@@ -363,7 +406,9 @@ const IMAGE_JPEG_QUALITY: u8 = 75;
 /// Large images are resized so the longest side is at most 1200px and
 /// re-encoded as JPEG at quality 75. This keeps the base64 payload well
 /// under typical JSON-RPC transport limits (~200-400KB after encoding).
-async fn download_and_encode_image(attachment: &serenity::model::channel::Attachment) -> Option<ContentBlock> {
+async fn download_and_encode_image(
+    attachment: &serenity::model::channel::Attachment,
+) -> Option<ContentBlock> {
     const MAX_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
 
     let url = &attachment.url;
@@ -372,21 +417,17 @@ async fn download_and_encode_image(attachment: &serenity::model::channel::Attach
     }
 
     // Determine media type — prefer content-type header, fallback to extension
-    let media_type = attachment
-        .content_type
-        .as_deref()
-        .or_else(|| {
-            attachment
-                .filename
-                .rsplit('.')
-                .next()
-                .and_then(|ext| match ext.to_lowercase().as_str() {
+    let media_type =
+        attachment.content_type.as_deref().or_else(|| {
+            attachment.filename.rsplit('.').next().and_then(|ext| {
+                match ext.to_lowercase().as_str() {
                     "png" => Some("image/png"),
                     "jpg" | "jpeg" => Some("image/jpeg"),
                     "gif" => Some("image/gif"),
                     "webp" => Some("image/webp"),
                     _ => None,
-                })
+                }
+            })
         });
 
     let Some(mime) = media_type else {
@@ -406,7 +447,10 @@ async fn download_and_encode_image(attachment: &serenity::model::channel::Attach
 
     let response = match HTTP_CLIENT.get(url).send().await {
         Ok(resp) => resp,
-        Err(e) => { error!(url = %url, error = %e, "download failed"); return None; }
+        Err(e) => {
+            error!(url = %url, error = %e, "download failed");
+            return None;
+        }
     };
     if !response.status().is_success() {
         error!(url = %url, status = %response.status(), "HTTP error downloading image");
@@ -414,7 +458,10 @@ async fn download_and_encode_image(attachment: &serenity::model::channel::Attach
     }
     let bytes = match response.bytes().await {
         Ok(b) => b,
-        Err(e) => { error!(url = %url, error = %e, "read failed"); return None; }
+        Err(e) => {
+            error!(url = %url, error = %e, "read failed");
+            return None;
+        }
     };
 
     // Defense-in-depth: verify actual download size
@@ -455,8 +502,7 @@ async fn download_and_encode_image(attachment: &serenity::model::channel::Attach
 /// Returns (compressed_bytes, mime_type). GIFs are passed through unchanged
 /// to preserve animation.
 fn resize_and_compress(raw: &[u8]) -> Result<(Vec<u8>, String), image::ImageError> {
-    let reader = ImageReader::new(Cursor::new(raw))
-        .with_guessed_format()?;
+    let reader = ImageReader::new(Cursor::new(raw)).with_guessed_format()?;
 
     let format = reader.format();
 
@@ -487,8 +533,18 @@ fn resize_and_compress(raw: &[u8]) -> Result<(Vec<u8>, String), image::ImageErro
     Ok((buf.into_inner(), "image/jpeg".to_string()))
 }
 
-async fn edit(ctx: &Context, ch: ChannelId, msg_id: MessageId, content: &str) -> serenity::Result<Message> {
-    ch.edit_message(&ctx.http, msg_id, serenity::builder::EditMessage::new().content(content)).await
+async fn edit(
+    ctx: &Context,
+    ch: ChannelId,
+    msg_id: MessageId,
+    content: &str,
+) -> serenity::Result<Message> {
+    ch.edit_message(
+        &ctx.http,
+        msg_id,
+        serenity::builder::EditMessage::new().content(content),
+    )
+    .await
 }
 
 async fn stream_prompt(
@@ -499,6 +555,7 @@ async fn stream_prompt(
     channel: ChannelId,
     msg_id: MessageId,
     reactions: Arc<StatusReactionController>,
+    tool_display_mode: ToolDisplayMode,
 ) -> anyhow::Result<()> {
     let reactions = reactions.clone();
 
@@ -589,7 +646,12 @@ async fn stream_prompt(
                                 // Reaction: back to thinking after tools
                             }
                             text_buf.push_str(&t);
-                            let _ = buf_tx.send(compose_display(&tool_lines, &text_buf, true));
+                            let _ = buf_tx.send(compose_display(
+                                &tool_lines,
+                                &text_buf,
+                                tool_display_mode,
+                                true,
+                            ));
                         }
                         AcpEvent::Thinking => {
                             reactions.set_thinking().await;
@@ -614,7 +676,12 @@ async fn stream_prompt(
                                     state: ToolState::Running,
                                 });
                             }
-                            let _ = buf_tx.send(compose_display(&tool_lines, &text_buf, true));
+                            let _ = buf_tx.send(compose_display(
+                                &tool_lines,
+                                &text_buf,
+                                tool_display_mode,
+                                true,
+                            ));
                         }
                         AcpEvent::ToolDone { id, title, status } => {
                             reactions.set_thinking().await;
@@ -642,7 +709,12 @@ async fn stream_prompt(
                                     state: new_state,
                                 });
                             }
-                            let _ = buf_tx.send(compose_display(&tool_lines, &text_buf, true));
+                            let _ = buf_tx.send(compose_display(
+                                &tool_lines,
+                                &text_buf,
+                                tool_display_mode,
+                                true,
+                            ));
                         }
                         _ => {}
                     }
@@ -654,7 +726,7 @@ async fn stream_prompt(
             let _ = edit_handle.await;
 
             // Final edit
-            let final_content = compose_display(&tool_lines, &text_buf, false);
+            let final_content = compose_display(&tool_lines, &text_buf, tool_display_mode, false);
             // If ACP returned both an error and partial text, show both.
             // This can happen when the agent started producing content before hitting an error
             // (e.g. context length limit, rate limit mid-stream). Showing both gives users
@@ -693,7 +765,10 @@ async fn stream_prompt(
 /// collapse newlines to ` ; ` and rewrite embedded backticks so they
 /// don't break the wrapping span.
 fn sanitize_title(title: &str) -> String {
-    title.replace('\r', "").replace('\n', " ; ").replace('`', "'")
+    title
+        .replace('\r', "")
+        .replace('\n', " ; ")
+        .replace('`', "'")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -711,14 +786,37 @@ struct ToolEntry {
 }
 
 impl ToolEntry {
-    fn render(&self) -> String {
-        let icon = match self.state {
+    fn render(&self, tool_display_mode: ToolDisplayMode) -> Option<String> {
+        if tool_display_mode == ToolDisplayMode::None {
+            return None;
+        }
+
+        let suffix = if self.state == ToolState::Running {
+            "..."
+        } else {
+            ""
+        };
+        let rendered = match tool_display_mode {
+            ToolDisplayMode::Full => format!("{} `{}`{}", self.icon(), self.title, suffix),
+            ToolDisplayMode::Compact => {
+                format!(
+                    "{} {}{}",
+                    self.icon(),
+                    compact_tool_label(&self.title),
+                    suffix
+                )
+            }
+            ToolDisplayMode::None => return None,
+        };
+        Some(rendered)
+    }
+
+    fn icon(&self) -> &'static str {
+        match self.state {
             ToolState::Running => "🔧",
             ToolState::Completed => "✅",
             ToolState::Failed => "❌",
-        };
-        let suffix = if self.state == ToolState::Running { "..." } else { "" };
-        format!("{icon} `{}`{}", self.title, suffix)
+        }
     }
 }
 
@@ -732,56 +830,126 @@ impl ToolEntry {
 /// rises non-linearly.  3 is also the practical "glanceable" limit.
 const TOOL_COLLAPSE_THRESHOLD: usize = 3;
 
-fn compose_display(tool_lines: &[ToolEntry], text: &str, streaming: bool) -> String {
+fn compact_tool_label(title: &str) -> String {
+    let normalized = title.trim().to_lowercase();
+    if normalized.is_empty() {
+        return "tool".to_string();
+    }
+    if ["terminal", "shell", "bash", "exec", "process", "command"]
+        .iter()
+        .any(|token| normalized.contains(token))
+    {
+        return "shell command".to_string();
+    }
+    if [
+        "web_search",
+        "web-fetch",
+        "web_fetch",
+        "browser",
+        "search",
+        "fetch",
+    ]
+    .iter()
+    .any(|token| normalized.contains(token))
+    {
+        return "web request".to_string();
+    }
+    if ["write", "edit", "patch", "apply_patch"]
+        .iter()
+        .any(|token| normalized.contains(token))
+    {
+        return "file edit".to_string();
+    }
+    if ["read", "view", "open", "cat"]
+        .iter()
+        .any(|token| normalized.contains(token))
+    {
+        return "file read".to_string();
+    }
+    let first = normalized
+        .split(|c: char| c.is_whitespace() || c == ':' || c == '(' || c == '[' || c == '{')
+        .find(|token| !token.is_empty())
+        .unwrap_or("tool");
+    format!("{first} tool")
+}
+
+fn compose_display(
+    tool_lines: &[ToolEntry],
+    text: &str,
+    tool_display_mode: ToolDisplayMode,
+    streaming: bool,
+) -> String {
     let mut out = String::new();
-    if !tool_lines.is_empty() {
+    if tool_display_mode != ToolDisplayMode::None && !tool_lines.is_empty() {
         if streaming {
-            let done = tool_lines.iter().filter(|e| e.state == ToolState::Completed).count();
-            let failed = tool_lines.iter().filter(|e| e.state == ToolState::Failed).count();
-            let running: Vec<_> = tool_lines.iter().filter(|e| e.state == ToolState::Running).collect();
+            let done = tool_lines
+                .iter()
+                .filter(|e| e.state == ToolState::Completed)
+                .count();
+            let failed = tool_lines
+                .iter()
+                .filter(|e| e.state == ToolState::Failed)
+                .count();
+            let running: Vec<_> = tool_lines
+                .iter()
+                .filter(|e| e.state == ToolState::Running)
+                .collect();
             let finished = done + failed;
 
             if finished <= TOOL_COLLAPSE_THRESHOLD {
                 for entry in tool_lines.iter().filter(|e| e.state != ToolState::Running) {
-                    out.push_str(&entry.render());
-                    out.push('\n');
+                    if let Some(line) = entry.render(tool_display_mode) {
+                        out.push_str(&line);
+                        out.push('\n');
+                    }
                 }
             } else {
                 let mut parts = Vec::new();
-                if done > 0 { parts.push(format!("✅ {done}")); }
-                if failed > 0 { parts.push(format!("❌ {failed}")); }
+                if done > 0 {
+                    parts.push(format!("✅ {done}"));
+                }
+                if failed > 0 {
+                    parts.push(format!("❌ {failed}"));
+                }
                 out.push_str(&format!("{} tool(s) completed\n", parts.join(" · ")));
             }
 
             if running.len() <= TOOL_COLLAPSE_THRESHOLD {
                 for entry in &running {
-                    out.push_str(&entry.render());
-                    out.push('\n');
+                    if let Some(line) = entry.render(tool_display_mode) {
+                        out.push_str(&line);
+                        out.push('\n');
+                    }
                 }
             } else {
                 // Parallel running tools exceed threshold — show last N + summary
                 let hidden = running.len() - TOOL_COLLAPSE_THRESHOLD;
                 out.push_str(&format!("🔧 {hidden} more running\n"));
                 for entry in running.iter().skip(hidden) {
-                    out.push_str(&entry.render());
-                    out.push('\n');
+                    if let Some(line) = entry.render(tool_display_mode) {
+                        out.push_str(&line);
+                        out.push('\n');
+                    }
                 }
             }
         } else {
             for entry in tool_lines {
-                out.push_str(&entry.render());
-                out.push('\n');
+                if let Some(line) = entry.render(tool_display_mode) {
+                    out.push_str(&line);
+                    out.push('\n');
+                }
             }
         }
-        if !out.is_empty() { out.push('\n'); }
+    }
+    if !out.is_empty() {
+        out.push('\n');
     }
     out.push_str(text.trim_end());
     out
 }
 
-static MENTION_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"<@[!&]?\d+>").unwrap()
-});
+static MENTION_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"<@[!&]?\d+>").unwrap());
 
 fn strip_mention(content: &str) -> String {
     MENTION_RE.replace_all(content, "").trim().to_string()
@@ -821,7 +989,6 @@ async fn get_or_create_thread(ctx: &Context, msg: &Message, prompt: &str) -> any
 
     Ok(thread.id.get())
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -881,7 +1048,12 @@ mod tests {
         let png = make_png(3000, 2000);
         let (compressed, _) = resize_and_compress(&png).unwrap();
 
-        assert!(compressed.len() < png.len(), "compressed {} should be < original {}", compressed.len(), png.len());
+        assert!(
+            compressed.len() < png.len(),
+            "compressed {} should be < original {}",
+            compressed.len(),
+            png.len()
+        );
     }
 
     #[test]
@@ -906,10 +1078,12 @@ mod tests {
         assert!(resize_and_compress(&garbage).is_err());
     }
 
-    // --- compose_display tests ---
-
     fn tool(id: &str, title: &str, state: ToolState) -> ToolEntry {
-        ToolEntry { id: id.to_string(), title: title.to_string(), state }
+        ToolEntry {
+            id: id.to_string(),
+            title: title.to_string(),
+            state,
+        }
     }
 
     #[test]
@@ -919,11 +1093,14 @@ mod tests {
             tool("2", "cmd-b", ToolState::Completed),
             tool("3", "cmd-c", ToolState::Completed),
         ];
-        let out = compose_display(&tools, "hello", true);
+        let out = compose_display(&tools, "hello", ToolDisplayMode::Full, true);
         assert!(out.contains("✅ `cmd-a`"), "should show individual tool");
         assert!(out.contains("✅ `cmd-b`"), "should show individual tool");
         assert!(out.contains("✅ `cmd-c`"), "should show individual tool");
-        assert!(!out.contains("tool(s) completed"), "should not collapse at threshold");
+        assert!(
+            !out.contains("tool(s) completed"),
+            "should not collapse at threshold"
+        );
     }
 
     #[test]
@@ -934,9 +1111,15 @@ mod tests {
             tool("3", "cmd-c", ToolState::Completed),
             tool("4", "cmd-d", ToolState::Completed),
         ];
-        let out = compose_display(&tools, "hello", true);
-        assert!(out.contains("✅ 4 tool(s) completed"), "should collapse above threshold");
-        assert!(!out.contains("`cmd-a`"), "individual tools should be hidden");
+        let out = compose_display(&tools, "hello", ToolDisplayMode::Full, true);
+        assert!(
+            out.contains("✅ 4 tool(s) completed"),
+            "should collapse above threshold"
+        );
+        assert!(
+            !out.contains("`cmd-a`"),
+            "individual tools should be hidden"
+        );
     }
 
     #[test]
@@ -948,7 +1131,7 @@ mod tests {
             tool("4", "fail-1", ToolState::Failed),
             tool("5", "fail-2", ToolState::Failed),
         ];
-        let out = compose_display(&tools, "", true);
+        let out = compose_display(&tools, "", ToolDisplayMode::Full, true);
         assert!(out.contains("✅ 3 · ❌ 2 tool(s) completed"));
     }
 
@@ -961,7 +1144,7 @@ mod tests {
             tool("4", "done-4", ToolState::Completed),
             tool("5", "active", ToolState::Running),
         ];
-        let out = compose_display(&tools, "text", true);
+        let out = compose_display(&tools, "text", ToolDisplayMode::Full, true);
         assert!(out.contains("✅ 4 tool(s) completed"));
         assert!(out.contains("🔧 `active`..."));
         assert!(out.contains("text"));
@@ -972,8 +1155,11 @@ mod tests {
         let tools: Vec<_> = (0..5)
             .map(|i| tool(&i.to_string(), &format!("run-{i}"), ToolState::Running))
             .collect();
-        let out = compose_display(&tools, "", true);
-        assert!(out.contains("🔧 2 more running"), "should collapse excess running tools");
+        let out = compose_display(&tools, "", ToolDisplayMode::Full, true);
+        assert!(
+            out.contains("🔧 2 more running"),
+            "should collapse excess running tools"
+        );
         assert!(out.contains("🔧 `run-3`..."), "should show recent running");
         assert!(out.contains("🔧 `run-4`..."), "should show recent running");
     }
@@ -987,12 +1173,15 @@ mod tests {
             tool("4", "cmd-d", ToolState::Completed),
             tool("5", "cmd-e", ToolState::Failed),
         ];
-        let out = compose_display(&tools, "final", false);
+        let out = compose_display(&tools, "final", ToolDisplayMode::Full, false);
         assert!(out.contains("✅ `cmd-a`"));
         assert!(out.contains("✅ `cmd-d`"));
         assert!(out.contains("❌ `cmd-e`"));
         assert!(out.contains("final"));
-        assert!(!out.contains("tool(s) completed"), "non-streaming should not collapse");
+        assert!(
+            !out.contains("tool(s) completed"),
+            "non-streaming should not collapse"
+        );
     }
 
     #[test]
@@ -1004,5 +1193,56 @@ mod tests {
         let truncated: String = content.chars().skip(skip).collect();
         assert_eq!(truncated.chars().count(), limit);
         assert!(truncated.ends_with("abcdefghij"));
+    }
+
+    #[test]
+    fn compose_display_full_keeps_tool_title() {
+        let tool_lines = vec![ToolEntry {
+            id: "tool-1".to_string(),
+            title: sanitize_title("bash -lc `echo hi`"),
+            state: ToolState::Running,
+        }];
+
+        let rendered = compose_display(&tool_lines, "Hello", ToolDisplayMode::Full, false);
+
+        assert_eq!(rendered, "🔧 `bash -lc 'echo hi'`...\n\nHello");
+    }
+
+    #[test]
+    fn compose_display_compact_hides_tool_args() {
+        let tool_lines = vec![ToolEntry {
+            id: "tool-1".to_string(),
+            title: "bash -lc echo hi".to_string(),
+            state: ToolState::Completed,
+        }];
+
+        let rendered = compose_display(&tool_lines, "Hello", ToolDisplayMode::Compact, false);
+
+        assert_eq!(rendered, "✅ shell command\n\nHello");
+    }
+
+    #[test]
+    fn compose_display_none_hides_tool_lines() {
+        let tool_lines = vec![ToolEntry {
+            id: "tool-1".to_string(),
+            title: "read Cargo.toml".to_string(),
+            state: ToolState::Completed,
+        }];
+
+        let rendered = compose_display(&tool_lines, "Hello", ToolDisplayMode::None, false);
+
+        assert_eq!(rendered, "Hello");
+    }
+
+    #[test]
+    fn compose_display_compact_prefers_web_classification_over_open_keyword() {
+        let tool_lines = vec![ToolEntry {
+            id: "tool-1".to_string(),
+            title: "browser open https://example.com".to_string(),
+            state: ToolState::Completed,
+        }];
+
+        let rendered = compose_display(&tool_lines, "Hello", ToolDisplayMode::Compact, false);
+        assert_eq!(rendered, "✅ web request\n\nHello");
     }
 }

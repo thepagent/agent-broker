@@ -42,6 +42,7 @@ agents:
     #     sessionTtlHours: 24
     #   reactions:
     #     enabled: true
+    #     toolDisplay: compact  # full | compact | none
     #     removeAfterReply: false
     #   persistence:
     #     enabled: true
@@ -78,6 +79,7 @@ agents:
       sessionTtlHours: 24
     reactions:
       enabled: true
+      toolDisplay: compact  # full | compact | none
       removeAfterReply: false
     stt:
       enabled: false

@@ -41,6 +41,7 @@ session_ttl_hours = 24
 
 [reactions]
 enabled = true
+tool_display = "compact"  # full | compact | none
 remove_after_reply = false
 
 [reactions.emojis]

@@ -102,6 +102,7 @@ session_ttl_hours = 24                # idle session TTL
 
 [reactions]
 enabled = true                        # enable emoji status reactions
+tool_display = "compact"              # full | compact | none
 remove_after_reply = false            # remove reactions after reply
 ```
 
@@ -109,6 +110,11 @@ remove_after_reply = false            # remove reactions after reply
 <summary>Full reactions config</summary>
 
 ```toml
+[reactions]
+enabled = true
+tool_display = "compact"
+remove_after_reply = false
+
 [reactions.emojis]
 queued = "👀"
 thinking = "🤔"
