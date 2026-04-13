@@ -87,11 +87,13 @@ Tested end-to-end with `copilot --acp` v1.0.24:
 | `session/set_model` | ✅ | 8 available models |
 | `session/set_mode` | ✅ | agent / plan / autopilot |
 | `session/request_permission` | ✅ | Auto-approved by OpenAB |
-| `usage_update` notification | ❌ | Not emitted (context_used/size stay 0) |
+| `usage_update` notification | ✅ | Emits `used` (tokens) and `size` (context window) |
+| `session/list` | ✅ | Lists past sessions |
+| `session/load` | ✅ | Loads a previous session |
 
 ### Available Models (v1.0.24)
 
-Models available depend on your Copilot plan. Typical Pro plan includes:
+Models available depend on your Copilot plan and may change. The list below is from a Pro plan tested on 2026-04-13. Use `/model` in Discord to see your actual available models.
 
 | Model | Provider |
 |---|---|

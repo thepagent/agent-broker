@@ -164,18 +164,20 @@ args = []
 working_dir = "/home/node"
 
 # Gemini
-[agent]
-command = "gemini"
-args = ["--acp"]
-working_dir = "/home/node"
-env = { GEMINI_API_KEY = "${GEMINI_API_KEY}" }
+# [agent]
+# command = "gemini"
+# args = ["--acp"]
+# working_dir = "/home/node"
+# env = { GEMINI_API_KEY = "${GEMINI_API_KEY}" }
 
 # GitHub Copilot (native ACP — requires copilot CLI in PATH)
-[agent]
-command = "copilot"
-args = ["--acp"]
-working_dir = "/home/node"
+# [agent]
+# command = "copilot"
+# args = ["--acp"]
+# working_dir = "/home/node"
 ```
+
+> **Note:** Each `config.toml` uses exactly one `[agent]` block. The examples above are alternatives — uncomment the one you need.
 
 ## Configuration Reference
 
