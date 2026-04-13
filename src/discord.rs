@@ -590,11 +590,13 @@ async fn stream_prompt(
             };
 
             // Append context window usage footer if available.
+            // Skip when the message is already near the 2000-char Discord limit
+            // to avoid the footer splitting into a separate message.
             let ctx_size = conn.context_size.load(std::sync::atomic::Ordering::Relaxed);
-            let final_content = if ctx_size > 0 {
+            let final_content = if ctx_size > 0 && final_content.len() < 1900 {
                 let ctx_used = conn.context_used.load(std::sync::atomic::Ordering::Relaxed);
                 let pct = (ctx_used as f64 / ctx_size as f64 * 100.0).round() as u64;
-                format!("{final_content}\n-# 📊 Context: {ctx_used}/{ctx_size} tokens ({pct}%)")
+                format!("{final_content}\n-# 📊 {ctx_used}/{ctx_size} tokens ({pct}%)")
             } else {
                 final_content
             };
