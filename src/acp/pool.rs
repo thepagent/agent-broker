@@ -1,4 +1,4 @@
-use crate::acp::connection::{AcpConnection, ModelInfo, NativeCommand};
+use crate::acp::connection::AcpConnection;
 use crate::config::AgentConfig;
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
@@ -6,57 +6,39 @@ use tokio::sync::RwLock;
 use tokio::time::Instant;
 use tracing::{info, warn};
 
+/// Combined state protected by a single lock to prevent deadlocks.
+/// Lock ordering: always acquire `state` before any operation on either map.
+struct PoolState {
+    /// Active connections: thread_key → AcpConnection.
+    active: HashMap<String, AcpConnection>,
+    /// Suspended sessions: thread_key → ACP sessionId.
+    /// Saved on eviction so sessions can be resumed via `session/load`.
+    suspended: HashMap<String, String>,
+}
+
 pub struct SessionPool {
-    connections: RwLock<HashMap<String, AcpConnection>>,
+    state: RwLock<PoolState>,
     config: AgentConfig,
     max_sessions: usize,
-    /// Snapshot of available models from the most recent session creation.
-    /// Populated on first session_new() so slash command autocomplete can serve
-    /// suggestions without spawning a fresh agent (which takes ~10s).
-    cached_models: RwLock<Vec<ModelInfo>>,
-    cached_current_model: RwLock<String>,
-    /// Native slash commands reported by the agent via `available_commands_update`.
-    cached_native_commands: RwLock<Vec<NativeCommand>>,
 }
 
 impl SessionPool {
     pub fn new(config: AgentConfig, max_sessions: usize) -> Self {
         Self {
-            connections: RwLock::new(HashMap::new()),
+            state: RwLock::new(PoolState {
+                active: HashMap::new(),
+                suspended: HashMap::new(),
+            }),
             config,
             max_sessions,
-            cached_models: RwLock::new(Vec::new()),
-            cached_current_model: RwLock::new("auto".to_string()),
-            cached_native_commands: RwLock::new(Vec::new()),
-        }
-    }
-
-    pub async fn cached_models(&self) -> Vec<ModelInfo> {
-        self.cached_models.read().await.clone()
-    }
-
-    pub async fn cached_current_model(&self) -> String {
-        self.cached_current_model.read().await.clone()
-    }
-
-    pub async fn cached_native_commands(&self) -> Vec<NativeCommand> {
-        self.cached_native_commands.read().await.clone()
-    }
-
-    /// Replace the cached model list. Used by the background refresh task
-    /// in `main.rs` to keep `/model` autocomplete in sync with Copilot's
-    /// actual available models (handles models added/removed upstream).
-    pub async fn set_cached_models(&self, models: Vec<ModelInfo>) {
-        if !models.is_empty() {
-            *self.cached_models.write().await = models;
         }
     }
 
     pub async fn get_or_create(&self, thread_id: &str) -> Result<()> {
         // Check if alive connection exists
         {
-            let conns = self.connections.read().await;
-            if let Some(conn) = conns.get(thread_id) {
+            let state = self.state.read().await;
+            if let Some(conn) = state.active.get(thread_id) {
                 if conn.alive() {
                     return Ok(());
                 }
@@ -64,19 +46,29 @@ impl SessionPool {
         }
 
         // Need to create or rebuild
-        let mut conns = self.connections.write().await;
+        let mut state = self.state.write().await;
 
         // Double-check after acquiring write lock
-        if let Some(conn) = conns.get(thread_id) {
+        if let Some(conn) = state.active.get(thread_id) {
             if conn.alive() {
                 return Ok(());
             }
             warn!(thread_id, "stale connection, rebuilding");
-            conns.remove(thread_id);
+            suspend_entry(&mut state, thread_id);
         }
 
-        if conns.len() >= self.max_sessions {
-            return Err(anyhow!("pool exhausted ({} sessions)", self.max_sessions));
+        if state.active.len() >= self.max_sessions {
+            // LRU evict: suspend the oldest idle session to make room
+            let oldest = state.active
+                .iter()
+                .min_by_key(|(_, c)| c.last_active)
+                .map(|(k, _)| k.clone());
+            if let Some(key) = oldest {
+                info!(evicted = %key, "pool full, suspending oldest idle session");
+                suspend_entry(&mut state, &key);
+            } else {
+                return Err(anyhow!("pool exhausted ({} sessions)", self.max_sessions));
+            }
         }
 
         let mut conn = AcpConnection::spawn(
@@ -88,29 +80,32 @@ impl SessionPool {
         .await?;
 
         conn.initialize().await?;
-        conn.session_new(&self.config.working_dir).await?;
 
-        // Refresh model cache snapshot for slash command autocomplete.
-        if !conn.available_models.is_empty() {
-            *self.cached_models.write().await = conn.available_models.clone();
-        }
-        *self.cached_current_model.write().await = conn.current_model.clone();
-
-        // Snapshot native agent commands (arrives async via available_commands_update).
-        // Give the agent a moment to push the notification after session/new.
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        let cmds = conn.native_commands.lock().await.clone();
-        if !cmds.is_empty() {
-            info!(count = cmds.len(), "caching native agent commands");
-            *self.cached_native_commands.write().await = cmds;
-        }
-
-        let is_rebuild = conns.contains_key(thread_id);
-        if is_rebuild {
-            conn.session_reset = true;
+        // Try to resume a suspended session via session/load
+        let saved_session_id = state.suspended.remove(thread_id);
+        let mut resumed = false;
+        if let Some(ref sid) = saved_session_id {
+            if conn.supports_load_session {
+                match conn.session_load(sid, &self.config.working_dir).await {
+                    Ok(()) => {
+                        info!(thread_id, session_id = %sid, "session resumed via session/load");
+                        resumed = true;
+                    }
+                    Err(e) => {
+                        warn!(thread_id, session_id = %sid, error = %e, "session/load failed, creating new session");
+                    }
+                }
+            }
         }
 
-        conns.insert(thread_id.to_string(), conn);
+        if !resumed {
+            conn.session_new(&self.config.working_dir).await?;
+            if saved_session_id.is_some() {
+                conn.session_reset = true;
+            }
+        }
+
+        state.active.insert(thread_id.to_string(), conn);
         Ok(())
     }
 
@@ -119,40 +114,43 @@ impl SessionPool {
     where
         F: FnOnce(&mut AcpConnection) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<R>> + Send + '_>>,
     {
-        let mut conns = self.connections.write().await;
-        let conn = conns
+        let mut state = self.state.write().await;
+        let conn = state.active
             .get_mut(thread_id)
             .ok_or_else(|| anyhow!("no connection for thread {thread_id}"))?;
         f(conn).await
     }
 
-    /// Drop a session for a specific thread. Returns true if one was removed.
-    /// The underlying child process is killed via `kill_on_drop`.
-    pub async fn drop_session(&self, thread_id: &str) -> bool {
-        let mut conns = self.connections.write().await;
-        conns.remove(thread_id).is_some()
-    }
-
     pub async fn cleanup_idle(&self, ttl_secs: u64) {
-        let now = Instant::now();
-        let ttl = std::time::Duration::from_secs(ttl_secs);
-        let mut conns = self.connections.write().await;
-        let stale: Vec<String> = conns
+        let cutoff = Instant::now() - std::time::Duration::from_secs(ttl_secs);
+        let mut state = self.state.write().await;
+        let stale: Vec<String> = state.active
             .iter()
-            .filter(|(_, c)| now.saturating_duration_since(c.last_active) >= ttl || !c.alive())
+            .filter(|(_, c)| c.last_active < cutoff || !c.alive())
             .map(|(k, _)| k.clone())
             .collect();
         for key in stale {
             info!(thread_id = %key, "cleaning up idle session");
-            conns.remove(&key);
-            // Child process killed via kill_on_drop when AcpConnection drops
+            suspend_entry(&mut state, &key);
         }
     }
 
     pub async fn shutdown(&self) {
-        let mut conns = self.connections.write().await;
-        let count = conns.len();
-        conns.clear(); // kill_on_drop handles process cleanup
+        let mut state = self.state.write().await;
+        let count = state.active.len();
+        state.active.clear(); // Drop impl kills process groups
         info!(count, "pool shutdown complete");
+    }
+}
+
+/// Suspend a connection: save its sessionId to the suspended map and remove
+/// from active. The connection is dropped, triggering process group kill.
+fn suspend_entry(state: &mut PoolState, thread_id: &str) {
+    if let Some(conn) = state.active.remove(thread_id) {
+        if let Some(sid) = &conn.acp_session_id {
+            info!(thread_id, session_id = %sid, "suspending session");
+            state.suspended.insert(thread_id.to_string(), sid.clone());
+        }
+        // conn dropped here → Drop impl kills process group
     }
 }
