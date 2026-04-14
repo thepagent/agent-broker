@@ -46,7 +46,9 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let cmd = Cli::parse().command.unwrap_or(Commands::Run { config: None });
+    let cmd = Cli::parse()
+        .command
+        .unwrap_or(Commands::Run { config: None });
 
     match cmd {
         Commands::Setup { output } => {
@@ -101,6 +103,7 @@ async fn main() -> anyhow::Result<()> {
                 stt_config: cfg.stt.clone(),
                 allow_bot_messages: cfg.discord.allow_bot_messages,
                 trusted_bot_ids,
+                mcp_profiles_dir: cfg.mcp_profiles_dir.clone(),
             };
 
             let intents = GatewayIntents::GUILD_MESSAGES
@@ -153,7 +156,9 @@ fn parse_id_set(raw: &[String], label: &str) -> anyhow::Result<HashSet<u64>> {
         })
         .collect();
     if !raw.is_empty() && set.is_empty() {
-        anyhow::bail!("all {label} entries failed to parse — refusing to start with an empty allowlist");
+        anyhow::bail!(
+            "all {label} entries failed to parse — refusing to start with an empty allowlist"
+        );
     }
     Ok(set)
 }

@@ -34,7 +34,11 @@ impl SessionPool {
         }
     }
 
-    pub async fn get_or_create(&self, thread_id: &str) -> Result<()> {
+    pub async fn get_or_create(
+        &self,
+        thread_id: &str,
+        mcp_servers: &[serde_json::Value],
+    ) -> Result<()> {
         // Check if alive connection exists
         {
             let state = self.state.read().await;
@@ -59,7 +63,8 @@ impl SessionPool {
 
         if state.active.len() >= self.max_sessions {
             // LRU evict: suspend the oldest idle session to make room
-            let oldest = state.active
+            let oldest = state
+                .active
                 .iter()
                 .min_by_key(|(_, c)| c.last_active)
                 .map(|(k, _)| k.clone());
@@ -86,7 +91,10 @@ impl SessionPool {
         let mut resumed = false;
         if let Some(ref sid) = saved_session_id {
             if conn.supports_load_session {
-                match conn.session_load(sid, &self.config.working_dir).await {
+                match conn
+                    .session_load(sid, &self.config.working_dir, mcp_servers)
+                    .await
+                {
                     Ok(()) => {
                         info!(thread_id, session_id = %sid, "session resumed via session/load");
                         resumed = true;
@@ -99,7 +107,8 @@ impl SessionPool {
         }
 
         if !resumed {
-            conn.session_new(&self.config.working_dir).await?;
+            conn.session_new(&self.config.working_dir, mcp_servers)
+                .await?;
             if saved_session_id.is_some() {
                 conn.session_reset = true;
             }
@@ -112,21 +121,27 @@ impl SessionPool {
     /// Get mutable access to a connection. Caller must have called get_or_create first.
     pub async fn with_connection<F, R>(&self, thread_id: &str, f: F) -> Result<R>
     where
-        F: FnOnce(&mut AcpConnection) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<R>> + Send + '_>>,
+        F: FnOnce(
+            &mut AcpConnection,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<R>> + Send + '_>>,
     {
         let mut state = self.state.write().await;
-        let conn = state.active
+        let conn = state
+            .active
             .get_mut(thread_id)
             .ok_or_else(|| anyhow!("no connection for thread {thread_id}"))?;
         f(conn).await
     }
 
     pub async fn cleanup_idle(&self, ttl_secs: u64) {
-        let cutoff = Instant::now() - std::time::Duration::from_secs(ttl_secs);
+        let now = Instant::now();
+        let ttl = std::time::Duration::from_secs(ttl_secs);
         let mut state = self.state.write().await;
-        let stale: Vec<String> = state.active
+        let stale: Vec<String> = state
+            .active
             .iter()
-            .filter(|(_, c)| c.last_active < cutoff || !c.alive())
+            .filter(|(_, c)| now.saturating_duration_since(c.last_active) >= ttl || !c.alive())
             .map(|(k, _)| k.clone())
             .collect();
         for key in stale {

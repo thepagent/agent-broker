@@ -1,7 +1,40 @@
 use regex::Regex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+
+/// An MCP server entry injected into ACP session/new.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerEntry {
+    pub name: String,
+    #[serde(flatten)]
+    pub config: serde_json::Value,
+}
+
+/// Read MCP server entries from a user's profile JSON.
+/// Returns an empty vec on any error (graceful fallback).
+pub fn read_mcp_profile(profiles_dir: &str, user_id: &str) -> Vec<McpServerEntry> {
+    let path = std::path::PathBuf::from(profiles_dir).join(format!("{user_id}.json"));
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+    let parsed: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return vec![],
+    };
+    let servers = match parsed.get("mcpServers").and_then(|v| v.as_object()) {
+        Some(map) => map,
+        None => return vec![],
+    };
+    servers
+        .iter()
+        .map(|(name, config)| McpServerEntry {
+            name: name.clone(),
+            config: config.clone(),
+        })
+        .collect()
+}
 
 /// Controls whether the bot processes messages from other Discord bots.
 ///
@@ -26,7 +59,10 @@ impl<'de> Deserialize<'de> for AllowBots {
             "off" | "none" | "false" => Ok(Self::Off),
             "mentions" => Ok(Self::Mentions),
             "all" | "true" => Ok(Self::All),
-            other => Err(serde::de::Error::unknown_variant(other, &["off", "mentions", "all"])),
+            other => Err(serde::de::Error::unknown_variant(
+                other,
+                &["off", "mentions", "all"],
+            )),
         }
     }
 }
@@ -41,6 +77,12 @@ pub struct Config {
     pub reactions: ReactionsConfig,
     #[serde(default)]
     pub stt: SttConfig,
+    /// Optional path to a soul/persona text file shown via `/soul`.
+    #[serde(default)]
+    pub soul_file: Option<String>,
+    /// Directory for per-user MCP profiles.
+    #[serde(default)]
+    pub mcp_profiles_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -66,8 +108,12 @@ impl Default for SttConfig {
     }
 }
 
-fn default_stt_model() -> String { "whisper-large-v3-turbo".into() }
-fn default_stt_base_url() -> String { "https://api.groq.com/openai/v1".into() }
+fn default_stt_model() -> String {
+    "whisper-large-v3-turbo".into()
+}
+fn default_stt_base_url() -> String {
+    "https://api.groq.com/openai/v1".into()
+}
 
 #[derive(Debug, Deserialize)]
 pub struct DiscordConfig {
@@ -152,28 +198,63 @@ pub struct ReactionTiming {
 
 // --- defaults ---
 
-fn default_working_dir() -> String { "/tmp".into() }
-fn default_max_sessions() -> usize { 10 }
-fn default_ttl_hours() -> u64 { 4 }
-fn default_true() -> bool { true }
+fn default_working_dir() -> String {
+    "/tmp".into()
+}
+fn default_max_sessions() -> usize {
+    10
+}
+fn default_ttl_hours() -> u64 {
+    4
+}
+fn default_true() -> bool {
+    true
+}
 
-fn emoji_queued() -> String { "👀".into() }
-fn emoji_thinking() -> String { "🤔".into() }
-fn emoji_tool() -> String { "🔥".into() }
-fn emoji_coding() -> String { "👨‍💻".into() }
-fn emoji_web() -> String { "⚡".into() }
-fn emoji_done() -> String { "🆗".into() }
-fn emoji_error() -> String { "😱".into() }
+fn emoji_queued() -> String {
+    "👀".into()
+}
+fn emoji_thinking() -> String {
+    "🤔".into()
+}
+fn emoji_tool() -> String {
+    "🔥".into()
+}
+fn emoji_coding() -> String {
+    "👨‍💻".into()
+}
+fn emoji_web() -> String {
+    "⚡".into()
+}
+fn emoji_done() -> String {
+    "🆗".into()
+}
+fn emoji_error() -> String {
+    "😱".into()
+}
 
-fn default_debounce_ms() -> u64 { 700 }
-fn default_stall_soft_ms() -> u64 { 10_000 }
-fn default_stall_hard_ms() -> u64 { 30_000 }
-fn default_done_hold_ms() -> u64 { 1_500 }
-fn default_error_hold_ms() -> u64 { 2_500 }
+fn default_debounce_ms() -> u64 {
+    700
+}
+fn default_stall_soft_ms() -> u64 {
+    10_000
+}
+fn default_stall_hard_ms() -> u64 {
+    30_000
+}
+fn default_done_hold_ms() -> u64 {
+    1_500
+}
+fn default_error_hold_ms() -> u64 {
+    2_500
+}
 
 impl Default for PoolConfig {
     fn default() -> Self {
-        Self { max_sessions: default_max_sessions(), session_ttl_hours: default_ttl_hours() }
+        Self {
+            max_sessions: default_max_sessions(),
+            session_ttl_hours: default_ttl_hours(),
+        }
     }
 }
 
@@ -191,8 +272,13 @@ impl Default for ReactionsConfig {
 impl Default for ReactionEmojis {
     fn default() -> Self {
         Self {
-            queued: emoji_queued(), thinking: emoji_thinking(), tool: emoji_tool(),
-            coding: emoji_coding(), web: emoji_web(), done: emoji_done(), error: emoji_error(),
+            queued: emoji_queued(),
+            thinking: emoji_thinking(),
+            tool: emoji_tool(),
+            coding: emoji_coding(),
+            web: emoji_web(),
+            done: emoji_done(),
+            error: emoji_error(),
         }
     }
 }
@@ -200,8 +286,10 @@ impl Default for ReactionEmojis {
 impl Default for ReactionTiming {
     fn default() -> Self {
         Self {
-            debounce_ms: default_debounce_ms(), stall_soft_ms: default_stall_soft_ms(),
-            stall_hard_ms: default_stall_hard_ms(), done_hold_ms: default_done_hold_ms(),
+            debounce_ms: default_debounce_ms(),
+            stall_soft_ms: default_stall_soft_ms(),
+            stall_hard_ms: default_stall_hard_ms(),
+            done_hold_ms: default_done_hold_ms(),
             error_hold_ms: default_error_hold_ms(),
         }
     }
