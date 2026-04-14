@@ -58,3 +58,33 @@ stall_soft_ms = 10000
 stall_hard_ms = 30000
 done_hold_ms = 1500
 error_hold_ms = 2500
+
+# Optional usage dashboard command (`/usage`)
+[usage]
+enabled = true
+timeout_secs = 30
+
+[[usage.runners]]
+name = "copilot-quota"
+label = "Copilot 配額"
+color = 5763719
+command = "node"
+args = ["scripts/usage/copilot-quota.js"]
+template = "🧾 Copilot 配額 {{ remaining_pct }}%\n總請求 {{ total_requests }} / {{ requests_cap }}"
+progress_fields = ["remaining_pct"]
+env = { RUNNER = "copilot" }
+
+# Optional custom usage command (`/cusage`)
+[cusage]
+enabled = true
+timeout_secs = 30
+
+[[cusage.runners]]
+name = "daily-report"
+label = "每日使用報告"
+color = 4286946
+command = "node"
+args = ["scripts/usage/daily-report.js", "--tz", "Asia/Taipei"]
+template = "📅 今日訊息 {{ messages }}\nToken: {{ tokens }}\n成本: ${{ cost }}"
+env = { REPORT_SCOPE = "daily" }
+working_dir = "."
