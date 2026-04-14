@@ -1,7 +1,43 @@
 use regex::Regex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+
+/// An MCP server entry injected into ACP session/new.
+/// Uses serde(flatten) to support both HTTP and stdio formats:
+///   HTTP:  { "name": "x", "type": "http", "url": "...", "headers": [] }
+///   stdio: { "name": "x", "command": "...", "args": [...], "env": [] }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerEntry {
+    pub name: String,
+    #[serde(flatten)]
+    pub config: serde_json::Value,
+}
+
+/// Read MCP server entries from a user's profile JSON.
+/// Returns an empty vec on any error (graceful fallback).
+pub fn read_mcp_profile(profiles_dir: &str, user_id: &str) -> Vec<McpServerEntry> {
+    let path = std::path::PathBuf::from(profiles_dir).join(format!("{user_id}.json"));
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+    let parsed: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return vec![],
+    };
+    let servers = match parsed.get("mcpServers").and_then(|v| v.as_object()) {
+        Some(map) => map,
+        None => return vec![],
+    };
+    servers
+        .iter()
+        .map(|(name, config)| McpServerEntry {
+            name: name.clone(),
+            config: config.clone(),
+        })
+        .collect()
+}
 
 #[derive(Debug, Deserialize)]
 pub struct Config {

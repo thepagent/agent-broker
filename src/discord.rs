@@ -1,5 +1,5 @@
 use crate::acp::{classify_notification, AcpEvent, ContentBlock, SessionPool};
-use crate::config::{ReactionsConfig, SttConfig};
+use crate::config::{read_mcp_profile, ReactionsConfig, SttConfig};
 use crate::error_display::{format_coded_error, format_user_error};
 use crate::format;
 use crate::reactions::StatusReactionController;
@@ -157,6 +157,26 @@ pub struct Handler {
     pub stt_config: SttConfig,
     pub soul_file: Option<String>,
     pub mcp_profiles_dir: Option<String>,
+}
+
+impl Handler {
+    /// Build the mcpServers JSON array for a Discord user from their profile.
+    fn mcp_servers_for_user(&self, user_id: u64) -> Vec<serde_json::Value> {
+        let Some(ref dir) = self.mcp_profiles_dir else { return vec![] };
+        let entries = read_mcp_profile(dir, &user_id.to_string());
+        if entries.is_empty() { return vec![] }
+        tracing::info!(user_id, count = entries.len(), "injecting MCP servers from profile");
+        entries
+            .into_iter()
+            .map(|e| {
+                let mut obj = e.config.clone();
+                if let Some(map) = obj.as_object_mut() {
+                    map.insert("name".to_string(), serde_json::Value::String(e.name));
+                }
+                obj
+            })
+            .collect()
+    }
 }
 
 #[async_trait]
@@ -317,7 +337,8 @@ impl EventHandler for Handler {
         };
 
         let thread_key = thread_id.to_string();
-        if let Err(e) = self.pool.get_or_create(&thread_key).await {
+        let mcp_servers = self.mcp_servers_for_user(msg.author.id.get());
+        if let Err(e) = self.pool.get_or_create(&thread_key, &mcp_servers).await {
             let msg = format_user_error(&e.to_string());
             let _ = edit(&ctx, thread_channel, thinking_msg.id, &format!("⚠️ {}", msg)).await;
             error!("pool error: {e}");
@@ -902,7 +923,7 @@ impl Handler {
         let thread_id = cmd.channel_id.get().to_string();
 
         // Ensure session exists
-        if let Err(e) = self.pool.get_or_create(&thread_id).await {
+        if let Err(e) = self.pool.get_or_create(&thread_id, &[]).await {
             let _ = cmd
                 .channel_id
                 .say(&ctx.http, format!("⚠️ Session error: {e}"))
@@ -1012,7 +1033,7 @@ impl Handler {
             .await;
 
         let thread_id = cmd.channel_id.get().to_string();
-        if let Err(e) = self.pool.get_or_create(&thread_id).await {
+        if let Err(e) = self.pool.get_or_create(&thread_id, &[]).await {
             let _ = cmd.channel_id.say(&ctx.http, format!("⚠️ {e}")).await;
             return;
         }
@@ -1079,7 +1100,7 @@ impl Handler {
             .await;
 
         let thread_id = cmd.channel_id.get().to_string();
-        if let Err(e) = self.pool.get_or_create(&thread_id).await {
+        if let Err(e) = self.pool.get_or_create(&thread_id, &[]).await {
             let _ = cmd.channel_id.say(&ctx.http, format!("⚠️ {e}")).await;
             return;
         }
@@ -1203,7 +1224,7 @@ impl Handler {
         let mut report = String::new();
 
         // 1. Check if a session exists for this thread
-        let session_exists = self.pool.get_or_create(&thread_key).await.is_ok();
+        let session_exists = self.pool.get_or_create(&thread_key, &[]).await.is_ok();
         report.push_str(&format!("**Session:** {}\n", if session_exists { "✅ active" } else { "❌ failed to create" }));
 
         if session_exists {
@@ -1271,7 +1292,7 @@ impl Handler {
         let mut report = String::new();
 
         // Try to get usage from bridge
-        let has_session = self.pool.get_or_create(&thread_key).await.is_ok();
+        let has_session = self.pool.get_or_create(&thread_key, &[]).await.is_ok();
         if has_session {
             let usage = self
                 .pool
@@ -1434,7 +1455,7 @@ impl Handler {
         }
 
         let thread_key = cmd.channel_id.get().to_string();
-        if let Err(e) = self.pool.get_or_create(&thread_key).await {
+        if let Err(e) = self.pool.get_or_create(&thread_key, &[]).await {
             let _ = cmd
                 .edit_response(
                     &ctx.http,
@@ -1985,7 +2006,7 @@ impl Handler {
 
         // Append session-level token stats if a session exists in this thread
         let thread_key = cmd.channel_id.get().to_string();
-        if self.pool.get_or_create(&thread_key).await.is_ok() {
+        if self.pool.get_or_create(&thread_key, &[]).await.is_ok() {
             let session_info = self
                 .pool
                 .with_connection(&thread_key, |conn| {
@@ -2286,7 +2307,7 @@ impl Handler {
                 return;
             }
             // Ensure a session exists before trying to compact
-            if let Err(e) = self.pool.get_or_create(&thread_key).await {
+            if let Err(e) = self.pool.get_or_create(&thread_key, &[]).await {
                 let _ = cmd
                     .edit_response(
                         &ctx.http,
@@ -2375,7 +2396,7 @@ impl Handler {
 
         let thread_key = cmd.channel_id.get().to_string();
         // Ensure a session exists so the bridge has something to report on.
-        if let Err(e) = self.pool.get_or_create(&thread_key).await {
+        if let Err(e) = self.pool.get_or_create(&thread_key, &[]).await {
             let _ = cmd
                 .edit_response(
                     &ctx.http,
@@ -2420,7 +2441,7 @@ impl Handler {
         }
 
         let thread_key = cmd.channel_id.get().to_string();
-        if let Err(e) = self.pool.get_or_create(&thread_key).await {
+        if let Err(e) = self.pool.get_or_create(&thread_key, &[]).await {
             let _ = cmd
                 .edit_response(
                     &ctx.http,

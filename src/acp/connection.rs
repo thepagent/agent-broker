@@ -90,10 +90,8 @@ impl AcpConnection {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .current_dir(working_dir);
-        // Create a new process group so we can kill the entire tree.
-        // SAFETY: setpgid is async-signal-safe (POSIX.1-2008) and called
-        // before exec. Return value checked — failure means the child won't
-        // have its own process group, so kill(-pgid) would be unsafe.
+        // Create a new process group so we can kill the entire tree (Unix only).
+        #[cfg(unix)]
         unsafe {
             cmd.pre_exec(|| {
                 if libc::setpgid(0, 0) != 0 {
@@ -322,11 +320,11 @@ impl AcpConnection {
         Ok(())
     }
 
-    pub async fn session_new(&mut self, cwd: &str) -> Result<String> {
+    pub async fn session_new(&mut self, cwd: &str, mcp_servers: &[serde_json::Value]) -> Result<String> {
         let resp = self
             .send_request(
                 "session/new",
-                Some(json!({"cwd": cwd, "mcpServers": []})),
+                Some(json!({"cwd": cwd, "mcpServers": mcp_servers})),
             )
             .await?;
 
@@ -519,11 +517,11 @@ impl AcpConnection {
 
     /// Resume a previous session by ID. Returns Ok(()) if the agent accepted
     /// the load, or an error if it failed (caller should fall back to session/new).
-    pub async fn session_load(&mut self, session_id: &str, cwd: &str) -> Result<()> {
+    pub async fn session_load(&mut self, session_id: &str, cwd: &str, mcp_servers: &[serde_json::Value]) -> Result<()> {
         let resp = self
             .send_request(
                 "session/load",
-                Some(json!({"sessionId": session_id, "cwd": cwd, "mcpServers": []})),
+                Some(json!({"sessionId": session_id, "cwd": cwd, "mcpServers": mcp_servers})),
             )
             .await?;
         // Accept any non-error response as success
@@ -535,21 +533,24 @@ impl AcpConnection {
         Ok(())
     }
 
-    /// Kill the entire process group: SIGTERM → SIGKILL.
-    /// Uses std::thread (not tokio::spawn) so SIGKILL fires even during
-    /// runtime shutdown or panic unwinding.
+    /// Kill the entire process group: SIGTERM → SIGKILL (Unix only).
+    /// On Windows, the child process is killed via Drop on the Child handle.
+    #[cfg(unix)]
     fn kill_process_group(&mut self) {
         let pgid = match self.child_pgid {
             Some(pid) if pid > 0 => pid,
             _ => return,
         };
-        // Stage 1: SIGTERM the process group
         unsafe { libc::kill(-pgid, libc::SIGTERM); }
-        // Stage 2: SIGKILL after brief grace (std::thread survives runtime shutdown)
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(1500));
             unsafe { libc::kill(-pgid, libc::SIGKILL); }
         });
+    }
+
+    #[cfg(not(unix))]
+    fn kill_process_group(&mut self) {
+        // On Windows, rely on Child::kill() in Drop
     }
 }
 

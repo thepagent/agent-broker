@@ -95,10 +95,13 @@ async fn main() -> anyhow::Result<()> {
     let warmup_pool = pool.clone();
     tokio::spawn(async move {
         info!("[warmup] preloading model cache");
-        match warmup_pool.get_or_create("__warmup__").await {
+        match warmup_pool.get_or_create("__warmup__", &[]).await {
             Ok(()) => {
                 let count = warmup_pool.cached_models().await.len();
                 info!(count, "[warmup] model cache populated");
+                // Release warmup session so it doesn't occupy a pool slot
+                warmup_pool.drop_session("__warmup__").await;
+                info!("[warmup] released warmup session");
             }
             Err(e) => warn!(error = %e, "[warmup] failed to preload model cache"),
         }

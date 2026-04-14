@@ -1,4 +1,4 @@
-use crate::acp::connection::AcpConnection;
+use crate::acp::connection::{AcpConnection, ModelInfo, NativeCommand};
 use crate::config::AgentConfig;
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
@@ -20,6 +20,11 @@ pub struct SessionPool {
     state: RwLock<PoolState>,
     config: AgentConfig,
     max_sessions: usize,
+    /// Snapshot of available models for slash command autocomplete.
+    cached_models: RwLock<Vec<ModelInfo>>,
+    cached_current_model: RwLock<String>,
+    /// Native slash commands reported by the agent via `available_commands_update`.
+    cached_native_commands: RwLock<Vec<NativeCommand>>,
 }
 
 impl SessionPool {
@@ -31,10 +36,33 @@ impl SessionPool {
             }),
             config,
             max_sessions,
+            cached_models: RwLock::new(Vec::new()),
+            cached_current_model: RwLock::new("auto".to_string()),
+            cached_native_commands: RwLock::new(Vec::new()),
         }
     }
 
-    pub async fn get_or_create(&self, thread_id: &str) -> Result<()> {
+    pub async fn cached_models(&self) -> Vec<ModelInfo> {
+        self.cached_models.read().await.clone()
+    }
+
+    pub async fn cached_current_model(&self) -> String {
+        self.cached_current_model.read().await.clone()
+    }
+
+    pub async fn cached_native_commands(&self) -> Vec<NativeCommand> {
+        self.cached_native_commands.read().await.clone()
+    }
+
+    /// Replace the cached model list. Used by the background refresh task
+    /// in `main.rs` to keep `/model` autocomplete in sync with upstream.
+    pub async fn set_cached_models(&self, models: Vec<ModelInfo>) {
+        if !models.is_empty() {
+            *self.cached_models.write().await = models;
+        }
+    }
+
+    pub async fn get_or_create(&self, thread_id: &str, mcp_servers: &[serde_json::Value]) -> Result<()> {
         // Check if alive connection exists
         {
             let state = self.state.read().await;
@@ -86,7 +114,7 @@ impl SessionPool {
         let mut resumed = false;
         if let Some(ref sid) = saved_session_id {
             if conn.supports_load_session {
-                match conn.session_load(sid, &self.config.working_dir).await {
+                match conn.session_load(sid, &self.config.working_dir, mcp_servers).await {
                     Ok(()) => {
                         info!(thread_id, session_id = %sid, "session resumed via session/load");
                         resumed = true;
@@ -99,10 +127,25 @@ impl SessionPool {
         }
 
         if !resumed {
-            conn.session_new(&self.config.working_dir).await?;
+            conn.session_new(&self.config.working_dir, mcp_servers).await?;
             if saved_session_id.is_some() {
                 conn.session_reset = true;
             }
+        }
+
+        // Refresh model cache snapshot for slash command autocomplete.
+        if !conn.available_models.is_empty() {
+            *self.cached_models.write().await = conn.available_models.clone();
+        }
+        *self.cached_current_model.write().await = conn.current_model.clone();
+
+        // Snapshot native agent commands (arrives async via available_commands_update).
+        // Give the agent a moment to push the notification after session/new.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let cmds = conn.native_commands.lock().await.clone();
+        if !cmds.is_empty() {
+            info!(count = cmds.len(), "caching native agent commands");
+            *self.cached_native_commands.write().await = cmds;
         }
 
         state.active.insert(thread_id.to_string(), conn);
@@ -119,6 +162,14 @@ impl SessionPool {
             .get_mut(thread_id)
             .ok_or_else(|| anyhow!("no connection for thread {thread_id}"))?;
         f(conn).await
+    }
+
+    /// Drop a session for a specific thread. Returns true if one was removed.
+    pub async fn drop_session(&self, thread_id: &str) -> bool {
+        let mut state = self.state.write().await;
+        let existed = state.active.remove(thread_id).is_some();
+        state.suspended.remove(thread_id);
+        existed
     }
 
     pub async fn cleanup_idle(&self, ttl_secs: u64) {
