@@ -1,0 +1,121 @@
+{
+  "servers": [
+    {
+      "name": "github",
+      "description": "GitHub API — issues, PRs, repos, code search",
+      "category": "dev",
+      "auth": "builtin",
+      "transport": "builtin",
+      "config": {}
+    },
+    {
+      "name": "notion",
+      "description": "Notion pages, databases, comments",
+      "category": "productivity",
+      "auth": "token",
+      "transport": "http",
+      "config": {
+        "url": "https://mcp.notion.com/mcp"
+      }
+    },
+    {
+      "name": "context7",
+      "description": "npm/library documentation lookup",
+      "category": "dev",
+      "auth": "none",
+      "transport": "stdio",
+      "config": {
+        "command": "npx",
+        "args": ["-y", "@upstash/context7-mcp"]
+      }
+    },
+    {
+      "name": "filesystem",
+      "description": "Local filesystem read/write/search",
+      "category": "system",
+      "auth": "none",
+      "transport": "stdio",
+      "config": {
+        "command": "npx",
+        "args": ["-y", "@anthropic/mcp-server-filesystem"]
+      }
+    },
+    {
+      "name": "memory",
+      "description": "Persistent key-value memory store",
+      "category": "system",
+      "auth": "none",
+      "transport": "stdio",
+      "config": {
+        "command": "npx",
+        "args": ["-y", "@anthropic/mcp-server-memory"]
+      }
+    },
+    {
+      "name": "brave-search",
+      "description": "Brave web search API",
+      "category": "search",
+      "auth": "api_key",
+      "transport": "stdio",
+      "config": {
+        "command": "npx",
+        "args": ["-y", "@anthropic/mcp-server-brave-search"]
+      }
+    },
+    {
+      "name": "slack",
+      "description": "Slack messaging and channels",
+      "category": "productivity",
+      "auth": "token",
+      "transport": "stdio",
+      "config": {
+        "command": "npx",
+        "args": ["-y", "@anthropic/mcp-server-slack"]
+      }
+    },
+    {
+      "name": "linear",
+      "description": "Linear issue tracker",
+      "category": "dev",
+      "auth": "api_key",
+      "transport": "stdio",
+      "config": {
+        "command": "npx",
+        "args": ["-y", "mcp-linear"]
+      }
+    },
+    {
+      "name": "sentry",
+      "description": "Sentry error monitoring",
+      "category": "dev",
+      "auth": "token",
+      "transport": "stdio",
+      "config": {
+        "command": "npx",
+        "args": ["-y", "@sentry/mcp-server"]
+      }
+    },
+    {
+      "name": "puppeteer",
+      "description": "Headless browser automation",
+      "category": "system",
+      "auth": "none",
+      "transport": "stdio",
+      "config": {
+        "command": "npx",
+        "args": ["-y", "@anthropic/mcp-server-puppeteer"]
+      }
+    },
+    {
+      "name": "mempalace",
+      "description": "MemPalace structured memory system",
+      "category": "system",
+      "auth": "none",
+      "transport": "stdio",
+      "config": {
+        "command": "mempalace",
+        "args": ["serve"]
+      }
+    }
+  ]
+}

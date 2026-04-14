@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "servers": [
+    {
+      "name": "github",
+      "description": "GitHub Issues, PRs, Code Search, Repositories",
+      "type": "builtin",
+      "category": "development",
+      "setup": "--enable-all-github-mcp-tools",
+      "auth": "gh auth login"
+    },
+    {
+      "name": "notion",
+      "description": "Notion pages, databases, comments, search",
+      "type": "http",
+      "url": "https://mcp.notion.com/mcp",
+      "category": "productivity",
+      "auth": "OAuth (browser redirect)"
+    },
+    {
+      "name": "context7",
+      "description": "Up-to-date documentation for npm packages",
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"],
+      "category": "development",
+      "auth": "none"
+    },
+    {
+      "name": "filesystem",
+      "description": "Read/write local files and directories",
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home"],
+      "category": "system",
+      "auth": "none"
+    },
+    {
+      "name": "memory",
+      "description": "Persistent knowledge graph memory",
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "category": "productivity",
+      "auth": "none"
+    },
+    {
+      "name": "brave-search",
+      "description": "Web search via Brave Search API",
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+      "category": "search",
+      "auth": "BRAVE_API_KEY env var"
+    },
+    {
+      "name": "slack",
+      "description": "Slack channels, messages, users",
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-slack"],
+      "category": "communication",
+      "auth": "SLACK_BOT_TOKEN env var"
+    },
+    {
+      "name": "linear",
+      "description": "Linear issues, projects, teams",
+      "type": "http",
+      "url": "https://mcp.linear.app/sse",
+      "category": "project-management",
+      "auth": "OAuth (browser redirect)"
+    },
+    {
+      "name": "sentry",
+      "description": "Sentry error tracking and monitoring",
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@sentry/mcp-server"],
+      "category": "monitoring",
+      "auth": "SENTRY_AUTH_TOKEN env var"
+    },
+    {
+      "name": "puppeteer",
+      "description": "Browser automation - navigate, screenshot, interact",
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
+      "category": "automation",
+      "auth": "none"
+    },
+    {
+      "name": "mempalace",
+      "description": "MemPalace searchable memory system",
+      "type": "stdio",
+      "command": "wsl.exe",
+      "args": ["-u", "root", "-d", "Ubuntu", "--", "/root/.local/share/pipx/venvs/mempalace/bin/python3", "-m", "mempalace.mcp_server", "--palace", "/root/.mempalace/palace"],
+      "category": "productivity",
+      "auth": "none (local)"
+    }
+  ]
+}

@@ -34,6 +34,7 @@ async fn main() -> anyhow::Result<()> {
         channels = ?cfg.discord.allowed_channels,
         users = ?cfg.discord.allowed_users,
         reactions = cfg.reactions.enabled,
+        allow_bot_messages = ?cfg.discord.allow_bot_messages,
         "config loaded"
     );
 
@@ -45,11 +46,8 @@ async fn main() -> anyhow::Result<()> {
 
     let allowed_channels = parse_id_set(&cfg.discord.allowed_channels, "allowed_channels")?;
     let allowed_users = parse_id_set(&cfg.discord.allowed_users, "allowed_users")?;
-    info!(
-        channels = allowed_channels.len(),
-        users = allowed_users.len(),
-        "parsed allowlists"
-    );
+    let trusted_bot_ids = parse_id_set(&cfg.discord.trusted_bot_ids, "trusted_bot_ids")?;
+    info!(channels = allowed_channels.len(), users = allowed_users.len(), trusted_bots = ?trusted_bot_ids, "parsed allowlists");
 
     let copilot_list_cache = Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
 
@@ -82,6 +80,8 @@ async fn main() -> anyhow::Result<()> {
         stt_config: cfg.stt.clone(),
         soul_file: cfg.soul_file.clone(),
         mcp_profiles_dir: cfg.mcp_profiles_dir.clone(),
+        allow_bot_messages: cfg.discord.allow_bot_messages,
+        trusted_bot_ids,
     };
 
     let intents =

@@ -1,0 +1,28 @@
+[2m2026-04-14T10:51:20.469706Z[0m [32m INFO[0m [2mopenab[0m[2m:[0m config loaded [3magent_cmd[0m[2m=[0mcmd [3mpool_max[0m[2m=[0m5 [3mchannels[0m[2m=[0m[] [3musers[0m[2m=[0m["844236700611379200"] [3mreactions[0m[2m=[0mtrue
+[2m2026-04-14T10:51:20.469881Z[0m [32m INFO[0m [2mopenab[0m[2m:[0m detected backend type [3mbackend[0m[2m=[0mCopilotNative
+[2m2026-04-14T10:51:20.469925Z[0m [32m INFO[0m [2mopenab[0m[2m:[0m parsed allowlists [3mchannels[0m[2m=[0m0 [3musers[0m[2m=[0m1
+[2m2026-04-14T10:51:20.502780Z[0m [32m INFO[0m [2mopenab[0m[2m:[0m starting discord bot
+[2m2026-04-14T10:51:20.502808Z[0m [32m INFO[0m [2mopenab[0m[2m:[0m [refresh] skipping Copilot list/model refresh (non-Copilot backend)
+[2m2026-04-14T10:51:20.502837Z[0m [32m INFO[0m [2mopenab[0m[2m:[0m [warmup] preloading model cache
+[2m2026-04-14T10:51:20.503083Z[0m [32m INFO[0m [2mopenab::acp::connection[0m[2m:[0m spawning agent [3mcmd[0m[2m=[0m"cmd" [3margs[0m[2m=[0m["/c", "copilot", "--acp", "--enable-all-github-mcp-tools"] [3mcwd[0m[2m=[0m"C:\\Users\\Administrator"
+[2m2026-04-14T10:51:21.387873Z[0m [32m INFO[0m [2mopenab::discord[0m[2m:[0m discord bot connected [3muser[0m[2m=[0mCOPILX [3mguilds[0m[2m=[0m1
+[2m2026-04-14T10:51:21.658625Z[0m [32m INFO[0m [2mopenab::discord[0m[2m:[0m cleared all slash commands (CopilotNative) [3mguild_id[0m[2m=[0m1492254295364731081
+[2m2026-04-14T10:51:30.723512Z[0m [32m INFO[0m [2mopenab::acp::connection[0m[2m:[0m initialized [3magent[0m[2m=[0m"Copilot" [3mload_session[0m[2m=[0mtrue
+[2m2026-04-14T10:51:35.913450Z[0m [32m INFO[0m [2mopenab::acp::connection[0m[2m:[0m session created [3msession_id[0m[2m=[0m02891b8a-0a5f-48af-9081-838bbcba47a9
+[2m2026-04-14T10:51:35.913552Z[0m [32m INFO[0m [2mopenab::acp::connection[0m[2m:[0m parsed available models [3mcount[0m[2m=[0m8 [3mcurrent[0m[2m=[0mgpt-5.3-codex
+[2m2026-04-14T10:51:35.913653Z[0m [32m INFO[0m [2mopenab[0m[2m:[0m [warmup] model cache populated [3mcount[0m[2m=[0m8
+[2m2026-04-14T10:51:35.914012Z[0m [32m INFO[0m [2mopenab[0m[2m:[0m [warmup] released warmup session
+[2m2026-04-14T10:54:35.251573Z[0m [32m INFO[0m [2mopenab[0m[2m:[0m config loaded [3magent_cmd[0m[2m=[0mcmd [3mpool_max[0m[2m=[0m5 [3mchannels[0m[2m=[0m[] [3musers[0m[2m=[0m["844236700611379200"] [3mreactions[0m[2m=[0mtrue
+[2m2026-04-14T10:54:35.251650Z[0m [32m INFO[0m [2mopenab[0m[2m:[0m detected backend type [3mbackend[0m[2m=[0mCopilotNative
+[2m2026-04-14T10:54:35.251664Z[0m [32m INFO[0m [2mopenab[0m[2m:[0m parsed allowlists [3mchannels[0m[2m=[0m0 [3musers[0m[2m=[0m1
+[2m2026-04-14T10:54:35.360829Z[0m [32m INFO[0m [2mopenab[0m[2m:[0m starting discord bot
+[2m2026-04-14T10:54:35.360880Z[0m [32m INFO[0m [2mopenab[0m[2m:[0m [refresh] skipping Copilot list/model refresh (non-Copilot backend)
+[2m2026-04-14T10:54:35.360861Z[0m [32m INFO[0m [2mopenab[0m[2m:[0m [warmup] preloading model cache
+[2m2026-04-14T10:54:35.360953Z[0m [32m INFO[0m [2mopenab::acp::connection[0m[2m:[0m spawning agent [3mcmd[0m[2m=[0m"cmd" [3margs[0m[2m=[0m["/c", "copilot", "--acp", "--enable-all-github-mcp-tools"] [3mcwd[0m[2m=[0m"C:\\Users\\Administrator"
+[2m2026-04-14T10:54:37.866993Z[0m [32m INFO[0m [2mopenab::discord[0m[2m:[0m discord bot connected [3muser[0m[2m=[0mCOPILX [3mguilds[0m[2m=[0m1
+[2m2026-04-14T10:54:38.132072Z[0m [32m INFO[0m [2mopenab::discord[0m[2m:[0m cleared all slash commands (CopilotNative) [3mguild_id[0m[2m=[0m1492254295364731081
+[2m2026-04-14T10:54:39.253014Z[0m [32m INFO[0m [2mopenab::acp::connection[0m[2m:[0m initialized [3magent[0m[2m=[0m"Copilot" [3mload_session[0m[2m=[0mtrue
+[2m2026-04-14T10:54:44.455936Z[0m [32m INFO[0m [2mopenab::acp::connection[0m[2m:[0m session created [3msession_id[0m[2m=[0m5c0e7fd1-8f2b-4da7-b6f0-e2ad90607b91
+[2m2026-04-14T10:54:44.456032Z[0m [32m INFO[0m [2mopenab::acp::connection[0m[2m:[0m parsed available models [3mcount[0m[2m=[0m8 [3mcurrent[0m[2m=[0mgpt-5.3-codex
+[2m2026-04-14T10:54:44.456307Z[0m [32m INFO[0m [2mopenab[0m[2m:[0m [warmup] model cache populated [3mcount[0m[2m=[0m8
+[2m2026-04-14T10:54:44.456661Z[0m [32m INFO[0m [2mopenab[0m[2m:[0m [warmup] released warmup session

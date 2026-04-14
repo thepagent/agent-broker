@@ -865,12 +865,13 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "openab"
-version = "0.7.1"
+version = "0.7.4"
 dependencies = [
  "anyhow",
  "base64",
  "futures",
  "image",
+ "libc",
  "rand 0.8.5",
  "regex",
  "reqwest",
