@@ -101,7 +101,7 @@ Converted to ACP format:
 2. **Per-user isolation** — unlike OpenClaw (global) and Hermes (global registry), our profiles are keyed by Discord user ID, so different users get different MCP servers.
 3. **Per-bot isolation** — each bot has its own `mcp_profiles_dir`, so CICX and GITX can have different MCP configurations.
 4. **Graceful fallback** — `read_mcp_profile()` returns empty vec on any error. Backends that don't support `mcpServers` simply ignore the parameter (empty array is always valid).
-5. **Minimal diff** — 143 lines added across 5 files. No new dependencies, no new config fields.
+5. **Comprehensive review** — 7 rounds of Codex CLI review with all P1 findings fixed. Security (allowlists), correctness (permission protocol), and portability (no hardcoded paths) all addressed.
 
 ## Alternatives Considered
 
@@ -114,13 +114,29 @@ Converted to ACP format:
 ## Validation
 
 - [x] `cargo check` passes
-- [x] `cargo build --release` passes (0 errors, 3 pre-existing warnings)
+- [x] `cargo build --release` — 0 errors, 2 pre-existing warnings
 - [x] `cargo test` — 31 passed, 0 failed
 - [x] `cargo fmt` — all files formatted
-- [x] `cargo clippy` — 0 new warnings (3 pre-existing)
-- [x] Format verification: all 4 backends (Claude, Copilot, Gemini, Codex) accept `[{name, type:"http", url, headers:[]}]` format in `session/new`
-- [x] E2E test: Claude ACP — profile loaded → session/new with mcpServers → ToolSearch found `mempalace_search` → tool called → returned GPU data from MemPalace
+- [x] `cargo clippy` — 0 new warnings
+- [x] Format verification: all 4 backends (Claude, Copilot, Gemini, Codex) accept `[{name, type:"http", url, headers:[]}]` in `session/new`
+- [x] E2E test: Claude ACP — profile → session/new(mcpServers) → ToolSearch → mempalace_search → GPU data ✅
+- [x] Codex CLI review — 7 rounds, 14 P1 + 13 P2 findings. Fixed 14 P1 + 10 P2. Remaining 3 P2 are architectural known-limitations (not regressions)
 - [x] Test scripts: `scripts/test-mcp-acp-v3.js` (format matrix), `scripts/test-e2e-final.js` (end-to-end)
+
+### Additional fixes from Codex review (not in original scope)
+
+| Fix | Impact |
+|-----|--------|
+| Restored upstream `pick_best_option` + `build_permission_response` for ACP permissions | Correct tool approval for all backends |
+| `kill_on_drop(true)` on ACP child processes | Windows subprocess cleanup |
+| Copilot SDK/CLI paths dynamically resolved | Works on any machine, any Copilot version |
+| `copilot_rpc_script_path()` resolves exe-relative | Removes all hardcoded local paths from Rust |
+| Copilot bridge merges ACP request mcpServers with file-based config | Per-user MCP works for CopilotBridge |
+| All slash commands gated with `copilot_guard_ok()` | Channel/user allowlist enforced everywhere |
+| `cleanup_idle` uses `saturating_duration_since` | Prevents Instant underflow panic on Windows reboot |
+| Native command caching via `tokio::spawn` | No 2s latency on first message |
+| Copilot model refresh gated on `has_copilot_rpc()` | Non-Copilot bots keep correct model cache |
+| `session_load()` parses model metadata | `/model` works in resumed sessions |
 
 <details>
 <summary>E2E test output (Claude ACP)</summary>
