@@ -18,10 +18,14 @@ use std::sync::Arc;
 use tokio::sync::watch;
 use tracing::{debug, error, info};
 
-/// Hard cap on consecutive bot-to-bot turns per thread/channel.
-/// Prevents infinite loops when `allow_bot_messages = "all"`.
+/// Hard cap on consecutive bot messages (from any other bot) in a
+/// channel or thread. When this many recent messages are all from
+/// bots other than ourselves, we stop responding to prevent runaway
+/// loops between multiple bots in "all" mode.
+///
+/// Note: must be ≤ 255 because Serenity's `GetMessages::limit()` takes `u8`.
 /// Inspired by OpenClaw's `session.agentToAgent.maxPingPongTurns`.
-const MAX_BOT_TURNS_PER_THREAD: usize = 10;
+const MAX_CONSECUTIVE_BOT_TURNS: u8 = 10;
 
 /// Reusable HTTP client for downloading Discord attachments.
 /// Built once with a 30s timeout and rustls TLS (no native-tls deps).
@@ -69,19 +73,51 @@ impl EventHandler for Handler {
                 AllowBots::Off => return,
                 AllowBots::Mentions => if !is_mentioned { return; },
                 AllowBots::All => {
-                    // Safety net: cap consecutive bot messages to prevent
-                    // infinite loops when two bots both use "all" mode.
-                    if let Ok(history) = msg.channel_id
-                        .messages(&ctx.http, serenity::builder::GetMessages::new().before(msg.id).limit(MAX_BOT_TURNS_PER_THREAD as u8))
-                        .await
-                    {
-                        let consecutive_bot = history.iter()
-                            .take_while(|m| m.author.bot && m.author.id != bot_id)
-                            .count();
-                        if consecutive_bot >= MAX_BOT_TURNS_PER_THREAD {
-                            tracing::warn!(channel_id = %msg.channel_id, cap = MAX_BOT_TURNS_PER_THREAD, "bot turn cap reached, ignoring");
-                            return;
+                    // Safety net: count consecutive messages from any bot
+                    // (excluding ourselves) in recent history. If all recent
+                    // messages are from other bots, we've likely entered a
+                    // loop. This counts *all* other-bot messages, not just
+                    // one specific bot — so 3 bots taking turns still hits
+                    // the cap (which is intentionally conservative).
+                    //
+                    // Try cache first to avoid an API call on every bot
+                    // message. Fall back to API on cache miss. If both fail,
+                    // reject the message (fail-closed) to avoid unbounded
+                    // loops during Discord API outages.
+                    let cap = MAX_CONSECUTIVE_BOT_TURNS as usize;
+                    let history = ctx.cache.channel_messages(msg.channel_id)
+                        .map(|msgs| {
+                            let mut recent: Vec<_> = msgs.iter()
+                                .filter(|(mid, _)| **mid < msg.id)
+                                .map(|(_, m)| m.clone())
+                                .collect();
+                            recent.sort_unstable_by(|a, b| b.id.cmp(&a.id)); // newest first
+                            recent.truncate(cap);
+                            recent
+                        })
+                        .filter(|msgs| !msgs.is_empty());
+
+                    let recent = if let Some(cached) = history {
+                        cached
+                    } else {
+                        match msg.channel_id
+                            .messages(&ctx.http, serenity::builder::GetMessages::new().before(msg.id).limit(MAX_CONSECUTIVE_BOT_TURNS))
+                            .await
+                        {
+                            Ok(msgs) => msgs,
+                            Err(e) => {
+                                tracing::warn!(channel_id = %msg.channel_id, error = %e, "failed to fetch history for bot turn cap, rejecting (fail-closed)");
+                                return;
+                            }
                         }
+                    };
+
+                    let consecutive_bot = recent.iter()
+                        .take_while(|m| m.author.bot && m.author.id != bot_id)
+                        .count();
+                    if consecutive_bot >= cap {
+                        tracing::warn!(channel_id = %msg.channel_id, cap, "bot turn cap reached, ignoring");
+                        return;
                     }
                 },
             }
