@@ -1,0 +1,11 @@
+{
+  "discord_user_id": "844236700611379200",
+  "mcpServers": {
+    "mempalace": {
+      "type": "http",
+      "url": "http://127.0.0.1:18793/mcp",
+      "headers": []
+    }
+  },
+  "enabled": true
+}

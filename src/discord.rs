@@ -922,8 +922,9 @@ impl Handler {
         // Get the thread id from the channel
         let thread_id = cmd.channel_id.get().to_string();
 
-        // Ensure session exists
-        if let Err(e) = self.pool.get_or_create(&thread_id, &[]).await {
+        // Ensure session exists (with user's MCP servers)
+        let mcp = self.mcp_servers_for_user(cmd.user.id.get());
+        if let Err(e) = self.pool.get_or_create(&thread_id, &mcp).await {
             let _ = cmd
                 .channel_id
                 .say(&ctx.http, format!("⚠️ Session error: {e}"))
@@ -1033,7 +1034,8 @@ impl Handler {
             .await;
 
         let thread_id = cmd.channel_id.get().to_string();
-        if let Err(e) = self.pool.get_or_create(&thread_id, &[]).await {
+        let mcp = self.mcp_servers_for_user(cmd.user.id.get());
+        if let Err(e) = self.pool.get_or_create(&thread_id, &mcp).await {
             let _ = cmd.channel_id.say(&ctx.http, format!("⚠️ {e}")).await;
             return;
         }
@@ -1100,7 +1102,8 @@ impl Handler {
             .await;
 
         let thread_id = cmd.channel_id.get().to_string();
-        if let Err(e) = self.pool.get_or_create(&thread_id, &[]).await {
+        let mcp = self.mcp_servers_for_user(cmd.user.id.get());
+        if let Err(e) = self.pool.get_or_create(&thread_id, &mcp).await {
             let _ = cmd.channel_id.say(&ctx.http, format!("⚠️ {e}")).await;
             return;
         }
@@ -2307,7 +2310,8 @@ impl Handler {
                 return;
             }
             // Ensure a session exists before trying to compact
-            if let Err(e) = self.pool.get_or_create(&thread_key, &[]).await {
+            let mcp_servers = self.mcp_servers_for_user(cmd.user.id.get());
+            if let Err(e) = self.pool.get_or_create(&thread_key, &mcp_servers).await {
                 let _ = cmd
                     .edit_response(
                         &ctx.http,
