@@ -616,6 +616,37 @@ impl AcpConnection {
         }
         info!(session_id, "session loaded");
         self.acp_session_id = Some(session_id.to_string());
+
+        // Parse model metadata (mirrors session_new logic)
+        if let Some(models) = resp.result.as_ref().and_then(|r| r.get("models")) {
+            if let Some(current) = models.get("currentModelId").and_then(|v| v.as_str()) {
+                self.current_model = current.to_string();
+            }
+            if let Some(arr) = models.get("availableModels").and_then(|v| v.as_array()) {
+                self.available_models = arr
+                    .iter()
+                    .filter_map(|m| {
+                        let model_id = m.get("modelId")?.as_str()?.to_string();
+                        let name = m
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(&model_id)
+                            .to_string();
+                        let description = m
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        Some(ModelInfo {
+                            model_id,
+                            name,
+                            description,
+                        })
+                    })
+                    .collect();
+            }
+        }
+
         Ok(())
     }
 

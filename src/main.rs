@@ -119,13 +119,20 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Spawn Copilot list cache refresh task. Polls copilot-rpc.js for
-    // agents/skills/mcp/extensions lists every 5 minutes and stores the
-    // name strings in `copilot_list_cache` for instant autocomplete lookup.
-    // Also refreshes the pool's cached_models snapshot used by /model autocomplete.
+    // Spawn Copilot list cache refresh task — only for CopilotBridge backend.
+    // Non-Copilot backends get their model cache from the warmup session and
+    // subsequent session_new() calls; overwriting with copilot-rpc.js would
+    // replace real model IDs with Copilot-specific ones.
     let list_cache_refresh = copilot_list_cache.clone();
     let list_cache_pool = pool.clone();
+    let is_copilot = backend.has_copilot_rpc();
     let list_cache_handle = tokio::spawn(async move {
+        if !is_copilot {
+            info!("[refresh] skipping Copilot list/model refresh (non-Copilot backend)");
+            // Park forever — keeps the JoinHandle alive without doing work
+            std::future::pending::<()>().await;
+            return;
+        }
         // Initial delay so bridge/ACP session has time to warm up
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         loop {

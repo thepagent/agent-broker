@@ -1004,23 +1004,11 @@ impl Handler {
 
     /// Handle /native <command> [args] — send as prompt to the agent which parses it.
     async fn handle_native_command(&self, ctx: &Context, cmd: &CommandInteraction) {
-        // Allowlist: channel
-        if !self.allowed_channels.is_empty()
-            && !self.allowed_channels.contains(&cmd.channel_id.get())
-        {
-            let _ = cmd
-                .create_response(
-                    &ctx.http,
-                    CreateInteractionResponse::Message(
-                        CreateInteractionResponseMessage::new()
-                            .content("⛔ Not authorized (channel)")
-                            .ephemeral(true),
-                    ),
-                )
-                .await;
+        // Allowlist: channel + thread parent + user (reuse existing guard)
+        if !self.copilot_guard_ok(ctx, cmd).await {
             return;
         }
-        // Allowlist: user
+        // Additional user allowlist (copilot_guard_ok checks channel, this checks user)
         if !self.allowed_users.is_empty() && !self.allowed_users.contains(&cmd.user.id.get()) {
             let _ = cmd
                 .create_response(
@@ -1948,6 +1936,9 @@ impl Handler {
 
     /// Handle `/mcp-add`, `/mcp-remove`, `/mcp-list` — per-user MCP profile management.
     async fn handle_mcp_profile_command(&self, ctx: &Context, cmd: &CommandInteraction) {
+        if !self.copilot_guard_ok(ctx, cmd).await {
+            return;
+        }
         let Some(dir) = &self.mcp_profiles_dir else {
             let _ = cmd
                 .create_response(
@@ -2127,6 +2118,9 @@ impl Handler {
 
     /// Handle `/mcp-browse`, `/mcp-install`, `/mcp-status` — MCP registry commands.
     async fn handle_mcp_registry_command(&self, ctx: &Context, cmd: &CommandInteraction) {
+        if !self.copilot_guard_ok(ctx, cmd).await {
+            return;
+        }
         let Some(dir) = &self.mcp_profiles_dir else {
             let _ = cmd
                 .create_response(
