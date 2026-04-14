@@ -1,6 +1,7 @@
 @echo off
 setlocal
-set DISCORD_BOT_TOKEN=REDACTED_GIMINIX_TOKEN
+call "%~dp0.env.tokens"
+set DISCORD_BOT_TOKEN=%GIMINIX_TOKEN%
 set PATH=%APPDATA%\npm;%PATH%
 cd /d C:\Users\Administrator\openab
 

@@ -1,6 +1,7 @@
 @echo off
 setlocal
-set DISCORD_BOT_TOKEN=REDACTED_CODEX_TOKEN
+call "%~dp0.env.tokens"
+set DISCORD_BOT_TOKEN=%CODEX_TOKEN%
 set OPENAB_BACKEND=codex
 set PATH=%APPDATA%\npm;%LOCALAPPDATA%\Microsoft\WinGet\Links;%PATH%
 cd /d C:\Users\Administrator\openab

@@ -1,6 +1,7 @@
 @echo off
 setlocal
-set DISCORD_BOT_TOKEN=REDACTED_COPILX_TOKEN
+call "%~dp0.env.tokens"
+set DISCORD_BOT_TOKEN=%COPILX_TOKEN%
 set PATH=%APPDATA%\npm;%LOCALAPPDATA%\Microsoft\WinGet\Links;%PATH%
 cd /d C:\Users\Administrator\openab
 

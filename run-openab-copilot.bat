@@ -1,6 +1,7 @@
 @echo off
 setlocal EnableDelayedExpansion
-set DISCORD_BOT_TOKEN=REDACTED_GITX_TOKEN
+call "%~dp0.env.tokens"
+set DISCORD_BOT_TOKEN=%GITX_TOKEN%
 rem COPILOT_APPEND_SYSTEM now loaded by copilot-agent-acp.js via fs.readFileSync
 rem (set /p had 1023-char truncation bug — prompt is 1239 chars)
 set PATH=%LOCALAPPDATA%\Microsoft\WinGet\Links;%APPDATA%\npm;%PATH%

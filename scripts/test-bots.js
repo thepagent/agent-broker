@@ -9,7 +9,7 @@ const OWNER_ID = '844236700611379200';
 // Bot tokens (for reading responses only - we send as a user via webhook or bot)
 const BOTS = {
   CICX: {
-    token: 'REDACTED_CICX_TOKEN',
+    token: process.env.DISCORD_BOT_TOKEN || '',
     appId: null,
   },
 };

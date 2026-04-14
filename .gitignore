@@ -20,3 +20,4 @@ config.toml
 /acp-out.txt
 /acp-err.txt
 /acp-stderr.txt
+.env.tokens
