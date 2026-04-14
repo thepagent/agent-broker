@@ -22,8 +22,13 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let config_path = std::env::args()
-        .nth(1)
+    let first_arg = std::env::args().nth(1);
+    if matches!(first_arg.as_deref(), Some("--version") | Some("-V")) {
+        println!("openab {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
+    let config_path = first_arg
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("config.toml"));
 
