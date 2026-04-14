@@ -6,6 +6,10 @@ Thanks for your interest in contributing! This guide covers what we expect in pu
 
 Every PR must address the following in its description. The [PR template](/.github/pull_request_template.md) will prompt you for each section.
 
+### 0. Discord Discussion URL
+
+Every PR must include a Discord Discussion URL in the body (e.g. `https://discord.com/channels/...`). PRs without one will be labeled `closing-soon` and auto-closed after 3 days.
+
 ### 1. What problem does this solve?
 
 Describe the pain point or requirement in plain language. Link the related issue.

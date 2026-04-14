@@ -35,6 +35,7 @@ Every PR must include these sections in its description:
 
 | # | Section | Purpose |
 |---|---------|---------|
+| 0 | **Discord Discussion URL** | Link to the prior Discord discussion. PRs without one are auto-labeled `closing-soon` and closed after 3 days. |
 | 1 | **What problem does this solve?** | Pain point or requirement in plain language. Link the related issue. |
 | 2 | **At a Glance** | ASCII diagram showing the high-level flow, architecture, or where the change fits in the system. |
 | 3 | **Prior Art & Industry Research** | How OpenClaw and Hermes Agent handle the same problem. Links to code/docs. |
@@ -97,6 +98,8 @@ Contributor researches prior art
 <!-- Describe the pain point in plain language. Link the related issue. -->
 
 Closes #
+
+Discord Discussion URL: https://discord.com/channels/...
 
 ## At a Glance
 

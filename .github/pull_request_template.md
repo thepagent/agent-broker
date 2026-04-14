@@ -4,6 +4,8 @@
 
 Closes #
 
+Discord Discussion URL: https://discord.com/channels/...
+
 ## At a Glance
 
 <!-- ASCII diagram showing the high-level flow or where this change fits in the system. Example:
