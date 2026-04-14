@@ -161,7 +161,7 @@ async fn main() -> anyhow::Result<()> {
 /// without needing to restart OpenAB.
 async fn refresh_copilot_models(pool: &Arc<acp::SessionPool>) {
     use tokio::process::Command as TokioCommand;
-    let script = r"C:\Users\Administrator\openab\scripts\copilot-rpc.js";
+    let script = &crate::discord::copilot_rpc_script_path();
     let out = tokio::time::timeout(
         std::time::Duration::from_secs(30),
         TokioCommand::new("node").arg(script).arg("models").output(),
@@ -209,7 +209,7 @@ async fn refresh_copilot_list_cache(
 ) {
     use tokio::process::Command as TokioCommand;
 
-    let script = r"C:\Users\Administrator\openab\scripts\copilot-rpc.js";
+    let script = &crate::discord::copilot_rpc_script_path();
     let lists: &[(&str, &str, &str)] = &[
         // (rpc_subcommand, json_array_key, item_name_field)
         ("agents", "agents", "name"),

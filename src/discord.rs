@@ -1,5 +1,29 @@
 use crate::acp::{classify_notification, AcpEvent, ContentBlock, SessionPool};
 use crate::config::{read_mcp_profile, ReactionsConfig, SttConfig};
+
+/// Resolve the copilot-rpc.js path relative to the running executable.
+pub fn copilot_rpc_script_path() -> String {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            // In dev: target/release/openab.exe → ../../scripts/copilot-rpc.js
+            // In deploy: same dir or scripts/ subdir
+            for candidate in [
+                dir.join("scripts").join("copilot-rpc.js"),
+                dir.join("..")
+                    .join("..")
+                    .join("scripts")
+                    .join("copilot-rpc.js"),
+                dir.join("copilot-rpc.js"),
+            ] {
+                if candidate.exists() {
+                    return candidate.to_string_lossy().into_owned();
+                }
+            }
+        }
+    }
+    // Fallback: assume CWD-relative
+    "scripts/copilot-rpc.js".to_string()
+}
 use crate::error_display::{format_coded_error, format_user_error};
 use crate::format;
 use crate::reactions::StatusReactionController;
@@ -980,6 +1004,22 @@ impl Handler {
 
     /// Handle /native <command> [args] — send as prompt to the agent which parses it.
     async fn handle_native_command(&self, ctx: &Context, cmd: &CommandInteraction) {
+        // Allowlist: channel
+        if !self.allowed_channels.is_empty()
+            && !self.allowed_channels.contains(&cmd.channel_id.get())
+        {
+            let _ = cmd
+                .create_response(
+                    &ctx.http,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new()
+                            .content("⛔ Not authorized (channel)")
+                            .ephemeral(true),
+                    ),
+                )
+                .await;
+            return;
+        }
         // Allowlist: user
         if !self.allowed_users.is_empty() && !self.allowed_users.contains(&cmd.user.id.get()) {
             let _ = cmd
@@ -1408,7 +1448,11 @@ impl Handler {
         let mut report = String::new();
 
         // 1. Check if a session exists for this thread
-        let session_exists = self.pool.get_or_create(&thread_key, &[]).await.is_ok();
+        let session_exists = self
+            .pool
+            .get_or_create(&thread_key, &self.mcp_servers_for_user(cmd.user.id.get()))
+            .await
+            .is_ok();
         report.push_str(&format!(
             "**Session:** {}\n",
             if session_exists {
@@ -1483,7 +1527,11 @@ impl Handler {
         let mut report = String::new();
 
         // Try to get usage from bridge
-        let has_session = self.pool.get_or_create(&thread_key, &[]).await.is_ok();
+        let has_session = self
+            .pool
+            .get_or_create(&thread_key, &self.mcp_servers_for_user(cmd.user.id.get()))
+            .await
+            .is_ok();
         if has_session {
             let usage = self
                 .pool
@@ -2355,7 +2403,12 @@ impl Handler {
 
         // Append session-level token stats if a session exists in this thread
         let thread_key = cmd.channel_id.get().to_string();
-        if self.pool.get_or_create(&thread_key, &[]).await.is_ok() {
+        if self
+            .pool
+            .get_or_create(&thread_key, &self.mcp_servers_for_user(cmd.user.id.get()))
+            .await
+            .is_ok()
+        {
             let session_info = self
                 .pool
                 .with_connection(&thread_key, |conn| {
@@ -2503,7 +2556,7 @@ impl Handler {
             return;
         }
 
-        let script = r"C:\Users\Administrator\openab\scripts\copilot-rpc.js";
+        let script = &copilot_rpc_script_path();
         let output = tokio::time::timeout(
             std::time::Duration::from_secs(45),
             tokio::process::Command::new("node")
@@ -2617,7 +2670,7 @@ impl Handler {
 
         // reload commands take no arg, but run_copilot_rpc_action expects one.
         // Pass an empty string; copilot-rpc.js ignores args for reload subcommands.
-        let script = r"C:\Users\Administrator\openab\scripts\copilot-rpc.js";
+        let script = &copilot_rpc_script_path();
         let output = tokio::time::timeout(
             std::time::Duration::from_secs(45),
             tokio::process::Command::new("node")
@@ -2803,7 +2856,11 @@ impl Handler {
 
         let thread_key = cmd.channel_id.get().to_string();
         // Ensure a session exists so the bridge has something to report on.
-        if let Err(e) = self.pool.get_or_create(&thread_key, &[]).await {
+        if let Err(e) = self
+            .pool
+            .get_or_create(&thread_key, &self.mcp_servers_for_user(cmd.user.id.get()))
+            .await
+        {
             let _ = cmd
                 .edit_response(
                     &ctx.http,
@@ -2848,7 +2905,11 @@ impl Handler {
         }
 
         let thread_key = cmd.channel_id.get().to_string();
-        if let Err(e) = self.pool.get_or_create(&thread_key, &[]).await {
+        if let Err(e) = self
+            .pool
+            .get_or_create(&thread_key, &self.mcp_servers_for_user(cmd.user.id.get()))
+            .await
+        {
             let _ = cmd
                 .edit_response(
                     &ctx.http,
@@ -3025,7 +3086,7 @@ impl Handler {
 
 /// Run a copilot-rpc.js action that takes one argument, return a rendered embed.
 async fn run_copilot_rpc_action(display_name: &str, rpc_sub: &str, arg: &str) -> CreateEmbed {
-    let script = r"C:\Users\Administrator\openab\scripts\copilot-rpc.js";
+    let script = &copilot_rpc_script_path();
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(45),
         tokio::process::Command::new("node")

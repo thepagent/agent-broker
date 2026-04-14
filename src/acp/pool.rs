@@ -148,16 +148,20 @@ impl SessionPool {
         }
         *self.cached_current_model.write().await = conn.current_model.clone();
 
-        // Snapshot native agent commands (arrives async via available_commands_update).
-        // Give slower backends time to push the notification after session/new.
+        // Insert conn into pool and release the write lock immediately.
+        let native_cmds_handle = conn.native_commands.clone();
+        state.active.insert(thread_id.to_string(), conn);
+        drop(state); // Release write lock — no more blocking other threads
+
+        // Snapshot native agent commands after a delay (arrives async via
+        // available_commands_update). Done inline but outside the write lock.
         tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
-        let cmds = conn.native_commands.lock().await.clone();
+        let cmds = native_cmds_handle.lock().await.clone();
         if !cmds.is_empty() {
             info!(count = cmds.len(), "caching native agent commands");
             *self.cached_native_commands.write().await = cmds;
         }
 
-        state.active.insert(thread_id.to_string(), conn);
         Ok(())
     }
 
