@@ -1724,7 +1724,7 @@ impl Handler {
                     Ok(_) => {
                         let _ = cmd.create_response(&ctx.http, CreateInteractionResponse::Message(
                             CreateInteractionResponseMessage::new()
-                                .content(format!("✅ MCP server **{name}** added (`{url}`)\n_Takes effect on next session._"))
+                                .content(format!("✅ MCP server **{name}** added (`{url}`)\n_Takes effect on next session. Use `/new-session` to apply now._"))
                                 .ephemeral(true),
                         )).await;
                     }
@@ -1749,7 +1749,7 @@ impl Handler {
                         let _ = tokio::fs::write(&profile_path, serde_json::to_string_pretty(&profile).unwrap_or_default()).await;
                         let _ = cmd.create_response(&ctx.http, CreateInteractionResponse::Message(
                             CreateInteractionResponseMessage::new()
-                                .content(format!("🗑️ MCP server **{name}** removed."))
+                                .content(format!("🗑️ MCP server **{name}** removed.\n_Takes effect on next session. Use `/new-session` to apply now._"))
                                 .ephemeral(true),
                         )).await;
                     } else {
@@ -1875,9 +1875,9 @@ impl Handler {
                     Ok(_) => {
                         let auth = server["auth"].as_str().unwrap_or("none");
                         let msg = if auth == "none" {
-                            format!("✅ **{name}** installed to your profile.\n_Takes effect on next session._")
+                            format!("✅ **{name}** installed to your profile.\n_Takes effect on next session. Use `/new-session` to apply now._")
                         } else {
-                            format!("✅ **{name}** installed to your profile.\n⚠️ Auth required: `{auth}`\n_Takes effect on next session._")
+                            format!("✅ **{name}** installed to your profile.\n⚠️ Auth required: `{auth}`\n_Takes effect on next session. Use `/new-session` to apply now._")
                         };
                         let _ = cmd.create_response(&ctx.http, CreateInteractionResponse::Message(
                             CreateInteractionResponseMessage::new().content(msg).ephemeral(true),
