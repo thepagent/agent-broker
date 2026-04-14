@@ -5,8 +5,8 @@ const fs = require('fs');
 const path = require('path');
 const CREDS_PATH = path.join(process.env.USERPROFILE || 'C:/Users/Administrator', '.gemini', 'oauth_creds.json');
 const API_URL = 'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota';
-const CLIENT_ID = 'REDACTED_GEMINI_CLIENT_ID';
-const CLIENT_SECRET = 'REDACTED_GEMINI_CLIENT_SECRET';
+const CLIENT_ID = process.env.GEMINI_CLIENT_ID || 'REDACTED_GEMINI_CLIENT_ID';
+const CLIENT_SECRET = process.env.GEMINI_CLIENT_SECRET || '';
 function fmtCD(rt) { const d=new Date(rt)-new Date(); if(d<=0)return'resetting...'; const h=Math.floor(d/3600000),m=Math.floor((d%3600000)/60000); return h>0?`${h}h${m}m`:`${m}m`; }
 function shortName(id) { return id.replace('gemini-','').replace('-preview',''); }
 function fetchQuota(token) { return new Promise((res,rej)=>{ const body=JSON.stringify({project:'administrator'}); const u=new URL(API_URL); const req=https.request({hostname:u.hostname,path:u.pathname,method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token,'Content-Length':Buffer.byteLength(body)}},r=>{let d='';r.on('data',c=>d+=c);r.on('end',()=>{if(r.statusCode===401)return rej(new Error('TOKEN_EXPIRED'));if(r.statusCode!==200)return rej(new Error('API '+r.statusCode));res(JSON.parse(d));});}); req.on('error',rej); req.setTimeout(10000,()=>{req.destroy();rej(new Error('timeout'));}); req.write(body); req.end(); }); }
