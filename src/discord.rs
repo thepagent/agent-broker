@@ -49,27 +49,36 @@ pub struct Handler {
 
 impl Handler {
     /// Build the mcpServers JSON array for a Discord user from their profile.
-    fn mcp_servers_for_user(&self, user_id: u64) -> Vec<serde_json::Value> {
-        let Some(ref dir) = self.mcp_profiles_dir else {
+    /// Uses spawn_blocking to avoid blocking the Tokio runtime on file I/O.
+    async fn mcp_servers_for_user(&self, user_id: u64) -> Vec<serde_json::Value> {
+        let Some(dir) = self.mcp_profiles_dir.clone() else {
             return vec![];
         };
-        let entries = read_mcp_profile(dir, &user_id.to_string());
+        let uid = user_id.to_string();
+        let entries = match tokio::task::spawn_blocking(move || read_mcp_profile(&dir, &uid)).await
+        {
+            Ok(e) => e,
+            Err(_) => return vec![],
+        };
         if entries.is_empty() {
             return vec![];
         }
-        tracing::info!(
+        tracing::debug!(
             user_id,
             count = entries.len(),
             "injecting MCP servers from profile"
         );
         entries
             .into_iter()
-            .map(|e| {
+            .filter_map(|e| {
                 let mut obj = e.config.clone();
                 if let Some(map) = obj.as_object_mut() {
                     map.insert("name".to_string(), serde_json::Value::String(e.name));
+                    Some(obj)
+                } else {
+                    tracing::warn!(name = %e.name, "skipping non-object MCP profile entry");
+                    None
                 }
-                obj
             })
             .collect()
     }
@@ -317,7 +326,7 @@ impl EventHandler for Handler {
         };
 
         let thread_key = thread_id.to_string();
-        let mcp_servers = self.mcp_servers_for_user(msg.author.id.get());
+        let mcp_servers = self.mcp_servers_for_user(msg.author.id.get()).await;
         if let Err(e) = self.pool.get_or_create(&thread_key, &mcp_servers).await {
             let msg = format_user_error(&e.to_string());
             let _ = edit(

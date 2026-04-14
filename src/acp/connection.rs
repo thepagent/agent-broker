@@ -149,6 +149,7 @@ impl AcpConnection {
             cmd.env(k, expand_env(v));
         }
         let mut proc = cmd
+            .kill_on_drop(true)
             .spawn()
             .map_err(|e| anyhow!("failed to spawn {command}: {e}"))?;
         let child_pgid = proc.id().and_then(|pid| i32::try_from(pid).ok());
