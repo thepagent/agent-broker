@@ -2,6 +2,7 @@ use crate::acp::connection::{AcpConnection, ModelInfo, NativeCommand};
 use crate::config::AgentConfig;
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::Instant;
 use tracing::{info, warn};
@@ -24,7 +25,7 @@ pub struct SessionPool {
     cached_models: RwLock<Vec<ModelInfo>>,
     cached_current_model: RwLock<String>,
     /// Native slash commands reported by the agent via `available_commands_update`.
-    cached_native_commands: RwLock<Vec<NativeCommand>>,
+    cached_native_commands: Arc<RwLock<Vec<NativeCommand>>>,
 }
 
 impl SessionPool {
@@ -38,7 +39,7 @@ impl SessionPool {
             max_sessions,
             cached_models: RwLock::new(Vec::new()),
             cached_current_model: RwLock::new("auto".to_string()),
-            cached_native_commands: RwLock::new(Vec::new()),
+            cached_native_commands: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -153,14 +154,17 @@ impl SessionPool {
         state.active.insert(thread_id.to_string(), conn);
         drop(state); // Release write lock — no more blocking other threads
 
-        // Snapshot native agent commands after a delay (arrives async via
-        // available_commands_update). Done inline but outside the write lock.
-        tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
-        let cmds = native_cmds_handle.lock().await.clone();
-        if !cmds.is_empty() {
-            info!(count = cmds.len(), "caching native agent commands");
-            *self.cached_native_commands.write().await = cmds;
-        }
+        // Snapshot native agent commands asynchronously — don't block the caller.
+        // The 2s delay gives slower backends time to push available_commands_update.
+        let cached_cmds = self.cached_native_commands.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+            let cmds = native_cmds_handle.lock().await.clone();
+            if !cmds.is_empty() {
+                info!(count = cmds.len(), "caching native agent commands (async)");
+                *cached_cmds.write().await = cmds;
+            }
+        });
 
         Ok(())
     }
@@ -190,12 +194,13 @@ impl SessionPool {
     }
 
     pub async fn cleanup_idle(&self, ttl_secs: u64) {
-        let cutoff = Instant::now() - std::time::Duration::from_secs(ttl_secs);
+        let now = Instant::now();
+        let ttl = std::time::Duration::from_secs(ttl_secs);
         let mut state = self.state.write().await;
         let stale: Vec<String> = state
             .active
             .iter()
-            .filter(|(_, c)| c.last_active < cutoff || !c.alive())
+            .filter(|(_, c)| now.saturating_duration_since(c.last_active) >= ttl || !c.alive())
             .map(|(k, _)| k.clone())
             .collect();
         for key in stale {
