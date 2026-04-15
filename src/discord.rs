@@ -11,10 +11,11 @@ use std::sync::LazyLock;
 use serenity::async_trait;
 use serenity::model::channel::{Message, ReactionType};
 use serenity::model::gateway::Ready;
-use serenity::model::id::{ChannelId, MessageId, UserId};
+use serenity::model::id::{ChannelId, MessageId, RoleId, UserId};
 use serenity::model::user::User;
 use serenity::prelude::*;
 use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
@@ -167,8 +168,14 @@ impl EventHandler for Handler {
             return;
         }
 
+        let guild_roles: HashMap<RoleId, String> = msg
+            .guild_id
+            .and_then(|gid| ctx.cache.guild(gid))
+            .map(|g| g.roles.iter().map(|(&id, r)| (id, r.name.clone())).collect())
+            .unwrap_or_default();
+
         let prompt = if is_mentioned {
-            resolve_mentions(&msg.content, bot_id, &msg.mentions)
+            resolve_mentions(&msg.content, bot_id, &msg.mentions, &guild_roles)
         } else {
             msg.content.trim().to_string()
         };
@@ -798,7 +805,7 @@ static USER_MENTION_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"<@!?\d+>").unwrap()
 });
 
-fn resolve_mentions(content: &str, bot_id: UserId, mentions: &[User]) -> String {
+fn resolve_mentions(content: &str, bot_id: UserId, mentions: &[User], guild_roles: &HashMap<RoleId, String>) -> String {
     // 1. Strip the bot's own trigger mention
     let mut out = content
         .replace(&format!("<@{}>", bot_id), "")
@@ -814,7 +821,11 @@ fn resolve_mentions(content: &str, bot_id: UserId, mentions: &[User]) -> String 
             .replace(&format!("<@{}>", user.id), &display)
             .replace(&format!("<@!{}>", user.id), &display);
     }
-    // 3. Fallback: replace any remaining unresolved mentions
+    // 3. Resolve role mentions to @RoleName via guild cache
+    for (&role_id, name) in guild_roles {
+        out = out.replace(&format!("<@&{}>", role_id), &format!("@{}", name));
+    }
+    // 4. Fallback: replace any remaining unresolved mentions
     let out = ROLE_MENTION_RE.replace_all(&out, "@(role)");
     let out = USER_MENTION_RE.replace_all(&out, "@(user)").to_string();
     out.trim().to_string()
