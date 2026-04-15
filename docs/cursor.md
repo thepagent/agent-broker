@@ -95,6 +95,60 @@ In ACP mode, `--model` can be appended after `acp`. If omitted, the account defa
 
 To verify which model is active, ask the agent "who are you" — the underlying model will typically self-identify (e.g. "I am Gemini, a large language model built by Google.").
 
+## MCP Usage (ACP mode caveats)
+
+Cursor Agent CLI supports MCP servers configured via `.cursor/mcp.json` in the active workspace directory. **Which directory counts as the workspace is determined by the `--workspace` flag** — if omitted, cursor-agent auto-detects from `cwd`, which is usually `/home/agent` in OpenAB containers via the Dockerfile `WORKDIR` directive but can drift in interactive or local runs. For reproducible MCP loading, pass `--workspace` explicitly:
+
+```toml
+[agent]
+command = "cursor-agent"
+args = ["acp", "--model", "auto", "--workspace", "/home/agent"]
+```
+
+This anchors:
+- **MCP config lookup**: `/home/agent/.cursor/mcp.json`
+- **Approval file path**: `/home/agent/.cursor/projects/home-agent/mcp-approvals.json` (slug = URL-safe workspace path)
+
+Without `--workspace`, a different cwd would produce a different slug and cursor-agent would not find previously saved approvals.
+
+### Example MCP config
+
+```json
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "/usr/bin/npx",
+      "args": ["-y", "@playwright/mcp@latest"]
+    }
+  }
+}
+```
+
+### Approval quirk in ACP mode
+
+Cursor's `--approve-mcps` flag **does not apply in ACP mode** — it only affects the interactive CLI. In ACP mode, MCP servers are gated by an approval file. Two options:
+
+1. **Pre-create the approvals file** at `<workspace>/.cursor/projects/<slug>/mcp-approvals.json`:
+   ```json
+   ["<server-name>-<sha256_hash>"]
+   ```
+   Hash is derived from workspace path + server config.
+
+2. **Approve once interactively**, then let Cursor persist the approval:
+   ```bash
+   kubectl exec -it deployment/openab-cursor -- cursor-agent
+   # invoke an MCP tool, approve the prompt; approval is saved
+   ```
+
+OpenAB itself auto-responds to ACP `session/request_permission` with `allow_always` (see `src/acp/connection.rs`), so once an MCP server is *loaded*, subsequent tool calls pass without prompting. The approval file only gates the initial load.
+
+### Verifying MCP is loaded
+
+```bash
+kubectl exec deployment/openab-cursor -- cursor-agent mcp list
+# Expected: "<server-name>: ready"
+```
+
 ## Known Limitations
 
 - Cursor Agent CLI is a separate distribution from Cursor Desktop — they are not the same binary
