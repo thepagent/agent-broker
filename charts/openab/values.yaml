@@ -1,3 +1,9 @@
+# Override the chart name used in resource names (truncated to 63 chars)
+nameOverride: ""
+# Override the full resource name prefix entirely (takes precedence over nameOverride)
+# Useful for multi-instance deployments (e.g., two agents on the same cluster)
+fullnameOverride: ""
+
 image:
   repository: ghcr.io/openabdev/openab
   # tag defaults to .Chart.AppVersion

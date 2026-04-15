@@ -72,6 +72,8 @@ The bot creates a thread. After that, just type in the thread — no @mention ne
 
 > 🔧 Running multiple agents? See [docs/multi-agent.md](docs/multi-agent.md)
 
+> 📋 Full Helm values reference? See [docs/helm-values-reference.md](docs/helm-values-reference.md)
+
 ## Local Development
 
 ```bash
