@@ -89,23 +89,3 @@ Authenticate Codex itself with:
 ```bash
 kubectl exec -it deployment/openab-codex -- codex login --device-auth
 ```
-
-If you also want to use tools such as `gh` inside the agent container, make sure they are authenticated inside the same environment and that `HOME` matches the agent working directory.
-
-```bash
-kubectl exec -it deployment/openab-codex -- env HOME=/home/node gh auth login
-```
-
-## Troubleshooting
-
-If the bot replies partially and then stops, or a Discord thread appears stuck after a networked shell command:
-
-1. Inspect the generated config inside the pod and confirm that your Helm values rendered the expected Codex args.
-
-```bash
-kubectl exec -it deployment/openab-codex -- cat /etc/openab/config.toml
-```
-
-2. Verify that the selected sandbox mode works correctly in your container runtime.
-
-3. If you changed the configuration after a stuck request, retry from a new Discord thread so you do not inherit the previous blocked session.
