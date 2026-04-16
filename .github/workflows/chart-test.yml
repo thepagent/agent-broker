@@ -11,10 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: azure/setup-helm@v4
-
-      - name: Install helm-unittest
-        run: helm plugin install https://github.com/helm-unittest/helm-unittest --verify=false
-
-      - name: Run chart tests
-        run: helm unittest charts/openab
+      - uses: helm-unittest/helm-unittest-action@v2
+        with:
+          helm-version: v3.17.3
+          charts: charts/openab
