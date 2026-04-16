@@ -4,16 +4,27 @@ services:
     container_name: openab-kiro
     restart: always
     volumes:
-      - ./example/data/home/agent:/home/agent
-      - ./example/data/config/kiro/config.toml:/etc/openab/config.toml
+      - ./data/home/agent:/home/agent
+      - ./data/config/kiro/config.toml:/etc/openab/config.toml
     environment:
       - RUST_LOG=debug
+
   claude:
     image: "ghcr.io/openabdev/openab-claude:latest"
     container_name: openab-claude
     restart: always
     volumes:
-      - ./example/data/home/node:/home/node
-      - ./example/data/config/claude/config.toml:/etc/openab/config.toml
+      - ./data/home/node:/home/node
+      - ./data/config/claude/config.toml:/etc/openab/config.toml
+    environment:
+      - RUST_LOG=debug
+
+  copilot:
+    image: "ghcr.io/openabdev/openab-copilot:latest"
+    container_name: openab-copilot
+    restart: always
+    volumes:
+      - ./data/home/node:/home/node
+      - ./data/config/copilot/config.toml:/etc/openab/config.toml
     environment:
       - RUST_LOG=debug

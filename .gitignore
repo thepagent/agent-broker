@@ -4,14 +4,26 @@
 
 example/data/config/*
 !example/data/config/claude/
+!example/data/config/codex/
+!example/data/config/copilot/
+!example/data/config/cursor/
+!example/data/config/gemini/
 !example/data/config/kiro/
+!example/data/config/opencode/
 !example/data/config/*/config.toml
 
 example/data/home/agent/*
+example/data/home/agent/.kiro/*
 !example/data/home/agent/.kiro/
 !example/data/home/agent/.kiro/steering/
 !example/data/home/agent/.kiro/steering/*.md
 
 example/data/home/node/*
+example/data/home/node/.claude/*
 !example/data/home/node/.claude/
 !example/data/home/node/.claude/*.md
+
+example/data/home/node/*
+example/data/home/node/.copilot/*
+!example/data/home/node/.copilot/
+!example/data/home/node/.copilot/*.md
