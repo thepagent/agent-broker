@@ -6,9 +6,10 @@ use tokio::sync::watch;
 use tracing::error;
 
 use crate::acp::{classify_notification, AcpEvent, ContentBlock, SessionPool};
-use crate::config::ReactionsConfig;
+use crate::config::{OutboundConfig, ReactionsConfig};
 use crate::error_display::{format_coded_error, format_user_error};
 use crate::format;
+use crate::outbound_rate::OutboundRateLimiter;
 use crate::reactions::StatusReactionController;
 
 // --- Platform-agnostic types ---
@@ -73,6 +74,18 @@ pub trait ChatAdapter: Send + Sync + 'static {
 
     /// Remove a reaction/emoji from a message.
     async fn remove_reaction(&self, msg: &MessageRef, emoji: &str) -> Result<()>;
+
+    /// Upload file attachments as follow-up messages in `channel`. Called
+    /// after the final text edit when the agent produced valid
+    /// `![alt](/path)` markers. Default no-op so adapters that don't support
+    /// native file upload silently drop the list instead of erroring.
+    async fn send_file_attachments(
+        &self,
+        _channel: &ChannelRef,
+        _paths: &[std::path::PathBuf],
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 // --- AdapterRouter ---
@@ -82,13 +95,21 @@ pub trait ChatAdapter: Send + Sync + 'static {
 pub struct AdapterRouter {
     pool: Arc<SessionPool>,
     reactions_config: ReactionsConfig,
+    outbound_config: OutboundConfig,
+    outbound_rate: Arc<OutboundRateLimiter>,
 }
 
 impl AdapterRouter {
-    pub fn new(pool: Arc<SessionPool>, reactions_config: ReactionsConfig) -> Self {
+    pub fn new(
+        pool: Arc<SessionPool>,
+        reactions_config: ReactionsConfig,
+        outbound_config: OutboundConfig,
+    ) -> Self {
         Self {
             pool,
             reactions_config,
+            outbound_config,
+            outbound_rate: Arc::new(OutboundRateLimiter::new()),
         }
     }
 
@@ -210,6 +231,10 @@ impl AdapterRouter {
         let thread_channel = thread_channel.clone();
         let msg_ref = thinking_msg.clone();
         let message_limit = adapter.message_limit();
+        let outbound_cfg = self.outbound_config.clone();
+        let outbound_rate = Arc::clone(&self.outbound_rate);
+        let outbound_channel_key =
+            format!("{}:{}", adapter.platform(), &thread_channel.channel_id);
 
         self.pool
             .with_connection(thread_key, |conn| {
@@ -355,6 +380,33 @@ impl AdapterRouter {
                         final_content
                     };
 
+                    // Extract outbound `![alt](/path)` attachment markers
+                    // from the agent's reply. No-op when `outbound.enabled`
+                    // is false (the default). See src/media.rs for the
+                    // canonicalization + allowlist + size-cap validation.
+                    let (final_content, mut outbound_paths) =
+                        crate::media::extract_outbound_attachments(&final_content, &outbound_cfg);
+
+                    // Per-channel sliding-window rate limit. Drops any
+                    // excess beyond `max_per_minute_per_channel`.
+                    if !outbound_paths.is_empty() && outbound_cfg.enabled {
+                        let grant = outbound_rate.admit(
+                            &outbound_channel_key,
+                            outbound_paths.len(),
+                            outbound_cfg.max_per_minute_per_channel,
+                        );
+                        if grant < outbound_paths.len() {
+                            tracing::warn!(
+                                channel = outbound_channel_key,
+                                requested = outbound_paths.len(),
+                                granted = grant,
+                                limit_per_min = outbound_cfg.max_per_minute_per_channel,
+                                "outbound: rate-limit hit, dropping excess"
+                            );
+                            outbound_paths.truncate(grant);
+                        }
+                    }
+
                     let chunks = format::split_message(&final_content, message_limit);
                     let mut current_msg = msg_ref;
                     for (i, chunk) in chunks.iter().enumerate() {
@@ -364,6 +416,15 @@ impl AdapterRouter {
                             adapter.send_message(&thread_channel, chunk).await
                         {
                             current_msg = new_msg;
+                        }
+                    }
+
+                    if !outbound_paths.is_empty() {
+                        if let Err(e) = adapter
+                            .send_file_attachments(&thread_channel, &outbound_paths)
+                            .await
+                        {
+                            tracing::warn!(error = %e, "outbound: send_file_attachments failed");
                         }
                     }
 
