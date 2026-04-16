@@ -27,17 +27,15 @@ helm install openab openab/openab \
 
 ## First-Run Workaround
 
-Gemini CLI needs `~/.gemini/projects.json` to exist before the first ACP session starts. In ephemeral containers, the file may not be created yet, which can surface as `ENOENT` or `Unexpected end of JSON input` during the first run.
+Gemini CLI needs `~/.gemini/projects.json` to exist before the first ACP session starts. In ephemeral containers, the file may not be created yet, which can surface as `ENOENT`, `Unexpected end of JSON input`, or a `ProjectRegistry` startup failure during the first run.
 
-This is a workaround for the upstream Gemini CLI issue `google-gemini/gemini-cli#22583`.
+This is a workaround for the upstream Gemini CLI issue: [google-gemini/gemini-cli#25509](https://github.com/google-gemini/gemini-cli/issues/25509).
 
-The `openab-gemini` image now seeds this file automatically with the expected registry shape:
+If you control the Gemini container startup command, seed the directory before launching `openab`:
 
 ```json
 {"projects":{}}
 ```
-
-If you build a custom Gemini image or override the entrypoint, seed the directory before launching `openab`:
 
 ```bash
 mkdir -p /home/node/.gemini && printf '{"projects":{}}\n' > /home/node/.gemini/projects.json && exec openab /etc/openab/config.toml
@@ -45,7 +43,7 @@ mkdir -p /home/node/.gemini && printf '{"projects":{}}\n' > /home/node/.gemini/p
 
 The `exec openab /etc/openab/config.toml` part assumes the Docker image default config path.
 
-For Kubernetes or Helm deployments that use a custom Gemini entrypoint, use the same idea with an init container and a shared volume mounted at `/home/node/.gemini`.
+For Kubernetes or Helm deployments, use the same idea with an init container and a shared volume mounted at `/home/node/.gemini`, or wait for the Gemini CLI fix upstream.
 
 ## Manual config.toml
 
