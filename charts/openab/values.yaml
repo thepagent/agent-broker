@@ -179,15 +179,16 @@ agents:
     # The PVC file is NOT deleted but becomes invisible to the agent. Remove agentsMd to restore.
     agentsMd: ""
     resources: {}
+    # -- Pod extensibility
     serviceAccountName: ""
     podAnnotations: {}
     podLabels: {}
-    livenessProbe: {}
-    readinessProbe: {}
-    startupProbe: {}
-    lifecycle: {}
+    livenessProbe: {}   # {} = disabled
+    readinessProbe: {}  # {} = disabled
+    startupProbe: {}    # {} = disabled
+    lifecycle: {}       # {} = disabled
     initContainers: []
-    sidecars: []
+    extraContainers: []
     extraVolumes: []
     extraVolumeMounts: []
     nodeSelector: {}

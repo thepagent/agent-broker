@@ -135,7 +135,7 @@ spec:
             {{- with $cfg.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-        {{- with $cfg.sidecars }}
+        {{- with $cfg.extraContainers }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
       {{- with $cfg.nodeSelector }}
