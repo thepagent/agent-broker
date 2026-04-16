@@ -92,6 +92,12 @@ spec:
             - name: config
               mountPath: {{ $cfg.workingDir | default "/home/agent" }}/AGENTS.md
               subPath: AGENTS.md
+            - name: config
+              mountPath: {{ $cfg.workingDir | default "/home/agent" }}/CLAUDE.md
+              subPath: AGENTS.md
+            - name: config
+              mountPath: {{ $cfg.workingDir | default "/home/agent" }}/GEMINI.md
+              subPath: AGENTS.md
             {{- end }}
       {{- with $cfg.nodeSelector }}
       nodeSelector:

@@ -9,7 +9,8 @@ use serenity::builder::{CreateThread, EditMessage};
 use serenity::http::Http;
 use serenity::model::channel::{AutoArchiveDuration, Message, ReactionType};
 use serenity::model::gateway::Ready;
-use serenity::model::id::{ChannelId, MessageId};
+use serenity::model::id::{ChannelId, MessageId, UserId};
+use serenity::model::user::User;
 use serenity::prelude::*;
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
@@ -237,7 +238,7 @@ impl EventHandler for Handler {
         }
 
         let prompt = if is_mentioned {
-            strip_mention(&msg.content)
+            resolve_mentions(&msg.content, bot_id, &msg.mentions)
         } else {
             msg.content.trim().to_string()
         };
@@ -382,10 +383,31 @@ async fn get_or_create_thread(
     adapter.create_thread(&parent, &trigger_ref, &thread_name).await
 }
 
-static MENTION_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"<@[!&]?\d+>").unwrap()
+static ROLE_MENTION_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"<@&\d+>").unwrap()
+});
+static USER_MENTION_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"<@!?\d+>").unwrap()
 });
 
-fn strip_mention(content: &str) -> String {
-    MENTION_RE.replace_all(content, "").trim().to_string()
+fn resolve_mentions(content: &str, bot_id: UserId, mentions: &[User]) -> String {
+    // 1. Strip the bot's own trigger mention
+    let mut out = content
+        .replace(&format!("<@{}>", bot_id), "")
+        .replace(&format!("<@!{}>", bot_id), "");
+    // 2. Resolve known user mentions to @DisplayName
+    for user in mentions {
+        if user.id == bot_id {
+            continue;
+        }
+        let label = user.global_name.as_deref().unwrap_or(&user.name);
+        let display = format!("@{}", label);
+        out = out
+            .replace(&format!("<@{}>", user.id), &display)
+            .replace(&format!("<@!{}>", user.id), &display);
+    }
+    // 3. Fallback: replace any remaining unresolved mentions
+    let out = ROLE_MENTION_RE.replace_all(&out, "@(role)");
+    let out = USER_MENTION_RE.replace_all(&out, "@(user)").to_string();
+    out.trim().to_string()
 }

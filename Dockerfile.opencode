@@ -23,10 +23,11 @@ RUN touch src/main.rs && cargo build --release
 # Note: opencode does not publish SHA256 checksums for its releases,
 # so checksum verification is not possible at this time.
 FROM node:22-bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl procps && rm -rf /var/lib/apt/lists/*
 
 # Install opencode
-RUN npm install -g opencode-ai@1.4.3 --retry 3
+ARG OPENCODE_VERSION=1.4.6
+RUN npm install -g opencode-ai@${OPENCODE_VERSION} --retry 3
 
 # Install gh CLI (matches Dockerfile.claude / Dockerfile.gemini / Dockerfile.codex)
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \

@@ -48,6 +48,8 @@
 
 > ⚠️ **Data loss warning:** `helm uninstall` **deletes the PVC** and all persistent data (steering files, auth database, agent config) unless the chart has an explicit resource policy annotation. Always use `helm rollback` instead of uninstall + reinstall. If you need to uninstall, back up the PVC data first.
 
+> ⚠️ **`agentsMd` shadows PVC files:** When `agentsMd` is set in Helm values, the resulting ConfigMap volumeMount shadows any existing file at the same path on the PVC (e.g. `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`). The PVC file is not deleted but becomes invisible to the agent. Remove `agentsMd` from your values to restore PVC files. See [#360](https://github.com/openabdev/openab/issues/360).
+
 ---
 
 ## Upgrade Process Overview
