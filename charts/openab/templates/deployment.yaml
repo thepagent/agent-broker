@@ -38,7 +38,7 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           env:
-            {{- if and ($cfg.discord).enabled ($cfg.discord).botToken }}
+            {{- if and (ne (dig "enabled" true ($cfg.discord | default dict)) false) ($cfg.discord).botToken }}
             - name: DISCORD_BOT_TOKEN
               valueFrom:
                 secretKeyRef:

@@ -10,7 +10,7 @@ metadata:
     {{- include "openab.labels" $d | nindent 4 }}
 data:
   config.toml: |
-    {{- if and ($cfg.discord).enabled ($cfg.discord).botToken }}
+    {{- if and (ne (dig "enabled" true ($cfg.discord | default dict)) false) ($cfg.discord).botToken }}
     [discord]
     bot_token = "${DISCORD_BOT_TOKEN}"
     {{- range $cfg.discord.allowedChannels }}
