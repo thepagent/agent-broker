@@ -2,10 +2,10 @@ suite: adapter enablement gating
 templates:
   - templates/configmap.yaml
 tests:
-  - it: renders [discord] with placeholder token when enabled=true without botToken
+  - it: renders [discord] when enabled=true and botToken is present
     set:
       agents.kiro.discord.enabled: true
-      agents.kiro.discord.botToken: ""
+      agents.kiro.discord.botToken: "xoxb-test-token"
     asserts:
       - matchRegex:
           path: data["config.toml"]
@@ -14,9 +14,19 @@ tests:
           path: data["config.toml"]
           pattern: 'bot_token = "\$\{DISCORD_BOT_TOKEN\}"'
 
+  - it: omits [discord] when enabled=true but botToken is absent
+    set:
+      agents.kiro.discord.enabled: true
+      agents.kiro.discord.botToken: ""
+    asserts:
+      - notMatchRegex:
+          path: data["config.toml"]
+          pattern: "\\[discord\\]"
+
   - it: omits [discord] when enabled=false
     set:
       agents.kiro.discord.enabled: false
+      agents.kiro.discord.botToken: "xoxb-test-token"
     asserts:
       - notMatchRegex:
           path: data["config.toml"]
@@ -60,6 +70,7 @@ tests:
   - it: renders both [discord] and [slack] when both enabled
     set:
       agents.kiro.discord.enabled: true
+      agents.kiro.discord.botToken: "xoxb-test-token"
       agents.kiro.slack.enabled: true
     asserts:
       - matchRegex:
