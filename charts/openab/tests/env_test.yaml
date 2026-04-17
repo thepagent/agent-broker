@@ -1,0 +1,83 @@
+suite: env polymorphic rendering
+templates:
+  - templates/deployment.yaml
+tests:
+  - it: renders simple string env as value
+    set:
+      agents.kiro.env:
+        MY_VAR: hello
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MY_VAR
+            value: "hello"
+
+  - it: renders valueFrom env (fieldRef)
+    set:
+      agents.kiro.env:
+        MY_POD_NAME:
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MY_POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+
+  - it: renders mixed string and valueFrom env
+    set:
+      agents.kiro.env:
+        SIMPLE_VAR: simple
+        POD_NAME:
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SIMPLE_VAR
+            value: "simple"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+
+  - it: rejects list-typed env values
+    set:
+      agents.kiro.env:
+        BAD:
+          - item1
+          - item2
+    asserts:
+      - failedTemplate:
+          errorPattern: "env.BAD is a list"
+
+---
+suite: env configmap filtering
+templates:
+  - templates/configmap.yaml
+tests:
+  - it: filters map-typed env from config.toml
+    set:
+      agents.kiro.env:
+        KEEP_THIS: hello
+        SKIP_THIS:
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: 'KEEP_THIS = "hello"'
+      - notMatchRegex:
+          path: data["config.toml"]
+          pattern: "SKIP_THIS"
