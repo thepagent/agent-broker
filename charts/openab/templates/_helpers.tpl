@@ -113,3 +113,8 @@ duplicate YAML keys AND break Deployment→Pod selector matching.
 {{- define "openab.persistenceEnabled" -}}
 {{- if and . .persistence (eq (.persistence.enabled | toString) "false") }}false{{ else }}true{{ end }}
 {{- end }}
+
+{{/* Discord adapter enabled: default true unless explicitly set to false; returns false when discord config is absent */}}
+{{- define "openab.discordEnabled" -}}
+{{- if and . .discord (ne (.discord.enabled | toString) "false") }}true{{ else }}false{{ end }}
+{{- end }}

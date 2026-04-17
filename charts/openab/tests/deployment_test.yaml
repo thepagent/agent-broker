@@ -186,10 +186,14 @@ tests:
     set:
       agents.kiro.podLabels:
         app.kubernetes.io/name: hacked
+        app.kubernetes.io/component: evil
     asserts:
       - equal:
           path: spec.template.metadata.labels["app.kubernetes.io/name"]
           value: openab
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: kiro
 
   - it: podAnnotations cannot hijack checksum/config
     set:
