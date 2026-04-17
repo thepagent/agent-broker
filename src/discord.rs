@@ -5,7 +5,7 @@ use crate::format;
 use crate::media;
 use async_trait::async_trait;
 use std::sync::LazyLock;
-use serenity::builder::{CreateThread, EditMessage};
+use serenity::builder::{CreateAttachment, CreateMessage, CreateThread, EditMessage};
 use serenity::http::Http;
 use serenity::model::channel::{AutoArchiveDuration, Message, ReactionType};
 use serenity::model::gateway::Ready;
@@ -113,6 +113,30 @@ impl ChatAdapter for DiscordAdapter {
                 &ReactionType::Unicode(emoji.to_string()),
             )
             .await?;
+        Ok(())
+    }
+
+    async fn send_file_attachments(
+        &self,
+        channel: &ChannelRef,
+        paths: &[std::path::PathBuf],
+    ) -> anyhow::Result<()> {
+        let ch_id: u64 = channel.channel_id.parse()?;
+        for path in paths {
+            match CreateAttachment::path(path).await {
+                Ok(file) => {
+                    let msg = CreateMessage::new().add_file(file);
+                    if let Err(e) = ChannelId::new(ch_id).send_message(&self.http, msg).await {
+                        tracing::warn!(path = %path.display(), error = %e, "outbound: discord upload failed");
+                    } else {
+                        info!(path = %path.display(), "outbound: attachment sent");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "outbound: failed to read file");
+                }
+            }
+        }
         Ok(())
     }
 }

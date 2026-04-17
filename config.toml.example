@@ -89,3 +89,20 @@ stall_soft_ms = 10000
 stall_hard_ms = 30000
 done_hold_ms = 1500
 error_hold_ms = 2500
+
+# Outbound file attachments — when enabled, agents that include
+# `![alt](/path/to/file)` markdown in their replies will have the file
+# uploaded as a native chat attachment and the marker stripped from the
+# displayed text.
+#
+# This feature is opt-in because it opens a path from the host filesystem
+# to the chat channel. Enable only after verifying your deployment's
+# threat model accepts it. See openabdev/openab#355 for the security
+# rationale.
+#
+# [outbound]
+# enabled = false
+# allowed_dirs = ["/tmp/", "/var/folders/"]  # canonicalized at send time
+# max_file_size_mb = 25                      # 25 MB matches Discord's limit
+# max_per_message = 10                       # per agent response
+# max_per_minute_per_channel = 30            # sliding window flood guard

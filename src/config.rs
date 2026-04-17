@@ -42,6 +42,77 @@ pub struct Config {
     pub reactions: ReactionsConfig,
     #[serde(default)]
     pub stt: SttConfig,
+    #[serde(default)]
+    pub outbound: OutboundConfig,
+}
+
+/// Controls outbound file attachments — the `![alt](/path)` markdown marker
+/// in agent responses that instructs the bot to upload a local file as a
+/// native chat attachment. Disabled by default; operators must explicitly
+/// opt in because this opens a path from the host filesystem to the chat
+/// channel.
+///
+/// See openabdev/openab#298 for the feature rationale and openabdev/openab#355
+/// for the security requirements this config implements.
+#[derive(Debug, Clone, Deserialize)]
+pub struct OutboundConfig {
+    /// Master switch. Defaults to `false` so shipping this feature cannot
+    /// surprise existing deployments.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Directories from which agents may send files. An outbound path must
+    /// canonicalize (symlinks + `..` resolved) to live under one of these
+    /// prefixes. Defaults to `["/tmp/", "/var/folders/"]` to preserve
+    /// behavior for operators upgrading from the prior hard-coded list.
+    #[serde(default = "default_outbound_allowed_dirs")]
+    pub allowed_dirs: Vec<String>,
+    /// Cap on file size per attachment, in megabytes. Discord's native
+    /// upload limit is 25 MB; Slack is 1 GB. Default matches Discord so
+    /// the feature is platform-safe out of the box.
+    #[serde(default = "default_outbound_max_size_mb")]
+    pub max_file_size_mb: u64,
+    /// Cap on attachments per single agent response. Guards against a single
+    /// agent message fanning out into hundreds of uploads.
+    #[serde(default = "default_outbound_max_per_message")]
+    pub max_per_message: usize,
+    /// Sliding-window cap on attachments per channel per minute. Guards
+    /// against a malfunctioning agent flooding a channel.
+    #[serde(default = "default_outbound_max_per_minute")]
+    pub max_per_minute_per_channel: usize,
+}
+
+impl Default for OutboundConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allowed_dirs: default_outbound_allowed_dirs(),
+            max_file_size_mb: default_outbound_max_size_mb(),
+            max_per_message: default_outbound_max_per_message(),
+            max_per_minute_per_channel: default_outbound_max_per_minute(),
+        }
+    }
+}
+
+impl OutboundConfig {
+    /// Return the size cap as bytes for internal comparison. Config is
+    /// expressed in MB for human ergonomics; callers that need to compare
+    /// against `std::fs::Metadata::len()` use this.
+    pub fn max_size_bytes(&self) -> u64 {
+        self.max_file_size_mb.saturating_mul(1024 * 1024)
+    }
+}
+
+fn default_outbound_allowed_dirs() -> Vec<String> {
+    vec!["/tmp/".into(), "/var/folders/".into()]
+}
+fn default_outbound_max_size_mb() -> u64 {
+    25
+}
+fn default_outbound_max_per_message() -> usize {
+    10
+}
+fn default_outbound_max_per_minute() -> usize {
+    30
 }
 
 #[derive(Debug, Clone, Deserialize)]
