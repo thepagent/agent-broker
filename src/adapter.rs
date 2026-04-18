@@ -110,7 +110,7 @@ impl AdapterRouter {
         &self,
         adapter: &Arc<dyn ChatAdapter>,
         thread_channel: &ChannelRef,
-        sender: &SenderContext,
+        sender_json: &str,
         prompt: &str,
         extra_blocks: Vec<ContentBlock>,
         trigger_msg: &MessageRef,
@@ -118,7 +118,6 @@ impl AdapterRouter {
         tracing::debug!(platform = adapter.platform(), "processing message");
 
         // Build content blocks: sender context + prompt text, then extra (images, transcripts)
-        let sender_json = serde_json::to_string(sender).unwrap();
         let prompt_with_sender = format!(
             "<sender_context>\n{}\n</sender_context>\n\n{}",
             sender_json, prompt

@@ -413,8 +413,9 @@ impl EventHandler for Handler {
 
         let router = self.router.clone();
         tokio::spawn(async move {
+            let sender_json = serde_json::to_string(&sender).unwrap();
             if let Err(e) = router
-                .handle_message(&adapter, &thread_channel, &sender, &prompt, extra_blocks, &trigger_msg)
+                .handle_message(&adapter, &thread_channel, &sender_json, &prompt, extra_blocks, &trigger_msg)
                 .await
             {
                 error!("handle_message error: {e}");

@@ -931,9 +931,21 @@ async fn handle_message(
         parent_id: None,
     };
 
+    // Serialize sender context with Slack-native key names so agents calling
+    // the Slack API directly see "thread_ts" rather than the generic "thread_id".
+    let sender_json = {
+        let mut v = serde_json::to_value(&sender).unwrap();
+        if let Some(obj) = v.as_object_mut() {
+            if let Some(tid) = obj.remove("thread_id") {
+                obj.insert("thread_ts".to_string(), tid);
+            }
+        }
+        v.to_string()
+    };
+
     let adapter_dyn: Arc<dyn ChatAdapter> = adapter.clone();
     if let Err(e) = router
-        .handle_message(&adapter_dyn, &thread_channel, &sender, &prompt, extra_blocks, &trigger_msg)
+        .handle_message(&adapter_dyn, &thread_channel, &sender_json, &prompt, extra_blocks, &trigger_msg)
         .await
     {
         error!("Slack handle_message error: {e}");
