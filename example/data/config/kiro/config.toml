@@ -1,0 +1,32 @@
+[discord]
+bot_token = "REPLACE_WITH_YOUR_DISCORD_BOT_TOKEN"
+allowed_channels = ["REPLACE_WITH_YOUR_DISCORD_CHANNEL_ID"]
+
+[agent]
+command = "kiro-cli"
+args = ["acp", "--trust-all-tools"]
+working_dir = "/home/agent"
+
+[pool]
+max_sessions = 10
+session_ttl_hours = 24
+
+[reactions]
+enabled = true
+remove_after_reply = false
+
+[reactions.emojis]
+queued = "😋"
+thinking = "📝"
+tool = "🍺"
+coding = "💻"
+web = "💙"
+done = "🆗"
+error = "😱"
+
+[reactions.timing]
+debounce_ms = 700
+stall_soft_ms = 10000
+stall_hard_ms = 30000
+done_hold_ms = 1500
+error_hold_ms = 2500
