@@ -2,7 +2,7 @@ use crate::acp::connection::AcpConnection;
 use crate::config::AgentConfig;
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::Instant;
@@ -75,7 +75,7 @@ impl SessionPool {
         }
     }
 
-    fn load_mapping(path: &PathBuf) -> HashMap<String, String> {
+    fn load_mapping(path: &Path) -> HashMap<String, String> {
         match std::fs::read_to_string(path) {
             Ok(data) => serde_json::from_str(&data).unwrap_or_else(|e| {
                 warn!(path = %path.display(), error = %e, "corrupt thread_map.json, starting fresh");
@@ -86,7 +86,15 @@ impl SessionPool {
     }
 
     fn save_mapping(&self, suspended: &HashMap<String, String>) {
-        if let Err(e) = std::fs::write(&self.mapping_path, serde_json::to_string(suspended).unwrap_or_default()) {
+        let data = match serde_json::to_string_pretty(suspended) {
+            Ok(d) => d,
+            Err(e) => {
+                warn!(error = %e, "failed to serialize thread mapping");
+                return;
+            }
+        };
+        let tmp = self.mapping_path.with_extension("json.tmp");
+        if let Err(e) = std::fs::write(&tmp, &data).and_then(|_| std::fs::rename(&tmp, &self.mapping_path)) {
             warn!(path = %self.mapping_path.display(), error = %e, "failed to persist thread mapping");
         }
     }
@@ -295,17 +303,14 @@ impl SessionPool {
     pub async fn shutdown(&self) {
         let mut state = self.state.write().await;
         // Persist active sessions so they can be resumed after restart.
-        let to_save: Vec<(String, String)> = state
-            .active
-            .iter()
-            .filter_map(|(key, conn)| {
-                let conn = conn.try_lock().ok()?;
-                let sid = conn.acp_session_id.clone()?;
-                Some((key.clone(), sid))
-            })
-            .collect();
-        for (key, sid) in to_save {
-            state.suspended.insert(key, sid);
+        let keys: Vec<String> = state.active.keys().cloned().collect();
+        for key in keys {
+            if let Some(conn) = state.active.get(&key) {
+                let conn = conn.lock().await;
+                if let Some(sid) = conn.acp_session_id.clone() {
+                    state.suspended.insert(key, sid);
+                }
+            }
         }
         self.save_mapping(&state.suspended);
         let count = state.active.len();
