@@ -953,7 +953,15 @@ async fn handle_message(
 
     let adapter_dyn: Arc<dyn ChatAdapter> = adapter.clone();
     if let Err(e) = router
-        .handle_message(&adapter_dyn, &thread_channel, &sender_json, &prompt, extra_blocks, &trigger_msg)
+        .handle_message(
+            &adapter_dyn,
+            &thread_channel,
+            &sender_json,
+            sender.is_bot,
+            &prompt,
+            extra_blocks,
+            &trigger_msg,
+        )
         .await
     {
         error!("Slack handle_message error: {e}");

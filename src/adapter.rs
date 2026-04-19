@@ -116,6 +116,7 @@ impl AdapterRouter {
         adapter: &Arc<dyn ChatAdapter>,
         thread_channel: &ChannelRef,
         sender_json: &str,
+        sender_is_bot: bool,
         prompt: &str,
         extra_blocks: Vec<ContentBlock>,
         trigger_msg: &MessageRef,
@@ -166,7 +167,7 @@ impl AdapterRouter {
                 // new bot event, route it here during the shutdown window, and
                 // we'd reply with another bot-authored rejection — looping until
                 // the bot-turn cap trips. Human senders still get the notice.
-                if !sender.is_bot {
+                if !sender_is_bot {
                     let _ = adapter
                         .send_message(
                             thread_channel,
