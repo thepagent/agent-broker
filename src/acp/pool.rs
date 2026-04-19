@@ -2,6 +2,7 @@ use crate::acp::connection::AcpConnection;
 use crate::config::AgentConfig;
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::Instant;
@@ -24,6 +25,7 @@ pub struct SessionPool {
     state: RwLock<PoolState>,
     config: AgentConfig,
     max_sessions: usize,
+    mapping_path: PathBuf,
 }
 
 type EvictionCandidate = (
@@ -59,14 +61,33 @@ fn get_or_insert_gate(
 
 impl SessionPool {
     pub fn new(config: AgentConfig, max_sessions: usize) -> Self {
+        let mapping_path = PathBuf::from(&config.working_dir).join("thread_map.json");
+        let suspended = Self::load_mapping(&mapping_path);
         Self {
             state: RwLock::new(PoolState {
                 active: HashMap::new(),
-                suspended: HashMap::new(),
+                suspended,
                 creating: HashMap::new(),
             }),
             config,
             max_sessions,
+            mapping_path,
+        }
+    }
+
+    fn load_mapping(path: &PathBuf) -> HashMap<String, String> {
+        match std::fs::read_to_string(path) {
+            Ok(data) => serde_json::from_str(&data).unwrap_or_else(|e| {
+                warn!(path = %path.display(), error = %e, "corrupt thread_map.json, starting fresh");
+                HashMap::new()
+            }),
+            Err(_) => HashMap::new(),
+        }
+    }
+
+    fn save_mapping(&self, suspended: &HashMap<String, String>) {
+        if let Err(e) = std::fs::write(&self.mapping_path, serde_json::to_string(suspended).unwrap_or_default()) {
+            warn!(path = %self.mapping_path.display(), error = %e, "failed to persist thread mapping");
         }
     }
 
@@ -206,6 +227,7 @@ impl SessionPool {
 
         state.suspended.remove(thread_id);
         state.active.insert(thread_id.to_string(), new_conn);
+        self.save_mapping(&state.suspended);
         Ok(())
     }
 
@@ -267,12 +289,22 @@ impl SessionPool {
                 }
             }
         }
+        self.save_mapping(&state.suspended);
     }
 
     pub async fn shutdown(&self) {
         let mut state = self.state.write().await;
+        // Persist active sessions so they can be resumed after restart.
+        for (key, conn) in state.active.iter() {
+            if let Ok(conn) = conn.try_lock() {
+                if let Some(sid) = conn.acp_session_id.clone() {
+                    state.suspended.insert(key.clone(), sid);
+                }
+            }
+        }
+        self.save_mapping(&state.suspended);
         let count = state.active.len();
-        state.active.clear(); // Drop impl kills process groups
+        state.active.clear();
         info!(count, "pool shutdown complete");
     }
 }
