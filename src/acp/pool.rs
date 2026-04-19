@@ -302,14 +302,16 @@ impl SessionPool {
 
     pub async fn shutdown(&self) {
         let mut state = self.state.write().await;
-        // Persist active sessions so they can be resumed after restart.
-        let keys: Vec<String> = state.active.keys().cloned().collect();
-        for key in keys {
-            if let Some(conn) = state.active.get(&key) {
-                let conn = conn.lock().await;
-                if let Some(sid) = conn.acp_session_id.clone() {
-                    state.suspended.insert(key, sid);
-                }
+        // Collect handles before borrowing suspended mutably.
+        let handles: Vec<(String, Arc<Mutex<AcpConnection>>)> = state
+            .active
+            .iter()
+            .map(|(k, v)| (k.clone(), Arc::clone(v)))
+            .collect();
+        for (key, conn) in handles {
+            let conn = conn.lock().await;
+            if let Some(sid) = conn.acp_session_id.clone() {
+                state.suspended.insert(key, sid);
             }
         }
         self.save_mapping(&state.suspended);
