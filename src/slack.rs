@@ -803,12 +803,8 @@ async fn handle_message(
     };
     let thread_ts = event["thread_ts"].as_str().map(|s| s.to_string());
 
-    // Check allowed channels (empty = deny all)
-    if allowed_channels.is_empty() {
-        tracing::debug!("allowed_channels is empty — ignoring message in channel {}", channel_id);
-        return;
-    }
-    if !allowed_channels.contains(&channel_id) {
+    // Check allowed channels (empty = allow all)
+    if !allowed_channels.is_empty() && !allowed_channels.contains(&channel_id) {
         return;
     }
 

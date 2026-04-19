@@ -33,8 +33,6 @@ tests:
   - it: renders [slack] when enabled=true
     set:
       agents.kiro.slack.enabled: true
-      agents.kiro.slack.allowedChannels:
-        - "C0123456789"
     asserts:
       - matchRegex:
           path: data["config.toml"]
@@ -51,8 +49,6 @@ tests:
   - it: renders [slack] with placeholder tokens when enabled=true
     set:
       agents.kiro.slack.enabled: true
-      agents.kiro.slack.allowedChannels:
-        - "C0123456789"
     asserts:
       - matchRegex:
           path: data["config.toml"]
@@ -65,8 +61,6 @@ tests:
     set:
       agents.kiro.discord.enabled: true
       agents.kiro.slack.enabled: true
-      agents.kiro.slack.allowedChannels:
-        - "C0123456789"
     asserts:
       - matchRegex:
           path: data["config.toml"]

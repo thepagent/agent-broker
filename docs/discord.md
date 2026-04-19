@@ -64,7 +64,7 @@ Complete guide to setting up, configuring, and running OpenAB with Discord.
 ```toml
 [discord]
 bot_token = "${DISCORD_BOT_TOKEN}"
-allowed_channels = ["123456789"]      # channel ID allowlist (empty = deny all)
+allowed_channels = ["123456789"]      # channel ID allowlist (empty = all)
 allowed_users = ["987654321"]         # user ID allowlist (empty = all)
 allow_bot_messages = "off"            # off | mentions | all
 allow_user_messages = "involved"      # involved | mentions
@@ -75,12 +75,11 @@ trusted_bot_ids = []                  # bot user IDs allowed through (empty = an
 
 | `allowed_channels` | `allowed_users` | Result |
 |---|---|---|
-| empty | empty | **No channels, no users — bot ignores all messages** |
+| empty | empty | All users, all channels (default) |
 | set | empty | Only these channels, all users |
-| empty | set | **Bot ignores all messages** (channels must be configured first) |
+| empty | set | All channels, only these users |
 | set | set | **AND** — must be in allowed channel AND allowed user |
 
-- Empty `allowed_channels` = bot will not respond anywhere (secure by default)
 - Empty `allowed_users` (default) = no user filtering
 - Denied users get a 🚫 reaction and no reply
 

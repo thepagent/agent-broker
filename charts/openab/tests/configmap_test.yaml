@@ -92,27 +92,8 @@ tests:
   - it: renders slack allow_user_messages = "multibot-mentions"
     set:
       agents.kiro.slack.enabled: true
-      agents.kiro.slack.allowedChannels:
-        - "C0123456789"
       agents.kiro.slack.allowUserMessages: multibot-mentions
     asserts:
       - matchRegex:
           path: data["config.toml"]
           pattern: 'allow_user_messages = "multibot-mentions"'
-
-  - it: rejects empty discord allowedChannels
-    set:
-      agents.kiro.discord.enabled: true
-      agents.kiro.discord.allowedChannels: []
-    asserts:
-      - failedTemplate:
-          errorPattern: "discord.allowedChannels is required"
-
-  - it: rejects empty slack allowedChannels
-    set:
-      agents.kiro.discord.enabled: false
-      agents.kiro.slack.enabled: true
-      agents.kiro.slack.allowedChannels: []
-    asserts:
-      - failedTemplate:
-          errorPattern: "slack.allowedChannels is required"

@@ -2,7 +2,7 @@
 
 [discord]
 bot_token = "${DISCORD_BOT_TOKEN}"
-allowed_channels = ["1234567890"]       # required — empty or omitted = deny all channels (secure by default)
+allowed_channels = ["1234567890"]       # empty or omitted = allow all channels
 # allowed_users = ["<YOUR_DISCORD_USER_ID>"]  # empty or omitted = allow all users
 # allow_bot_messages = "off"  # "off" (default) | "mentions" | "all"
                                # "mentions" is recommended for multi-agent collaboration
@@ -14,7 +14,7 @@ allowed_channels = ["1234567890"]       # required — empty or omitted = deny a
 # [slack]
 # bot_token = "${SLACK_BOT_TOKEN}"     # Bot User OAuth Token (xoxb-...)
 # app_token = "${SLACK_APP_TOKEN}"     # App-Level Token (xapp-...) for Socket Mode
-# allowed_channels = ["C0123456789"]   # required — empty or omitted = deny all channels (secure by default)
+# allowed_channels = ["C0123456789"]   # empty or omitted = allow all channels
 # allowed_users = ["U0123456789"]      # empty or omitted = allow all users
 # allow_bot_messages = "off"           # "off" (default) | "mentions" | "all"
 # trusted_bot_ids = []                 # empty = any bot (mode permitting); set to restrict

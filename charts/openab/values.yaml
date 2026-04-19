@@ -135,7 +135,7 @@ agents:
       enabled: false
       botToken: ""       # Bot User OAuth Token (xoxb-...)
       appToken: ""       # App-Level Token (xapp-...) for Socket Mode
-      allowedChannels: []  # required — empty = deny all channels (secure by default)
+      allowedChannels: []  # empty = allow all channels
       allowedUsers: []     # empty = allow all users
       # allowBotMessages: "off" (default) | "mentions" | "all"
       allowBotMessages: "off"

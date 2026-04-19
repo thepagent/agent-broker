@@ -63,21 +63,9 @@ Add the `[slack]` section to your `config.toml`:
 [slack]
 bot_token = "${SLACK_BOT_TOKEN}"
 app_token = "${SLACK_APP_TOKEN}"
-allowed_channels = ["C0123456789"]    # required — empty = deny all channels (secure by default)
+allowed_channels = []                # empty = allow all channels
 # allowed_users = ["U0123456789"]    # empty = allow all users
 ```
-
-### Access control behavior
-
-| `allowed_channels` | `allowed_users` | Result |
-|---|---|---|
-| empty | empty | **No channels, no users — bot ignores all messages** |
-| set | empty | Only these channels, all users |
-| empty | set | **Bot ignores all messages** (channels must be configured first) |
-| set | set | **AND** — must be in allowed channel AND allowed user |
-
-- Empty `allowed_channels` = bot will not respond anywhere (secure by default)
-- Empty `allowed_users` (default) = no user filtering
 
 Set the environment variables:
 

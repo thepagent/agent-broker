@@ -234,11 +234,8 @@ impl EventHandler for Handler {
         }).clone();
 
         let channel_id = msg.channel_id.get();
-        if self.allowed_channels.is_empty() {
-            debug!("allowed_channels is empty — ignoring message in channel {}", channel_id);
-            return;
-        }
-        let in_allowed_channel = self.allowed_channels.contains(&channel_id);
+        let in_allowed_channel =
+            self.allowed_channels.is_empty() || self.allowed_channels.contains(&channel_id);
 
         let is_mentioned = msg.mentions_user_id(bot_id)
             || msg.content.contains(&format!("<@{}>", bot_id));
