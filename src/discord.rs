@@ -1,6 +1,6 @@
 use crate::acp::ContentBlock;
 use crate::acp::protocol::ConfigOption;
-use crate::adapter::{AdapterRouter, ChatAdapter, ChannelRef, MessageRef, SenderContext};
+use crate::adapter::{AdapterRouter, BotTurnTracker, ChatAdapter, ChannelRef, MessageRef, SenderContext, TurnResult, HARD_BOT_TURN_LIMIT};
 use crate::config::{AllowBots, AllowUsers, SttConfig};
 use crate::format;
 use crate::media;
@@ -17,12 +17,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 use tracing::{debug, error, info};
 
-/// Hard cap on consecutive bot messages in a channel or thread.
-/// Prevents runaway loops between multiple bots in "all" mode.
+/// Cap on consecutive *other-bot* messages checked via cache/API before the BotTurnTracker takes over.
 const MAX_CONSECUTIVE_BOT_TURNS: u8 = 10;
-
-/// Absolute per-thread cap on bot turns. Cannot be overridden by config or human intervention.
-const HARD_BOT_TURN_LIMIT: u32 = 100;
 
 /// Maximum entries in the participation cache before eviction.
 const PARTICIPATION_CACHE_MAX: usize = 1000;
@@ -763,45 +759,6 @@ async fn get_or_create_thread(
     adapter.create_thread(&parent, &trigger_ref, &thread_name).await
 }
 
-// --- Bot turn tracking ---
-
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum TurnResult {
-    Ok,
-    SoftLimit(u32),
-    HardLimit,
-}
-
-pub(crate) struct BotTurnTracker {
-    soft_limit: u32,
-    counts: HashMap<String, (u32, u32)>,
-}
-
-impl BotTurnTracker {
-    pub fn new(soft_limit: u32) -> Self {
-        Self { soft_limit, counts: HashMap::new() }
-    }
-
-    pub fn on_bot_message(&mut self, thread_id: &str) -> TurnResult {
-        let (soft, hard) = self.counts.entry(thread_id.to_string()).or_insert((0, 0));
-        *soft += 1;
-        *hard += 1;
-        if *hard >= HARD_BOT_TURN_LIMIT {
-            TurnResult::HardLimit
-        } else if *soft >= self.soft_limit {
-            TurnResult::SoftLimit(*soft)
-        } else {
-            TurnResult::Ok
-        }
-    }
-
-    pub fn on_human_message(&mut self, thread_id: &str) {
-        if let Some((soft, hard)) = self.counts.get_mut(thread_id) {
-            *soft = 0;
-            *hard = 0;
-        }
-    }
-}
 
 static ROLE_MENTION_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"<@&\d+>").unwrap()
