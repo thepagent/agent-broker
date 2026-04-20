@@ -38,7 +38,7 @@ app.kubernetes.io/component: {{ .agent }}
 
 {{/* Per-agent resource name: nameOverride > <fullname>-<agentKey> */}}
 {{- define "openab.agentFullname" -}}
-{{- if and .cfg.nameOverride (ne .cfg.nameOverride "") }}
+{{- if and .cfg (.cfg.nameOverride) (ne .cfg.nameOverride "") }}
 {{- .cfg.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
 {{- printf "%s-%s" (include "openab.fullname" .ctx) .agent | trunc 63 | trimSuffix "-" }}
