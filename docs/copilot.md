@@ -24,8 +24,7 @@ OpenAB spawns `copilot --acp --stdio` as a child process and communicates via st
 [agent]
 command = "copilot"
 args = ["--acp", "--stdio"]
-working_dir = "/home/agent"
-# Auth via: kubectl exec -it <pod> -- gh auth login -p https -w
+working_dir = "/home/node"
 ```
 
 ## Docker
