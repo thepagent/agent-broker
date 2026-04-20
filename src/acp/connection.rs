@@ -89,15 +89,6 @@ pub enum ContentBlock {
     Image { media_type: String, data: String },
 }
 
-/// Outcome of a silent probe turn used to validate a model switch.
-#[derive(Debug, Clone, Default)]
-pub struct ProbeResult {
-    /// Concatenated `agent_message_chunk.content.text` from the probe turn.
-    pub buffer: String,
-    /// True if the probe exceeded the timeout and was cancelled.
-    pub timed_out: bool,
-}
-
 impl ContentBlock {
     pub fn to_json(&self) -> Value {
         match self {
@@ -469,106 +460,6 @@ impl AcpConnection {
     pub async fn prompt_done(&mut self) {
         *self.notify_tx.lock().await = None;
         self.last_active = Instant::now();
-    }
-
-    /// Send a probe prompt and collect the agent's streaming text into an
-    /// in-memory buffer without exposing it to the caller's session.
-    ///
-    /// Used by `/models` to validate that a freshly-switched model actually
-    /// routes. On timeout, sends `session/cancel` to free the stream. The
-    /// subscriber channel is reset before returning so a subsequent real
-    /// prompt picks up a clean notify pipe.
-    pub async fn probe_prompt(
-        &mut self,
-        text: &str,
-        timeout_secs: u64,
-    ) -> Result<ProbeResult> {
-        self.last_active = Instant::now();
-        let session_id = self
-            .acp_session_id
-            .as_ref()
-            .ok_or_else(|| anyhow!("no session"))?
-            .clone();
-
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        *self.notify_tx.lock().await = Some(tx);
-
-        let id = self.next_id();
-        let req = JsonRpcRequest::new(
-            id,
-            "session/prompt",
-            Some(json!({
-                "sessionId": session_id,
-                "prompt": [{"type": "text", "text": text}],
-            })),
-        );
-        let data = serde_json::to_string(&req)?;
-        let (resp_tx, _resp_rx) = oneshot::channel();
-        self.pending.lock().await.insert(id, resp_tx);
-
-        if let Err(e) = self.send_raw(&data).await {
-            self.pending.lock().await.remove(&id);
-            *self.notify_tx.lock().await = None;
-            return Err(e);
-        }
-
-        let mut buffer = String::new();
-        let collect = async {
-            while let Some(msg) = rx.recv().await {
-                if msg.id == Some(id) {
-                    break;
-                }
-                if msg.method.as_deref() != Some("session/update") {
-                    continue;
-                }
-                let Some(params) = msg.params.as_ref() else {
-                    continue;
-                };
-                let Some(update) = params.get("update") else {
-                    continue;
-                };
-                let kind = update.get("sessionUpdate").and_then(|v| v.as_str());
-                if kind != Some("agent_message_chunk") {
-                    continue;
-                }
-                if let Some(t) = update
-                    .get("content")
-                    .and_then(|c| c.get("text"))
-                    .and_then(|t| t.as_str())
-                {
-                    buffer.push_str(t);
-                }
-            }
-        };
-
-        let mut timed_out = false;
-        if tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), collect)
-            .await
-            .is_err()
-        {
-            timed_out = true;
-            let cancel = serde_json::to_string(&json!({
-                "jsonrpc": "2.0",
-                "method": "session/cancel",
-                "params": {"sessionId": session_id},
-            }))?;
-            let _ = self.send_raw(&cancel).await;
-            // Drain until the prompt response arrives so the next turn starts clean.
-            let _ = tokio::time::timeout(std::time::Duration::from_secs(3), async {
-                while let Some(msg) = rx.recv().await {
-                    if msg.id == Some(id) {
-                        break;
-                    }
-                }
-            })
-            .await;
-        }
-
-        *self.notify_tx.lock().await = None;
-        self.pending.lock().await.remove(&id);
-        self.last_active = Instant::now();
-
-        Ok(ProbeResult { buffer, timed_out })
     }
 
     /// Return a clone of the stdin handle for lock-free cancel.

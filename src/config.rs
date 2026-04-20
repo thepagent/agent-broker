@@ -164,11 +164,6 @@ pub struct AgentConfig {
     pub working_dir: String,
     #[serde(default)]
     pub env: HashMap<String, String>,
-    /// Upper bound (seconds) on how long `/models` waits for a probe turn
-    /// after switching. Timeout is treated as "model unavailable" and
-    /// triggers the auto-fallback to Auto path. Default 15.
-    #[serde(default = "default_probe_timeout_secs")]
-    pub probe_timeout_secs: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -229,7 +224,6 @@ fn default_working_dir() -> String { "/tmp".into() }
 fn default_max_sessions() -> usize { 10 }
 fn default_ttl_hours() -> u64 { 4 }
 fn default_true() -> bool { true }
-fn default_probe_timeout_secs() -> u64 { 15 }
 
 fn emoji_queued() -> String { "👀".into() }
 fn emoji_thinking() -> String { "🤔".into() }

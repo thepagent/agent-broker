@@ -843,81 +843,14 @@ impl Handler {
             .map(|v| v.name.clone())
             .unwrap_or_else(|| selected_value.clone());
 
-        // Only /models requires probe + auto-fallback; /agents switches are
-        // structural and don't go through the per-model routing that produces
-        // soft rejects.
-        let final_msg = if config_id == "model" {
-            let timeout = pool.probe_timeout_secs();
-            match pool.probe_session(&thread_key, "ping", timeout).await {
-                Ok(probe) => {
-                    let soft_reject = probe.buffer.contains("Error: I: AI Model Not Found")
-                        || probe.buffer.contains("Model name is not valid");
-                    if probe.timed_out {
-                        self.fallback_to_auto(
-                            &thread_key,
-                            &display_name,
-                            &format!(
-                                "⏱ **{display_name}** probe timed out (>{timeout}s), switched back to Auto"
-                            ),
-                        )
-                        .await
-                    } else if soft_reject {
-                        let detail = probe.buffer.trim();
-                        let snippet = detail.chars().take(200).collect::<String>();
-                        self.fallback_to_auto(
-                            &thread_key,
-                            &display_name,
-                            &format!(
-                                "⚠️ **{display_name}** unavailable (Cursor: {snippet}), switched back to Auto"
-                            ),
-                        )
-                        .await
-                    } else {
-                        format!("✅ Switched to **{display_name}**")
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "probe failed; assuming switch ok");
-                    format!("✅ Switched to **{display_name}** (probe skipped: {e})")
-                }
-            }
-        } else {
-            format!("✅ Switched to **{display_name}**")
-        };
-
         let _ = comp
             .edit_response(
                 &ctx.http,
                 EditInteractionResponse::new()
-                    .content(final_msg)
+                    .content(format!("✅ Switched to **{display_name}**"))
                     .components(vec![]),
             )
             .await;
-    }
-
-    /// Switch the session back to Auto after a failed probe. Returns the
-    /// user-facing message to display. On fallback failure, surfaces the
-    /// error so the user sees *something* rather than a silent success.
-    async fn fallback_to_auto(
-        &self,
-        thread_key: &str,
-        display_name: &str,
-        primary_msg: &str,
-    ) -> String {
-        let pool = self.router.pool();
-        match pool.set_config_option(thread_key, "model", "default[]").await {
-            Ok(_) => primary_msg.to_string(),
-            Err(e) => {
-                tracing::error!(
-                    error = %e,
-                    display_name,
-                    "auto fallback failed after bad model probe"
-                );
-                format!(
-                    "❌ **{display_name}** unavailable and fallback to Auto also failed: {e}"
-                )
-            }
-        }
     }
 }
 

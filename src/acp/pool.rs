@@ -1,4 +1,4 @@
-use crate::acp::connection::{AcpConnection, ProbeResult};
+use crate::acp::connection::AcpConnection;
 use crate::acp::protocol::ConfigOption;
 use crate::config::AgentConfig;
 use anyhow::{anyhow, Result};
@@ -268,33 +268,6 @@ impl SessionPool {
         };
         let mut conn = conn.lock().await;
         conn.set_config_option(config_id, value).await
-    }
-
-    /// Seconds to wait for a silent probe turn before declaring the switched
-    /// model unavailable. Sourced from [`AgentConfig::probe_timeout_secs`].
-    pub fn probe_timeout_secs(&self) -> u64 {
-        self.config.probe_timeout_secs
-    }
-
-    /// Send a silent probe prompt and return what the agent streamed back.
-    /// Used by `/models` to validate a fresh model selection without surfacing
-    /// the probe turn to Discord.
-    pub async fn probe_session(
-        &self,
-        thread_id: &str,
-        text: &str,
-        timeout_secs: u64,
-    ) -> Result<ProbeResult> {
-        let conn = {
-            let state = self.state.read().await;
-            state
-                .active
-                .get(thread_id)
-                .cloned()
-                .ok_or_else(|| anyhow!("no connection for thread {thread_id}"))?
-        };
-        let mut conn = conn.lock().await;
-        conn.probe_prompt(text, timeout_secs).await
     }
 
     /// Cancel the current in-flight operation for a session.

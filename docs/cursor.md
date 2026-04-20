@@ -95,26 +95,18 @@ Once the `openab-cursor` pod is running and a user has started a thread (by @men
 
 `/models` lists **all models the cursor-agent backend returns for the logged-in account** — the server-fetched list, not a baked-in allowlist. The list reflects account entitlements in real time, so a different Cursor account on the same binary can see a different list.
 
-#### Proactive probe + auto-fallback
+#### Soft rejects from unroutable models
 
-Some of the bracketed modelIds (notably the `claude-*` family and the `gpt-5.4` family on certain accounts) accept `session/set_config_option` successfully but then stream a plain-text error on the very next prompt:
+Some modelIds (notably the `claude-*` family and parts of the `gpt-5.4`/`gpt-5.3-codex-spark` family on certain accounts) accept `session/set_config_option` with `setOk:true` but then stream a plain-text error on the very next `session/prompt`:
 
 ```
 Error: I: AI Model Not Found
 Model name is not valid: "<name>"
 ```
 
-To collapse that one-turn delay, openab sends a silent probe prompt (`"ping"`) immediately after each model switch. The probe's response is captured in-memory and **never forwarded to the Discord channel**. On soft-reject detection (`AI Model Not Found` or `Model name is not valid`), openab auto-switches back to Auto (`default[]`) and surfaces the Cursor-side error in the Discord followup:
+OpenAB **does not work around this** — per project policy, we trust the ACP protocol: `setOk:true` means the switch succeeded, so `/models` shows `✅ Switched to <name>`. The subsequent soft reject is passed through to the channel as the next turn's agent response. If you see that error, run `/models` again and pick Auto (`default[]`) or another routable model.
 
-```
-⚠️ <name> unavailable (Cursor: <original error>), switched back to Auto
-```
-
-Probe timeout is **15 seconds by default**, configurable via `probe_timeout_secs` in the `[agent]` section of `config.toml`. On timeout, the probe is cancelled via `session/cancel` and the same auto-fallback path runs:
-
-```
-⏱ <name> probe timed out (>{N}s), switched back to Auto
-```
+This is a cursor-agent ACP compliance gap tracked in [#493](https://github.com/openabdev/openab/issues/493); see also the Cursor forum thread linked there. Section **Known Limitations** below lists the full set of upstream issues.
 
 #### Asking "who are you"
 
@@ -176,7 +168,16 @@ kubectl exec deployment/openab-cursor -- cursor-agent mcp list
 
 ## Known Limitations
 
+### Packaging / auth
 - Cursor Agent CLI is a separate distribution from Cursor Desktop — they are not the same binary
 - No official apt/yum package; the Dockerfile downloads a pinned tarball directly
 - `cursor-agent login` requires an interactive terminal for the device flow
 - Auth token persistence requires a PVC mount at the user home directory
+
+### Upstream cursor-agent ACP compliance gaps
+
+The following are cursor-agent behaviours that violate ACP semantics. OpenAB does not work around them in-tree; they are tracked in [#493](https://github.com/openabdev/openab/issues/493) and reported upstream via the Cursor forum (link in that issue).
+
+- **`setOk:true` for unroutable models** — `set_config_option` accepts models the account cannot route, surfacing the error one turn later as a plain-text soft reject (`AI Model Not Found` / `Model name is not valid`).
+- **Unfiltered model list** — `session/new` returns 26 models on Pro accounts, of which ~11 are not routable for the logged-in account. The server knows entitlements and should filter.
+- **`loadSession:true` capability is process-local** — `initialize` advertises `agentCapabilities.loadSession=true`, but `session/load` with an id from a previous cursor-agent process returns `-32602 Session not found`. Session IDs do not survive restarts, so pool-eviction and pod-restart both force a fresh session.
