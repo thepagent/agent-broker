@@ -1,7 +1,9 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use regex::Regex;
 use serde::Serialize;
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, LazyLock};
 use tracing::error;
 
 use crate::acp::{classify_notification, AcpEvent, ContentBlock, SessionPool};
@@ -93,6 +95,25 @@ pub trait ChatAdapter: Send + Sync + 'static {
 pub struct AdapterRouter {
     pool: Arc<SessionPool>,
     reactions_config: ReactionsConfig,
+    /// Per-thread flag: once a triggering message in this thread has tagged
+    /// another member (user or bot) other than this bot, subsequent agent
+    /// replies in the thread fall back to send-once even if the adapter
+    /// otherwise enables streaming. Prevents repeated `chat.update` edits
+    /// in threads where the agent's reply is likely to contain mention
+    /// strings, which keeps the conversation deterministic for sibling bots.
+    force_send_once_threads: tokio::sync::Mutex<HashSet<String>>,
+}
+
+/// Matches any remaining `<@UID>` in a prompt after the adapter has stripped
+/// its own trigger mention. Covers Discord `<@123>` / `<@!123>` and Slack
+/// `<@U123ABC>` uniformly.
+static OTHER_MENTION_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<@!?[A-Za-z0-9]+>").unwrap());
+
+/// True if `prompt` still contains a user mention after the adapter has
+/// stripped this bot's own trigger mention. Exposed for unit testing.
+fn prompt_mentions_other_member(prompt: &str) -> bool {
+    OTHER_MENTION_RE.is_match(prompt)
 }
 
 impl AdapterRouter {
@@ -100,12 +121,31 @@ impl AdapterRouter {
         Self {
             pool,
             reactions_config,
+            force_send_once_threads: tokio::sync::Mutex::new(HashSet::new()),
         }
     }
 
     /// Access the underlying session pool (e.g. for config option queries).
     pub fn pool(&self) -> &Arc<SessionPool> {
         &self.pool
+    }
+
+    /// Mark a thread so all subsequent agent replies use send-once mode
+    /// regardless of the adapter's `use_streaming()` hint.
+    async fn mark_thread_send_once(&self, thread_key: &str) {
+        self.force_send_once_threads
+            .lock()
+            .await
+            .insert(thread_key.to_string());
+    }
+
+    /// True if this thread has been marked as send-once (e.g. because a
+    /// triggering message tagged another member).
+    async fn is_thread_send_once(&self, thread_key: &str) -> bool {
+        self.force_send_once_threads
+            .lock()
+            .await
+            .contains(thread_key)
     }
 
     /// Handle an incoming user message. The adapter is responsible for
@@ -153,6 +193,17 @@ impl AdapterRouter {
                 .as_deref()
                 .unwrap_or(&thread_channel.channel_id)
         );
+
+        // Once a triggering message tags another member, the thread switches
+        // to send-once mode permanently. Adapters preserve non-bot `<@UID>`
+        // in the resolved prompt, so any remaining mention is enough signal.
+        if prompt_mentions_other_member(prompt) {
+            self.mark_thread_send_once(&thread_key).await;
+            tracing::debug!(
+                thread_key = %thread_key,
+                "prompt tags another member — thread forced send-once"
+            );
+        }
 
         if let Err(e) = self.pool.get_or_create(&thread_key).await {
             let msg = format_user_error(&e.to_string());
@@ -220,7 +271,7 @@ impl AdapterRouter {
         let adapter = adapter.clone();
         let thread_channel = thread_channel.clone();
         let message_limit = adapter.message_limit();
-        let streaming = adapter.use_streaming();
+        let streaming = adapter.use_streaming() && !self.is_thread_send_once(thread_key).await;
 
         self.pool
             .with_connection(thread_key, |conn| {
@@ -474,4 +525,49 @@ fn compose_display(tool_lines: &[ToolEntry], text: &str, streaming: bool) -> Str
     }
     out.push_str(text.trim_end());
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Discord-style user mention left in the prompt after the adapter
+    /// stripped the bot's own mention.
+    #[test]
+    fn detects_discord_user_mention() {
+        assert!(prompt_mentions_other_member("say hi to <@222>"));
+    }
+
+    /// Discord legacy `<@!UID>` form is also a user mention.
+    #[test]
+    fn detects_discord_legacy_user_mention() {
+        assert!(prompt_mentions_other_member("pair with <@!333>"));
+    }
+
+    /// Slack-style mention (alphanumeric UID).
+    #[test]
+    fn detects_slack_user_mention() {
+        assert!(prompt_mentions_other_member("say hi to <@U2ALICE>"));
+    }
+
+    /// Plain text with no mentions → not send-once.
+    #[test]
+    fn plain_text_has_no_mentions() {
+        assert!(!prompt_mentions_other_member("what's the weather today"));
+    }
+
+    /// `@(role)` placeholder left by Discord's `resolve_mentions` for role
+    /// mentions must NOT trigger send-once — roles address groups, not
+    /// individuals, and we don't want to penalize every role-tagged thread.
+    #[test]
+    fn role_placeholder_is_not_a_member_mention() {
+        assert!(!prompt_mentions_other_member("ping @(role) please"));
+    }
+
+    /// `@(user)` placeholder (legacy fallback path when user can't be
+    /// resolved) also shouldn't count — there's no real UID being tagged.
+    #[test]
+    fn user_placeholder_is_not_a_member_mention() {
+        assert!(!prompt_mentions_other_member("hey @(user) can you check"));
+    }
 }
