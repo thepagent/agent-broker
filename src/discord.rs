@@ -510,6 +510,12 @@ impl EventHandler for Handler {
 
         let prompt = resolve_mentions(&msg.content, bot_id);
 
+        // Prepend quoted/referenced message content when user replies to a message (#339)
+        let prompt = match resolve_referenced_message(&msg, &ctx.http).await {
+            Some(quoted) => format_quote_context(&quoted.author.name, &quoted.content, &prompt),
+            None => prompt,
+        };
+
         // No text and no attachments → skip
         if prompt.is_empty() && msg.attachments.is_empty() {
             return;
@@ -1059,6 +1065,33 @@ async fn get_or_create_thread(
 fn is_thread_already_exists_error(err: &anyhow::Error) -> bool {
     let msg = err.to_string();
     msg.contains("160004") || msg.contains("already been created")
+}
+
+/// Resolve the referenced (quoted) message from a Discord reply.
+/// Prefers the gateway-provided `referenced_message`; falls back to an HTTP API call
+/// using `message_reference` if the gateway didn't include the full message.
+async fn resolve_referenced_message(msg: &Message, http: &Http) -> Option<Message> {
+    if let Some(ref referenced) = msg.referenced_message {
+        return Some(*referenced.clone());
+    }
+    let mr = msg.message_reference.as_ref()?;
+    let message_id = mr.message_id?;
+    let channel_id = mr.channel_id;
+    match channel_id.message(http, message_id).await {
+        Ok(fetched) => Some(fetched),
+        Err(e) => {
+            tracing::warn!(channel_id = %channel_id, message_id = %message_id, error = %e, "failed to fetch referenced message");
+            None
+        }
+    }
+}
+
+/// Format a quoted message block to prepend to the user's prompt.
+fn format_quote_context(author_name: &str, quoted_content: &str, prompt: &str) -> String {
+    if quoted_content.is_empty() {
+        return prompt.to_string();
+    }
+    format!("[Quoted message from @{author_name}]:\n{quoted_content}\n\n{prompt}")
 }
 
 static ROLE_MENTION_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
@@ -1767,5 +1800,41 @@ mod tests {
     #[test]
     fn normal_channel_creates_thread() {
         assert!(!should_skip_thread_creation(false, false));
+    }
+
+    // --- format_quote_context tests (#339) ---
+
+    /// Quoted message is prepended with author attribution.
+    #[test]
+    fn format_quote_prepends_context() {
+        let result = format_quote_context("Alice", "hello world", "summarize this");
+        assert_eq!(
+            result,
+            "[Quoted message from @Alice]:\nhello world\n\nsummarize this"
+        );
+    }
+
+    /// Empty quoted content returns the prompt unchanged.
+    #[test]
+    fn format_quote_empty_content_passthrough() {
+        let result = format_quote_context("Alice", "", "summarize this");
+        assert_eq!(result, "summarize this");
+    }
+
+    /// Empty prompt with quoted content still includes the quote block.
+    #[test]
+    fn format_quote_empty_prompt() {
+        let result = format_quote_context("Bob", "some context", "");
+        assert_eq!(result, "[Quoted message from @Bob]:\nsome context\n\n");
+    }
+
+    /// Multi-line quoted content is preserved as-is.
+    #[test]
+    fn format_quote_multiline() {
+        let result = format_quote_context("Bot", "line1\nline2\nline3", "explain");
+        assert_eq!(
+            result,
+            "[Quoted message from @Bot]:\nline1\nline2\nline3\n\nexplain"
+        );
     }
 }
