@@ -990,3 +990,26 @@ fn markdown_to_mrkdwn(text: &str) -> String {
     let text = CODE_BLOCK_LANG_RE.replace_all(&text, "```\n"); // ```rust → ```
     text.into_owned()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapter::ChatAdapter;
+
+    /// Regression test: Slack streaming depends on allow_bot_messages config.
+    /// Off → stream (better human UX), Mentions/All → send-once (avoids bot-to-bot interference).
+    /// See PR #420 for design rationale.
+    #[test]
+    fn streaming_enabled_only_when_bots_off() {
+        let ttl = std::time::Duration::from_secs(300);
+
+        let off = SlackAdapter::new("xoxb-test".into(), ttl, AllowBots::Off);
+        assert!(off.use_streaming(), "should stream when allow_bot_messages=Off");
+
+        let mentions = SlackAdapter::new("xoxb-test".into(), ttl, AllowBots::Mentions);
+        assert!(!mentions.use_streaming(), "should NOT stream when allow_bot_messages=Mentions");
+
+        let all = SlackAdapter::new("xoxb-test".into(), ttl, AllowBots::All);
+        assert!(!all.use_streaming(), "should NOT stream when allow_bot_messages=All");
+    }
+}

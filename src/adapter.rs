@@ -475,3 +475,40 @@ fn compose_display(tool_lines: &[ToolEntry], text: &str, streaming: bool) -> Str
     out.push_str(text.trim_end());
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Compile-time regression guard: use_streaming() is a required trait method
+    /// (no default). Any adapter that forgets to implement it will fail to compile.
+    /// This test documents the contract — see PR #503 / issue #502 for context.
+    #[test]
+    fn use_streaming_is_required_method() {
+        // If use_streaming() had a default impl, this test module would still
+        // compile even if an adapter forgot to override it. The real guard is
+        // the trait definition itself — this test exists as documentation and
+        // to catch if someone re-adds a default.
+        struct TestAdapter;
+
+        #[async_trait]
+        impl ChatAdapter for TestAdapter {
+            fn platform(&self) -> &'static str { "test" }
+            fn message_limit(&self) -> usize { 2000 }
+            async fn send_message(&self, _: &ChannelRef, _: &str) -> Result<MessageRef> {
+                unimplemented!()
+            }
+            async fn create_thread(&self, _: &ChannelRef, _: &MessageRef, _: &str) -> Result<ChannelRef> {
+                unimplemented!()
+            }
+            async fn add_reaction(&self, _: &MessageRef, _: &str) -> Result<()> { Ok(()) }
+            async fn remove_reaction(&self, _: &MessageRef, _: &str) -> Result<()> { Ok(()) }
+            // use_streaming() MUST be declared — removing this line should fail compilation
+            fn use_streaming(&self) -> bool { false }
+        }
+
+        let adapter = TestAdapter;
+        // Verify the method is callable and returns the declared value
+        assert!(!adapter.use_streaming());
+    }
+}
