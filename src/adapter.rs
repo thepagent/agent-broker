@@ -81,9 +81,9 @@ pub trait ChatAdapter: Send + Sync + 'static {
     }
 
     /// Whether this adapter should use streaming edit (true) or send-once (false).
-    /// Required: each adapter must explicitly declare its streaming capability
-    /// to prevent silent regression if the trait default changes.
-    fn use_streaming(&self) -> bool;
+    /// `other_bot_present` indicates if another bot has posted in the current thread.
+    /// Streaming should be disabled in multi-bot threads to avoid edit interference.
+    fn use_streaming(&self, other_bot_present: bool) -> bool;
 }
 
 // --- AdapterRouter ---
@@ -119,6 +119,7 @@ impl AdapterRouter {
         prompt: &str,
         extra_blocks: Vec<ContentBlock>,
         trigger_msg: &MessageRef,
+        other_bot_present: bool,
     ) -> Result<()> {
         tracing::debug!(platform = adapter.platform(), "processing message");
 
@@ -179,6 +180,7 @@ impl AdapterRouter {
                 content_blocks,
                 thread_channel,
                 reactions.clone(),
+                other_bot_present,
             )
             .await;
 
@@ -216,11 +218,12 @@ impl AdapterRouter {
         content_blocks: Vec<ContentBlock>,
         thread_channel: &ChannelRef,
         reactions: Arc<StatusReactionController>,
+        other_bot_present: bool,
     ) -> Result<()> {
         let adapter = adapter.clone();
         let thread_channel = thread_channel.clone();
         let message_limit = adapter.message_limit();
-        let streaming = adapter.use_streaming();
+        let streaming = adapter.use_streaming(other_bot_present);
 
         self.pool
             .with_connection(thread_key, |conn| {
@@ -504,11 +507,11 @@ mod tests {
             async fn add_reaction(&self, _: &MessageRef, _: &str) -> Result<()> { Ok(()) }
             async fn remove_reaction(&self, _: &MessageRef, _: &str) -> Result<()> { Ok(()) }
             // use_streaming() MUST be declared — removing this line should fail compilation
-            fn use_streaming(&self) -> bool { false }
+            fn use_streaming(&self, _other_bot_present: bool) -> bool { false }
         }
 
         let adapter = TestAdapter;
         // Verify the method is callable and returns the declared value
-        assert!(!adapter.use_streaming());
+        assert!(!adapter.use_streaming(false));
     }
 }

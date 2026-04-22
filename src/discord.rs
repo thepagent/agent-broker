@@ -29,12 +29,11 @@ const PARTICIPATION_CACHE_MAX: usize = 1000;
 
 pub struct DiscordAdapter {
     http: Arc<Http>,
-    allow_bot_messages: AllowBots,
 }
 
 impl DiscordAdapter {
-    pub fn new(http: Arc<Http>, allow_bot_messages: AllowBots) -> Self {
-        Self { http, allow_bot_messages }
+    pub fn new(http: Arc<Http>) -> Self {
+        Self { http }
     }
 }
 
@@ -70,8 +69,8 @@ impl ChatAdapter for DiscordAdapter {
         Ok(())
     }
 
-    fn use_streaming(&self) -> bool {
-        discord_should_stream(self.allow_bot_messages)
+    fn use_streaming(&self, other_bot_present: bool) -> bool {
+        !other_bot_present
     }
 
     async fn create_thread(
@@ -322,7 +321,7 @@ impl EventHandler for Handler {
         }
 
         let adapter = self.adapter.get_or_init(|| {
-            Arc::new(DiscordAdapter::new(ctx.http.clone(), self.allow_bot_messages))
+            Arc::new(DiscordAdapter::new(ctx.http.clone()))
         }).clone();
 
         let channel_id = msg.channel_id.get();
@@ -591,11 +590,17 @@ impl EventHandler for Handler {
 
         let trigger_msg = discord_msg_ref(&msg);
 
+        // Per-thread streaming: check if another bot is present in this thread
+        let other_bot_present = {
+            let cache = self.multibot_threads.lock().await;
+            cache.contains_key(&msg.channel_id.to_string())
+        };
+
         let router = self.router.clone();
         tokio::spawn(async move {
             let sender_json = serde_json::to_string(&sender).unwrap();
             if let Err(e) = router
-                .handle_message(&adapter, &thread_channel, &sender_json, &prompt, extra_blocks, &trigger_msg)
+                .handle_message(&adapter, &thread_channel, &sender_json, &prompt, extra_blocks, &trigger_msg, other_bot_present)
                 .await
             {
                 error!("handle_message error: {e}");
@@ -901,13 +906,6 @@ fn resolve_mentions(content: &str, bot_id: UserId) -> String {
 }
 
 /// Whether the Discord adapter should use streaming edit.
-/// Streaming is disabled when bots can post (Mentions/All) to avoid
-/// placeholder message interference in bot-to-bot threads.
-/// Mirrors the Slack adapter logic from commit 4eed3fc.
-fn discord_should_stream(allow_bot_messages: AllowBots) -> bool {
-    allow_bot_messages == AllowBots::Off
-}
-
 /// Pure thread detection: determines whether a channel is a Discord thread
 /// in an allowed parent, and whether the bot owns it.
 ///
@@ -1349,24 +1347,19 @@ mod tests {
 
     // --- use_streaming parity tests (regression for #533) ---
     // Discord must mirror Slack: streaming only when allow_bot_messages=Off.
-    // When bots can post (Mentions/All), send-once avoids placeholder interference
-    // in bot-to-bot threads. See Slack fix in 4eed3fc and discord regression in 27b9e58.
+    // Per-thread streaming: ON by default, OFF when another bot is present (#534).
 
-    /// Default (Off): streaming enabled for smooth human UX.
+    /// Single bot thread: streaming enabled.
     #[test]
-    fn discord_streams_when_bots_off() {
-        assert!(super::discord_should_stream(AllowBots::Off));
+    fn discord_streams_when_no_other_bot() {
+        let adapter = super::DiscordAdapter::new(Arc::new(super::Http::new("")));
+        assert!(adapter.use_streaming(false));
     }
 
-    /// Mentions: send-once to avoid placeholder interference in bot-to-bot threads.
+    /// Multi-bot thread: send-once to avoid edit interference.
     #[test]
-    fn discord_no_stream_when_bots_mentions() {
-        assert!(!super::discord_should_stream(AllowBots::Mentions));
-    }
-
-    /// All: send-once.
-    #[test]
-    fn discord_no_stream_when_bots_all() {
-        assert!(!super::discord_should_stream(AllowBots::All));
+    fn discord_no_stream_when_other_bot_present() {
+        let adapter = super::DiscordAdapter::new(Arc::new(super::Http::new("")));
+        assert!(!adapter.use_streaming(true));
     }
 }

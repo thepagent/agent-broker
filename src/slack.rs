@@ -67,7 +67,8 @@ pub struct SlackAdapter {
     multibot_threads: tokio::sync::Mutex<HashMap<String, tokio::time::Instant>>,
     /// TTL for participation cache entries (matches session_ttl_hours from config).
     session_ttl: std::time::Duration,
-    /// Controls streaming behavior: Off → streaming edit, Mentions/All → send-once.
+    /// Retained for API compatibility; streaming is now per-thread (#534).
+    #[allow(dead_code)]
     allow_bot_messages: AllowBots,
 }
 
@@ -419,8 +420,8 @@ impl ChatAdapter for SlackAdapter {
         Ok(())
     }
 
-    fn use_streaming(&self) -> bool {
-        self.allow_bot_messages == AllowBots::Off
+    fn use_streaming(&self, other_bot_present: bool) -> bool {
+        !other_bot_present
     }
 }
 
@@ -1118,8 +1119,12 @@ async fn handle_message(
     };
 
     let adapter_dyn: Arc<dyn ChatAdapter> = adapter.clone();
+    let other_bot_present = {
+        let cache = adapter.multibot_threads.lock().await;
+        cache.contains_key(&thread_channel.channel_id)
+    };
     if let Err(e) = router
-        .handle_message(&adapter_dyn, &thread_channel, &sender_json, &prompt, extra_blocks, &trigger_msg)
+        .handle_message(&adapter_dyn, &thread_channel, &sender_json, &prompt, extra_blocks, &trigger_msg, other_bot_present)
         .await
     {
         error!("Slack handle_message error: {e}");
@@ -1347,20 +1352,13 @@ mod tests {
         assert_eq!(strip_mime_params("  text/plain  "), "text/plain");
     }
 
-    /// Regression test: Slack streaming depends on allow_bot_messages config.
-    /// Off → stream (better human UX), Mentions/All → send-once (avoids bot-to-bot interference).
-    /// See PR #420 for design rationale.
+    /// Per-thread streaming: ON by default, OFF when another bot is present (#534).
     #[test]
-    fn streaming_enabled_only_when_bots_off() {
+    fn streaming_per_thread() {
         let ttl = std::time::Duration::from_secs(300);
+        let adapter = SlackAdapter::new("xoxb-test".into(), ttl, AllowBots::Mentions);
 
-        let off = SlackAdapter::new("xoxb-test".into(), ttl, AllowBots::Off);
-        assert!(off.use_streaming(), "should stream when allow_bot_messages=Off");
-
-        let mentions = SlackAdapter::new("xoxb-test".into(), ttl, AllowBots::Mentions);
-        assert!(!mentions.use_streaming(), "should NOT stream when allow_bot_messages=Mentions");
-
-        let all = SlackAdapter::new("xoxb-test".into(), ttl, AllowBots::All);
-        assert!(!all.use_streaming(), "should NOT stream when allow_bot_messages=All");
+        assert!(adapter.use_streaming(false), "should stream when no other bot");
+        assert!(!adapter.use_streaming(true), "should NOT stream when other bot present");
     }
 }
