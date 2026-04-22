@@ -274,6 +274,8 @@ Phase 2 — Validate v2 path (smoke test):
   Send test messages through gateway path
   Confirm: signature validation, session routing, reply delivery all work
   v1 LINE adapter still active as fallback
+  Define go/no-go criteria before executing Phase 3
+  (e.g., N messages processed, zero signature failures, reply latency within threshold)
 
 Phase 3 — Cut over (switch traffic):
   Disable v1 LINE adapter in OAB config
