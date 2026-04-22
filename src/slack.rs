@@ -981,14 +981,12 @@ async fn handle_message(
 
     if let Some(files) = files {
         for file in files {
-            let mimetype = file["mimetype"].as_str().unwrap_or("");
+            let mimetype_raw = file["mimetype"].as_str().unwrap_or("");
+            let mimetype = strip_mime_params(mimetype_raw);
             let filename = file["name"].as_str().unwrap_or("file");
             let size = file["size"].as_u64().unwrap_or(0);
             // Slack private files require Bearer token to download
-            let url = file["url_private_download"]
-                .as_str()
-                .or_else(|| file["url_private"].as_str())
-                .unwrap_or("");
+            let url = slack_file_download_url(file);
 
             if url.is_empty() {
                 continue;
@@ -1027,9 +1025,12 @@ async fn handle_message(
                     debug!(filename, count = text_file_count, "text file count cap reached, skipping");
                     continue;
                 }
-                // Pre-check with Slack-reported size (fast path, avoids
-                // unnecessary download). Running total uses actual bytes.
-                if text_file_bytes + size > TEXT_TOTAL_CAP {
+                // Pre-check with Slack-reported size as a fast path when the
+                // field is populated. Slack can report `size == 0` for
+                // externally-backed files, so this is advisory only — the
+                // authoritative cap check happens after download using
+                // `actual_bytes`.
+                if size > 0 && text_file_bytes + size > TEXT_TOTAL_CAP {
                     debug!(filename, total = text_file_bytes, "text attachments total exceeds 1MB cap, skipping remaining");
                     continue;
                 }
@@ -1039,6 +1040,15 @@ async fn handle_message(
                     size,
                     Some(bot_token),
                 ).await {
+                    if text_file_bytes + actual_bytes > TEXT_TOTAL_CAP {
+                        debug!(
+                            filename,
+                            running = text_file_bytes,
+                            actual = actual_bytes,
+                            "text attachments total exceeds 1MB cap after download, dropping file",
+                        );
+                        continue;
+                    }
                     text_file_bytes += actual_bytes;
                     text_file_count += 1;
                     debug!(filename, "adding text file attachment");
@@ -1122,6 +1132,23 @@ fn resolve_slack_mentions(text: &str, bot_id: Option<&str>) -> String {
         Some(id) => text.replace(&format!("<@{id}>"), "").trim().to_string(),
         None => text.trim().to_string(),
     }
+}
+
+/// Pick the best download URL for a Slack file object. `url_private_download`
+/// streams the raw bytes; `url_private` is the fallback for older file shapes.
+/// Returns `""` when neither is present (caller should skip the file).
+fn slack_file_download_url(file: &serde_json::Value) -> &str {
+    file["url_private_download"]
+        .as_str()
+        .or_else(|| file["url_private"].as_str())
+        .unwrap_or("")
+}
+
+/// Strip MIME parameters like `; charset=utf-8` so type-detection helpers see
+/// the bare media type. Slack occasionally sends mimetypes like
+/// `text/plain; charset=utf-8`; `media::is_text_file` expects the bare form.
+fn strip_mime_params(mimetype: &str) -> &str {
+    mimetype.split(';').next().unwrap_or(mimetype).trim()
 }
 
 /// True only when a Slack non-bot event represents a real user message
@@ -1251,6 +1278,70 @@ mod tests {
                 "subtype {subtype} must not count as a user message",
             );
         }
+    }
+
+    // --- slack_file_download_url tests ---
+
+    /// Prefers url_private_download when both fields are present —
+    /// that endpoint always streams raw bytes even for browser-previewed types.
+    #[test]
+    fn slack_file_url_prefers_download_variant() {
+        let file = serde_json::json!({
+            "url_private_download": "https://files.slack.com/.../download/log.txt",
+            "url_private":          "https://files.slack.com/.../preview/log.txt",
+        });
+        assert_eq!(
+            slack_file_download_url(&file),
+            "https://files.slack.com/.../download/log.txt",
+        );
+    }
+
+    /// Falls back to url_private when url_private_download is absent.
+    #[test]
+    fn slack_file_url_falls_back_to_private() {
+        let file = serde_json::json!({
+            "url_private": "https://files.slack.com/.../log.txt",
+        });
+        assert_eq!(
+            slack_file_download_url(&file),
+            "https://files.slack.com/.../log.txt",
+        );
+    }
+
+    /// Externally-backed files with no private URL return empty — caller skips.
+    #[test]
+    fn slack_file_url_empty_for_external_only() {
+        let file = serde_json::json!({
+            "external_type": "gdrive",
+            "permalink": "https://docs.google.com/...",
+        });
+        assert_eq!(slack_file_download_url(&file), "");
+    }
+
+    // --- strip_mime_params tests ---
+
+    /// MIME with charset parameter strips to bare media type.
+    #[test]
+    fn strip_mime_params_removes_charset() {
+        assert_eq!(strip_mime_params("text/plain; charset=utf-8"), "text/plain");
+    }
+
+    /// Bare MIME is unchanged.
+    #[test]
+    fn strip_mime_params_bare_unchanged() {
+        assert_eq!(strip_mime_params("image/png"), "image/png");
+    }
+
+    /// Empty input is unchanged.
+    #[test]
+    fn strip_mime_params_empty() {
+        assert_eq!(strip_mime_params(""), "");
+    }
+
+    /// Surrounding whitespace is trimmed.
+    #[test]
+    fn strip_mime_params_trims_whitespace() {
+        assert_eq!(strip_mime_params("  text/plain  "), "text/plain");
     }
 
     /// Regression test: Slack streaming depends on allow_bot_messages config.
