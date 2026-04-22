@@ -39,29 +39,34 @@ Use `envFrom` in your Helm values to inject the token as `GH_TOKEN`:
 envFrom:
   - secretRef:
       name: gh-token-secret
-
-env:
-  GH_TOKEN: ""   # or use envFrom above
 ```
 
-Or pass it directly during install:
+> **Recommended**: Use `envFrom` with a separate secret so the token doesn't appear in shell history or Helm release metadata.
+
+As a fallback, you can pass it directly during install — but note this exposes the token in shell history:
 
 ```bash
 helm install openab openab/openab \
   --set env.GH_TOKEN="<YOUR_GITHUB_TOKEN>"
 ```
 
-> **Recommended**: Use `envFrom` with a separate secret rather than `--set`, so the token doesn't appear in shell history.
-
 The `gh` CLI automatically picks up `GH_TOKEN` — no additional auth setup needed.
 
 ## 4. Install `gh` CLI in the Agent Container
 
-Ensure `gh` is available in your Dockerfile:
+Ensure `gh` is available in your Dockerfile. Note: `gh` is not in the default Debian repos — you need to add the GitHub CLI apt repository first:
 
 ```dockerfile
-RUN apt-get update && apt-get install -y gh && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y curl gpg && \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      | gpg --dearmor -o /usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
+    apt-get update && apt-get install -y gh && \
+    rm -rf /var/lib/apt/lists/*
 ```
+
+See the [official install docs](https://github.com/cli/cli/blob/trunk/docs/install_linux.md) for other methods.
 
 ## 5. Verify
 

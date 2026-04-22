@@ -67,9 +67,10 @@ jobs:
             LABEL="Issue #${NUM}"
           fi
 
-          curl -s -H "Content-Type: application/json" \
-            -d "{\"content\":\"[GH-EVENT] repo:${{ github.repository }} action:${TYPE} ${LABEL}\\n**${TITLE}**\\nby ${AUTHOR}\\n${URL}\"}" \
-            "$DISCORD_WEBHOOK_URL"
+          MSG="[GH-EVENT] repo:${{ github.repository }} action:${TYPE} ${LABEL}"
+          MSG="${MSG}\n**${TITLE}**\nby ${AUTHOR}\n${URL}"
+          PAYLOAD=$(printf '%s' "$MSG" | jq -Rs '{content: .}')
+          curl -s -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_WEBHOOK_URL"
 ```
 
 ## Message Format Convention
@@ -93,7 +94,7 @@ https://github.com/openabdev/openab/pull/42
 
 ## Open Questions
 
-- **Bot message handling**: Does OpenAB currently ignore messages from bots/webhooks? If so, webhook sources need to be allowlisted.
+- **Bot message handling**: Does OpenAB currently ignore messages from bots/webhooks? If so, webhook sources need to be allowlisted. Note: OpenAB uses `allowed_channels` and `allowed_users` in `config.toml` for filtering — webhook messages come from a bot user, so the bot's user ID may need to be added to `allowed_users`, or the filtering logic would need a `[GH-EVENT]` prefix check.
 - **Routing**: How does OpenAB determine which agent handles a `[GH-EVENT]` message?
 - **Loop prevention**: If an agent replies in the same channel, could it re-trigger events? Recommend using a dedicated channel and filtering by `[GH-EVENT]` prefix only.
 
