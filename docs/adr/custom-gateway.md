@@ -300,7 +300,6 @@ GitHub shows the gateway handling a non-chat event. The adapter maps repo → ch
 |---|---|---|
 | **WebSocket direction** | OAB connects to GW (OAB is client) vs GW connects to OAB (GW is client) | OAB-as-client is simpler — matches Discord/Slack pattern, OAB initiates all connections |
 | **Multi-tenancy** | One GW per OAB instance vs shared GW serving multiple OAB instances | Shared GW needs routing table; per-instance is simpler for v2 |
-| **Reply path credentials** | GW holds all platform tokens vs OAB holds tokens and calls APIs directly | GW-holds-tokens is cleaner separation but makes GW stateful |
 | **Reconnect / backpressure** | What happens when OAB ↔ GW WebSocket drops? | Need reconnect with event replay or at-least-once delivery |
 | **Event ordering** | Strict per-channel ordering vs best-effort | Strict ordering requires per-channel queuing in GW |
 | **Plugin distribution** | Built-in adapters vs dynamic loading vs separate binaries | Built-in for v2, plugin mechanism for v3 |
@@ -318,24 +317,23 @@ GitHub shows the gateway handling a non-chat event. The adapter maps repo → ch
 
 ### Migration Path from v1 to v2
 
-v1 and v2 can coexist during migration. The cut-over is per-platform, not all-at-once:
+LINE only allows a single webhook URL per channel, so live dual-run (v1 and v2 receiving the same production traffic simultaneously) is not possible. Validation must use a separate test channel or synthetic replay.
 
 ```
-Phase 1 — Deploy gateway alongside v1 OAB (coexistence):
-  OAB Pod [LINE adapter built-in]  ◀──POST── LINE Platform   (v1, still working)
-  OAB Pod [gateway adapter]  ──WS──▶  Gateway Pod [LINE adapter]
-                                            ◀──POST── LINE Platform   (v2, testing)
+Phase 1 — Deploy gateway alongside v1 OAB:
+  OAB Pod [LINE adapter built-in]  ◀──POST── LINE Platform   (v1, production traffic)
+  OAB Pod [gateway adapter]  ──WS──▶  Gateway Pod [LINE adapter]  (v2, deployed but idle)
 
-Phase 2 — Validate v2 path (smoke test):
-  Send test messages through gateway path
+Phase 2 — Validate v2 path (staging / synthetic):
+  Use a separate LINE test channel (or synthetic HTTP replay) pointed at the gateway
   Confirm: signature validation, session routing, reply delivery all work
-  v1 LINE adapter still active as fallback
+  Production traffic still flows through v1
   Define go/no-go criteria before executing Phase 3
   (e.g., N messages processed, zero signature failures, reply latency within threshold)
 
-Phase 3 — Cut over (switch traffic):
+Phase 3 — Cut over (atomic switch):
   Disable v1 LINE adapter in OAB config
-  Point LINE webhook URL to gateway endpoint
+  Point production LINE webhook URL to gateway endpoint
   OAB now receives LINE events only through gateway WebSocket
 
 Phase 4 — Clean up:
@@ -344,7 +342,7 @@ Phase 4 — Clean up:
   OAB is back to outbound-only
 ```
 
-Key constraint: Phase 3 (cut-over) must be atomic per platform — LINE traffic goes through either v1 or v2, not both simultaneously, to avoid duplicate message processing. The LINE webhook URL in the LINE Developers Console is the single routing switch.
+Key constraint: Phase 3 (cut-over) must be atomic per platform — LINE's single webhook URL in the Developers Console is the routing switch. There is no gradual traffic split; it's all-v1 or all-v2.
 
 ---
 
@@ -380,7 +378,7 @@ The gateway holding all platform credentials is the correct architectural choice
 ## Compliance
 
 1. **OAB outbound-only**: after adoption of the custom gateway architecture, new platform integrations must not add inbound platform-traffic handling to OAB core unless explicitly approved by a superseding ADR.
-2. **Event schema stability**: the `openab.gateway.event.v1` schema must be treated as a public contract. Breaking changes require a version bump (`v2`) and a migration path.
+2. **Event schema stability**: the `openab.gateway.event.v1` schema is currently a draft envelope for v2 development. The protocol spec must finalize all required fields (including deferred concerns in Section 3) before the schema is declared stable. Once declared stable, breaking changes require a version bump (`v2`) and a migration path.
 3. **Credential isolation**: platform credentials (tokens, secrets) must reside in the gateway, not in OAB. OAB must not hold or access platform-specific authentication material.
 4. **Adapter interface compliance**: all gateway adapters must implement `validate`, `parse`, `send`, and `health`. Adapters that skip signature validation must be explicitly flagged as insecure.
 5. **Webhook correctness**: all adapters must validate signatures against exact raw request body bytes, per the constraints defined in [ADR: LINE Adapter](./line-adapter.md) Compliance #1.
