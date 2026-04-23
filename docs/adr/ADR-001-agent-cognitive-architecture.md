@@ -6,13 +6,17 @@
 
 ## Context
 
-As OpenAB supports multiple agent backends (Kiro, Claude Code, Codex, Gemini, etc.), each agent operates in isolation without a shared standard for self-identity, social awareness, or persistent knowledge. This makes it difficult to build agents that:
+OpenAB is a multi-bot, agent-agnostic, vendor-agnostic platform. It bridges multiple coding CLIs (Kiro, Claude Code, Codex, Gemini, Copilot, OpenCode, Cursor, etc.) into chat platforms like Discord and Slack, where multiple bots/agents coexist in the same chatroom.
 
-1. Maintain a consistent persona across interactions
-2. Know about and interact with peer agents in a multi-agent environment
-3. Accumulate and refine knowledge over time
+When multiple agents share a chatroom, a critical challenge emerges: **how does each agent quickly establish its own cognitive system — identity, memory, and social relationships — so they can effectively communicate, coordinate, and collaborate?**
 
-We need a generic, platform-agnostic specification that any agent implementation can follow to gain these cognitive capabilities.
+Today, each agent operates in isolation without a shared standard. This leads to:
+
+1. No consistent persona — agents don't know "who they are" across sessions
+2. No social awareness — agents don't know who else is in the room, what they're good at, or how to mention them
+3. No persistent memory — knowledge is lost between sessions with no mechanism to accumulate and refine it over time
+
+For OpenAB's multi-agent vision to work, we need a generic, platform-agnostic specification that any agent implementation can follow to bootstrap these cognitive capabilities — regardless of the underlying LLM or framework.
 
 ## Decision
 
