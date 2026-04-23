@@ -57,6 +57,8 @@ Socket Mode uses a persistent WebSocket connection — no public URL or ingress 
 
 ## 6. Configure openab
 
+> 📖 Full config options with defaults: [docs/config-reference.md](config-reference.md#slack)
+
 Add the `[slack]` section to your `config.toml`:
 
 ```toml

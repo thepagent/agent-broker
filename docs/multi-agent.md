@@ -54,6 +54,8 @@ See individual agent docs for authentication steps:
 
 ## Bot-to-Bot Communication
 
+> 📖 Full config options: [docs/config-reference.md](config-reference.md)
+
 By default, each agent ignores messages from other bots. To enable multi-agent collaboration in the same channel (e.g. a code review bot handing off to a deploy bot), configure `allow_bot_messages` in each agent's `config.toml`:
 
 ```toml

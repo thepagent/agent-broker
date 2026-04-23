@@ -4,6 +4,8 @@ openab can automatically transcribe Discord voice message attachments and forwar
 
 ## Quick Start
 
+> 📖 Full STT config options: [docs/config-reference.md](config-reference.md#stt)
+
 Add an `[stt]` section to your `config.toml`:
 
 ```toml

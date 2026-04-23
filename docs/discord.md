@@ -61,6 +61,8 @@ Complete guide to setting up, configuring, and running OpenAB with Discord.
 
 ## Configuration Reference
 
+> 📖 Full config options with defaults: [docs/config-reference.md](config-reference.md#discord)
+
 ```toml
 [discord]
 bot_token = "${DISCORD_BOT_TOKEN}"

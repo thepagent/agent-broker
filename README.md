@@ -115,6 +115,8 @@ cargo run
 
 ## Configuration Reference
 
+> 📖 Full reference with all options, defaults, and Helm mapping: [docs/config-reference.md](docs/config-reference.md)
+
 ```toml
 [discord]
 bot_token = "${DISCORD_BOT_TOKEN}"   # supports env var expansion
