@@ -1,5 +1,10 @@
 # GitHub Webhook to Discord — Agent Trigger Pattern
 
+> **Note:** This documents a v1 workaround using GitHub Actions + Discord webhooks.
+> The target architecture (v2+) is the [Custom Gateway](adr/custom-gateway.md) with a
+> native GitHub adapter, which provides direct webhook reception, HMAC validation,
+> and richer event context. See [ADR: Custom Gateway — Section 5](adr/custom-gateway.md#5-what-this-enables-beyond-chat) for the GitHub integration example.
+
 ## Overview
 
 OpenAB only listens to Discord events. It does not accept external webhooks directly. To trigger agents from GitHub events (PR, Issue, etc.), we route through Discord as the single entry point.
