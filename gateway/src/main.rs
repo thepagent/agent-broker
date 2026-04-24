@@ -132,8 +132,6 @@ struct AppState {
     ws_token: Option<String>,
     /// Broadcast channel: gateway → OAB (events)
     event_tx: broadcast::Sender<String>,
-    /// Collected reply senders from connected OAB clients
-    reply_handlers: Mutex<Vec<tokio::sync::mpsc::Sender<GatewayReply>>>,
 }
 
 // --- Telegram webhook handler ---
@@ -247,7 +245,6 @@ async fn handle_oab_connection(state: Arc<AppState>, socket: axum::extract::ws::
 
     // Channel for replies from this OAB client
     let (reply_tx, mut reply_rx) = tokio::sync::mpsc::channel::<GatewayReply>(64);
-    state.reply_handlers.lock().await.push(reply_tx);
 
     info!("OAB client connected via WebSocket");
 
@@ -397,7 +394,6 @@ async fn main() -> Result<()> {
         secret_token,
         ws_token,
         event_tx,
-        reply_handlers: Mutex::new(Vec::new()),
     });
 
     let app = Router::new()

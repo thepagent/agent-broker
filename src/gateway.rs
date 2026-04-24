@@ -17,6 +17,8 @@ struct GatewayEvent {
     schema: String,
     #[allow(dead_code)]
     event_id: String,
+    #[allow(dead_code)]
+    timestamp: String,
     platform: String,
     channel: GwChannel,
     sender: GwSender,
@@ -276,6 +278,7 @@ pub async fn run_gateway_adapter(
         let pending: PendingRequests = Arc::new(Mutex::new(HashMap::new()));
         let adapter: Arc<dyn ChatAdapter> =
             Arc::new(GatewayAdapter::new(ws_tx, pending.clone(), platform));
+        let mut tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
 
         loop {
             tokio::select! {
@@ -314,7 +317,7 @@ pub async fn run_gateway_adapter(
                                     };
 
                                     let sender_ctx = SenderContext {
-                                        schema: "sender.v1".into(),
+                                        schema: "openab.sender.v1".into(),
                                         sender_id: event.sender.id.clone(),
                                         sender_name: event.sender.name.clone(),
                                         display_name: event.sender.display_name.clone(),
@@ -335,7 +338,7 @@ pub async fn run_gateway_adapter(
                                     let router = router.clone();
                                     let prompt = event.content.text.clone();
 
-                                    tokio::spawn(async move {
+                                    tasks.spawn(async move {
                                         // If supergroup with no thread_id, create a forum topic
                                         let thread_channel = if event.channel.channel_type == "supergroup"
                                             && channel.thread_id.is_none()
@@ -384,12 +387,16 @@ pub async fn run_gateway_adapter(
                 }
                 _ = shutdown_rx.changed() => {
                     if *shutdown_rx.borrow() {
-                        info!("gateway adapter shutting down");
+                        info!("gateway adapter shutting down, waiting for {} in-flight tasks", tasks.len());
+                        while tasks.join_next().await.is_some() {}
                         return Ok(());
                     }
                 }
             }
         } // inner loop — break here means reconnect
+
+        // Drain in-flight tasks before reconnecting
+        while tasks.join_next().await.is_some() {}
 
         warn!(backoff = backoff_secs, "reconnecting to gateway");
         tokio::select! {
