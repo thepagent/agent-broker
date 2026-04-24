@@ -344,7 +344,7 @@ command = "echo"
     #[test]
     fn parse_minimal_config() {
         let cfg = parse_config(MINIMAL_TOML, "test").unwrap();
-        assert_eq!(cfg.discord.bot_token, "test-token");
+        assert_eq!(cfg.discord.unwrap().bot_token, "test-token");
         assert_eq!(cfg.agent.command, "echo");
         assert_eq!(cfg.pool.max_sessions, 10);
         assert!(cfg.reactions.enabled);
@@ -375,7 +375,7 @@ bot_token = "${AB_TEST_TOKEN}"
 command = "echo"
 "#;
         let cfg = parse_config(toml, "test").unwrap();
-        assert_eq!(cfg.discord.bot_token, "secret-bot-token");
+        assert_eq!(cfg.discord.unwrap().bot_token, "secret-bot-token");
         std::env::remove_var("AB_TEST_TOKEN");
     }
 
@@ -398,7 +398,7 @@ command = "echo"
         let mut tmp = tempfile::NamedTempFile::new().unwrap();
         write!(tmp, "{}", MINIMAL_TOML).unwrap();
         let cfg = load_config(tmp.path()).unwrap();
-        assert_eq!(cfg.discord.bot_token, "test-token");
+        assert_eq!(cfg.discord.unwrap().bot_token, "test-token");
     }
 
     #[tokio::test]
