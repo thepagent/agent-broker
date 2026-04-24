@@ -16,7 +16,7 @@ Use emoji + color to classify each review comment:
 | Level | Emoji | Meaning | Action Required |
 |-------|-------|---------|-----------------|
 | 🔴 Critical | `## 🔴 Critical:` | Correctness bug, security issue, data loss risk | Must fix before merge |
-| 🟡 Minor | `## 🟡 Minor:` | Style inconsistency, missing defense-in-depth, non-blocking improvement | Should fix, doesn't block merge |
+| 🟡 Minor | `## 🟡 Minor:` | Style inconsistency, missing defense-in-depth, non-blocking improvement | Should fix, not really a blocker but nice to have |
 | 🟢 Info | `## 🟢 Info:` | Knowledge sharing, future consideration, design tradeoff note | No action needed |
 
 ## Comment Format
