@@ -21,6 +21,8 @@ The gateway normalizes all inbound events to a unified schema (`openab.gateway.e
 
 For architecture details, see [ADR: Custom Gateway](../docs/adr/custom-gateway.md).
 
+> **Design note:** The gateway is intentionally NOT included in the OAB container image. It is a separate service with its own build, deployment, and scaling lifecycle. This follows the ADR principle that OAB remains outbound-only and platform-agnostic — all inbound webhook handling and platform credentials live in the gateway.
+
 ---
 
 ## Quick Start
