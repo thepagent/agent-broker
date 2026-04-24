@@ -117,3 +117,50 @@ jobs:
             -t ${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.version }} \
             -t ${{ env.IMAGE_NAME }}:latest \
             $(printf '${{ env.IMAGE_NAME }}@sha256:%s ' *)
+
+  release:
+    needs: [build, merge]
+    if: ${{ !cancelled() && needs.merge.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Resolve version
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#gateway-v}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          VERSION="${{ steps.tag.outputs.version }}"
+          gh release create "$TAG" \
+            --title "Gateway v${VERSION}" \
+            --notes "## OpenAB Custom Gateway v${VERSION}
+
+          Standalone gateway service — bridges webhook-based platforms to OAB via WebSocket.
+
+          ### Docker
+
+          \`\`\`bash
+          docker pull ghcr.io/openabdev/openab-gateway:${VERSION}
+          \`\`\`
+
+          Multi-arch: linux/amd64 + linux/arm64
+
+          ### Links
+
+          - [Gateway README](https://github.com/openabdev/openab/blob/main/gateway/README.md)
+          - [ADR: Custom Gateway](https://github.com/openabdev/openab/blob/main/docs/adr/custom-gateway.md)
+
+          **Full Changelog**: https://github.com/openabdev/openab/compare/gateway-v${VERSION}...main"
