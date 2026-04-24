@@ -115,14 +115,19 @@ cargo run
 
 ### Remote Config
 
-You can also load config directly from a URL:
+Config can be loaded from a local file or a remote URL via the `--config` / `-c` flag:
 
 ```bash
-# Auto-detected by http:// or https:// prefix
-openab https://example.com/config.toml
+# Local file
+openab run --config config.toml
+openab run -c config.toml
 
-# Or explicitly with the run subcommand
-openab run https://example.com/config.toml
+# Remote URL (http:// or https://)
+openab run --config https://example.com/config.toml
+openab run -c https://example.com/config.toml
+
+# Default (no flag → config.toml)
+openab run
 ```
 
 This is useful for containerized or multi-node deployments where config is hosted on a central server (e.g. S3, Git raw URL, internal HTTP service).

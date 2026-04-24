@@ -6,17 +6,20 @@ At least one adapter section (`[discord]` or `[slack]`) is required.
 
 ## Loading Config
 
-Config can be loaded from a local file or a remote URL:
+Specify the config source with `--config` / `-c`:
 
 ```bash
-# Local file (default: config.toml)
-openab config.toml
+# Local file (default: config.toml when omitted)
+openab run -c config.toml
 
-# Remote URL (auto-detected by http:// or https:// prefix)
-openab https://example.com/config.toml
+# Remote URL via HTTPS (recommended)
+openab run -c https://example.com/config.toml
+
+# Remote URL via HTTP (warns — avoid in production; config contains secrets)
+openab run -c http://internal.example.com/config.toml
 ```
 
-Remote config is fetched via HTTP GET with a 10-second timeout. Environment variable expansion (`${VAR}`) works identically on both local and remote config content.
+Remote config is fetched via HTTP GET with a 10-second timeout and a 1 MiB response size limit. Environment variable expansion (`${VAR}`) works identically on both local and remote config content.
 
 ---
 
