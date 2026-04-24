@@ -265,6 +265,9 @@ async fn handle_oab_connection(state: Arc<AppState>, socket: axum::extract::ws::
     // Receive OAB replies → Telegram
     let bot_token = state.bot_token.clone();
     let event_tx_for_recv = state.event_tx.clone();
+    // Track per-message reaction state (Telegram replaces all reactions atomically)
+    let reaction_state: Arc<Mutex<std::collections::HashMap<String, Vec<String>>>> =
+        Arc::new(Mutex::new(std::collections::HashMap::new()));
     let recv_task = tokio::spawn(async move {
         let client = reqwest::Client::new();
         while let Some(Ok(msg)) = ws_rx.next().await {
@@ -333,15 +336,42 @@ async fn handle_oab_connection(state: Arc<AppState>, socket: axum::extract::ws::
                         }
 
                         // Handle add_reaction / remove_reaction
+                        // Telegram setMessageReaction replaces ALL reactions, so we track state
                         if reply.command.as_deref() == Some("add_reaction")
                             || reply.command.as_deref() == Some("remove_reaction")
                         {
+                            let msg_key = format!("{}:{}", reply.channel.id, reply.reply_to);
                             let emoji = &reply.content.text;
+                            // Map unsupported emojis to Telegram-compatible ones
+                            let tg_emoji = match emoji.as_str() {
+                                "👨\u{200d}💻" => "⚡",
+                                "🆗" => "👍",
+                                other => other,
+                            };
                             let is_add = reply.command.as_deref() == Some("add_reaction");
-                            let reactions = if is_add {
-                                serde_json::json!([{"type": "emoji", "emoji": emoji}])
-                            } else {
-                                serde_json::json!([])
+                            {
+                                let mut reactions = reaction_state.lock().await;
+                                let set = reactions.entry(msg_key.clone()).or_insert_with(Vec::new);
+                                if is_add {
+                                    if !set.contains(&tg_emoji.to_string()) {
+                                        set.push(tg_emoji.to_string());
+                                    }
+                                } else {
+                                    set.retain(|e| e != tg_emoji);
+                                }
+                            }
+                            let current: Vec<serde_json::Value> = {
+                                let reactions = reaction_state.lock().await;
+                                reactions
+                                    .get(&msg_key)
+                                    .map(|v| {
+                                        v.iter()
+                                            .map(|e| {
+                                                serde_json::json!({"type": "emoji", "emoji": e})
+                                            })
+                                            .collect()
+                                    })
+                                    .unwrap_or_default()
                             };
                             let url = format!(
                                 "https://api.telegram.org/bot{}/setMessageReaction",
@@ -352,7 +382,7 @@ async fn handle_oab_connection(state: Arc<AppState>, socket: axum::extract::ws::
                                 .json(&serde_json::json!({
                                     "chat_id": reply.channel.id,
                                     "message_id": reply.reply_to,
-                                    "reaction": reactions,
+                                    "reaction": current,
                                 }))
                                 .send()
                                 .await
