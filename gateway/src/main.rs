@@ -130,6 +130,8 @@ struct AppState {
     bot_token: String,
     secret_token: Option<String>,
     ws_token: Option<String>,
+    line_channel_secret: Option<String>,
+    line_access_token: Option<String>,
     /// Broadcast channel: gateway → OAB (events)
     event_tx: broadcast::Sender<String>,
 }
@@ -219,6 +221,147 @@ async fn telegram_webhook(
     axum::http::StatusCode::OK
 }
 
+// --- LINE types ---
+
+#[derive(Debug, Deserialize)]
+struct LineWebhookBody {
+    events: Vec<LineEvent>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LineEvent {
+    #[serde(rename = "type")]
+    event_type: String,
+    source: Option<LineSource>,
+    message: Option<LineMessage>,
+    #[serde(rename = "replyToken")]
+    reply_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LineSource {
+    #[serde(rename = "type")]
+    source_type: String,
+    #[serde(rename = "userId")]
+    user_id: Option<String>,
+    #[serde(rename = "groupId")]
+    group_id: Option<String>,
+    #[serde(rename = "roomId")]
+    room_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LineMessage {
+    id: String,
+    #[serde(rename = "type")]
+    message_type: String,
+    text: Option<String>,
+}
+
+// --- LINE webhook handler ---
+
+async fn line_webhook(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> axum::http::StatusCode {
+    // Validate X-Line-Signature
+    if let Some(ref channel_secret) = state.line_channel_secret {
+        use base64::Engine;
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+
+        let signature = headers
+            .get("x-line-signature")
+            .and_then(|v| v.to_str().ok());
+        let Some(signature) = signature else {
+            warn!("LINE webhook rejected: missing X-Line-Signature");
+            return axum::http::StatusCode::UNAUTHORIZED;
+        };
+
+        let mut mac = Hmac::<Sha256>::new_from_slice(channel_secret.as_bytes()).expect("HMAC key");
+        mac.update(&body);
+        let expected =
+            base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
+        if signature != expected {
+            warn!("LINE webhook rejected: invalid signature");
+            return axum::http::StatusCode::UNAUTHORIZED;
+        }
+    }
+
+    let webhook_body: LineWebhookBody = match serde_json::from_slice(&body) {
+        Ok(b) => b,
+        Err(e) => {
+            warn!("LINE webhook parse error: {e}");
+            return axum::http::StatusCode::BAD_REQUEST;
+        }
+    };
+
+    for event in webhook_body.events {
+        if event.event_type != "message" {
+            continue;
+        }
+        let Some(ref msg) = event.message else {
+            continue;
+        };
+        if msg.message_type != "text" {
+            continue;
+        }
+        let Some(ref text) = msg.text else {
+            continue;
+        };
+        if text.trim().is_empty() {
+            continue;
+        }
+
+        let source = event.source.as_ref();
+        let (channel_id, channel_type) = match source {
+            Some(s) if s.source_type == "group" => {
+                (s.group_id.clone().unwrap_or_default(), "group".to_string())
+            }
+            Some(s) if s.source_type == "room" => {
+                (s.room_id.clone().unwrap_or_default(), "room".to_string())
+            }
+            Some(s) => (s.user_id.clone().unwrap_or_default(), "user".to_string()),
+            None => continue,
+        };
+        let user_id = source
+            .and_then(|s| s.user_id.as_deref())
+            .unwrap_or("unknown");
+
+        let gateway_event = GatewayEvent {
+            schema: "openab.gateway.event.v1".into(),
+            event_id: format!("evt_{}", uuid::Uuid::new_v4()),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            platform: "line".into(),
+            event_type: "message".into(),
+            channel: ChannelInfo {
+                id: channel_id.clone(),
+                channel_type,
+                thread_id: None,
+            },
+            sender: SenderInfo {
+                id: user_id.into(),
+                name: user_id.into(),
+                display_name: user_id.into(),
+                is_bot: false,
+            },
+            content: Content {
+                content_type: "text".into(),
+                text: text.clone(),
+            },
+            mentions: vec![],
+            message_id: msg.id.clone(),
+        };
+
+        let json = serde_json::to_string(&gateway_event).unwrap();
+        info!(channel = %channel_id, sender = %user_id, "line → gateway");
+        let _ = state.event_tx.send(json);
+    }
+
+    axum::http::StatusCode::OK
+}
+
 // --- WebSocket handler (OAB connects here) ---
 
 async fn ws_handler(
@@ -264,6 +407,7 @@ async fn handle_oab_connection(state: Arc<AppState>, socket: axum::extract::ws::
 
     // Receive OAB replies → Telegram
     let bot_token = state.bot_token.clone();
+    let line_access_token = state.line_access_token.clone();
     let event_tx_for_recv = state.event_tx.clone();
     // Track per-message reaction state (Telegram replaces all reactions atomically)
     let reaction_state: Arc<Mutex<std::collections::HashMap<String, Vec<String>>>> =
@@ -389,20 +533,39 @@ async fn handle_oab_connection(state: Arc<AppState>, socket: axum::extract::ws::
                             continue;
                         }
 
-                        // Normal send_message
-                        info!(chat_id = %reply.channel.id, thread_id = ?reply.channel.thread_id, "gateway → telegram");
-                        let url = format!("https://api.telegram.org/bot{}/sendMessage", bot_token);
-                        let _ = client
-                            .post(&url)
-                            .json(&serde_json::json!({
-                                "chat_id": reply.channel.id,
-                                "text": reply.content.text,
-                                "message_thread_id": reply.channel.thread_id,
-                                "parse_mode": "Markdown",
-                            }))
-                            .send()
-                            .await
-                            .map_err(|e| error!("telegram send error: {e}"));
+                        // Normal send_message — route by platform
+                        if reply.platform == "line" {
+                            // LINE Push Message API
+                            if let Some(ref token) = line_access_token {
+                                info!(to = %reply.channel.id, "gateway → line");
+                                let _ = client
+                                    .post("https://api.line.me/v2/bot/message/push")
+                                    .bearer_auth(token)
+                                    .json(&serde_json::json!({
+                                        "to": reply.channel.id,
+                                        "messages": [{"type": "text", "text": reply.content.text}]
+                                    }))
+                                    .send()
+                                    .await
+                                    .map_err(|e| error!("line send error: {e}"));
+                            }
+                        } else {
+                            // Telegram sendMessage
+                            info!(chat_id = %reply.channel.id, thread_id = ?reply.channel.thread_id, "gateway → telegram");
+                            let url =
+                                format!("https://api.telegram.org/bot{}/sendMessage", bot_token);
+                            let _ = client
+                                .post(&url)
+                                .json(&serde_json::json!({
+                                    "chat_id": reply.channel.id,
+                                    "text": reply.content.text,
+                                    "message_thread_id": reply.channel.thread_id,
+                                    "parse_mode": "Markdown",
+                                }))
+                                .send()
+                                .await
+                                .map_err(|e| error!("telegram send error: {e}"));
+                        }
                     }
                     Err(e) => warn!("invalid reply from OAB: {e}"),
                 }
@@ -434,6 +597,8 @@ async fn main() -> Result<()> {
     let bot_token = std::env::var("TELEGRAM_BOT_TOKEN").expect("TELEGRAM_BOT_TOKEN must be set");
     let secret_token = std::env::var("TELEGRAM_SECRET_TOKEN").ok();
     let ws_token = std::env::var("GATEWAY_WS_TOKEN").ok();
+    let line_channel_secret = std::env::var("LINE_CHANNEL_SECRET").ok();
+    let line_access_token = std::env::var("LINE_CHANNEL_ACCESS_TOKEN").ok();
     let listen_addr = std::env::var("GATEWAY_LISTEN").unwrap_or_else(|_| "0.0.0.0:8080".into());
     let webhook_path =
         std::env::var("TELEGRAM_WEBHOOK_PATH").unwrap_or_else(|_| "/webhook/telegram".into());
@@ -451,11 +616,14 @@ async fn main() -> Result<()> {
         bot_token,
         secret_token,
         ws_token,
+        line_channel_secret,
+        line_access_token,
         event_tx,
     });
 
     let app = Router::new()
         .route(&webhook_path, post(telegram_webhook))
+        .route("/webhook/line", post(line_webhook))
         .route("/ws", get(ws_handler))
         .route("/health", get(health))
         .with_state(state);
