@@ -144,9 +144,8 @@ jobs:
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
           VERSION="${{ steps.tag.outputs.version }}"
-          gh release create "$TAG" \
-            --title "Gateway v${VERSION}" \
-            --notes "## OpenAB Custom Gateway v${VERSION}
+          cat > /tmp/release-notes.md << EOF
+          ## OpenAB Custom Gateway v${VERSION}
 
           Standalone gateway service — bridges webhook-based platforms to OAB via WebSocket.
 
@@ -162,5 +161,8 @@ jobs:
 
           - [Gateway README](https://github.com/openabdev/openab/blob/main/gateway/README.md)
           - [ADR: Custom Gateway](https://github.com/openabdev/openab/blob/main/docs/adr/custom-gateway.md)
-
-          **Full Changelog**: https://github.com/openabdev/openab/compare/gateway-v${VERSION}...main"
+          EOF
+          sed -i 's/^          //' /tmp/release-notes.md
+          gh release create "$TAG" \
+            --title "Gateway v${VERSION}" \
+            --notes-file /tmp/release-notes.md
