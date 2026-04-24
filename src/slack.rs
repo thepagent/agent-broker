@@ -1,6 +1,6 @@
 use crate::acp::ContentBlock;
 use crate::adapter::{AdapterRouter, ChatAdapter, ChannelRef, MessageRef, SenderContext};
-use crate::bot_turns::{BotTurnTracker, TurnAction, TurnSeverity, ResolvedMessageContext, TurnPolicyDecision, evaluate_bot_turn_policy};
+use crate::bot_turns::{BotTurnTracker, TurnSeverity, ResolvedMessageContext, TurnPolicyDecision, evaluate_bot_turn_policy};
 use crate::config::{AllowBots, AllowUsers, SttConfig};
 use crate::media;
 use anyhow::{anyhow, Result};
@@ -676,7 +676,6 @@ pub async fn run_slack_adapter(
                                                     allowed_here: allow_all_channels
                                                         || allowed_channels.contains(channel_id),
                                                     is_human_text: !is_bot && is_plain_user_message(subtype, msg_text),
-                                                    max_bot_turns,
                                                 };
 
                                                 // Phase 2+3: Record & evaluate

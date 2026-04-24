@@ -1,7 +1,7 @@
 use crate::acp::ContentBlock;
 use crate::acp::protocol::ConfigOption;
 use crate::adapter::{AdapterRouter, ChatAdapter, ChannelRef, MessageRef, SenderContext};
-use crate::bot_turns::{BotTurnTracker, TurnAction, TurnSeverity, ResolvedMessageContext, TurnPolicyDecision, evaluate_bot_turn_policy};
+use crate::bot_turns::{BotTurnTracker, TurnSeverity, ResolvedMessageContext, TurnPolicyDecision, evaluate_bot_turn_policy};
 use crate::config::{AllowBots, AllowUsers, SttConfig};
 use crate::format;
 use crate::media;
@@ -293,7 +293,6 @@ impl EventHandler for Handler {
             is_self,
             allowed_here,
             is_human_text,
-            max_bot_turns: self.max_bot_turns,
         };
 
         // --- Phase 2+3: Record turns & evaluate policy (#531) ---

@@ -151,8 +151,6 @@ pub struct ResolvedMessageContext {
     pub allowed_here: bool,
     /// Whether the message is a plain human message that should reset counters.
     pub is_human_text: bool,
-    /// Soft limit configured for this adapter instance.
-    pub max_bot_turns: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -442,7 +440,6 @@ mod tests {
             is_self: false,
             allowed_here: allowed,
             is_human_text: false,
-            max_bot_turns: 3,
         }
     }
 
@@ -453,7 +450,6 @@ mod tests {
             is_self: true,
             allowed_here: true,
             is_human_text: false,
-            max_bot_turns: 3,
         }
     }
 
@@ -464,7 +460,6 @@ mod tests {
             is_self: false,
             allowed_here: true,
             is_human_text: true,
-            max_bot_turns: 3,
         }
     }
 
@@ -541,7 +536,6 @@ mod tests {
             is_self: false,
             allowed_here: true,
             is_human_text: false,
-            max_bot_turns: 3,
         };
         assert_eq!(evaluate_bot_turn_policy(&mut t, &ctx), TurnPolicyDecision::Continue);
     }
