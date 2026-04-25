@@ -10,10 +10,6 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 
-#[cfg(unix)]
-use std::os::unix::process::CommandExt as _;
-#[cfg(windows)]
-use std::os::windows::process::CommandExt as _;
 
 /// Pick the most permissive selectable permission option from ACP options.
 fn pick_best_option(options: &[Value]) -> Option<String> {
