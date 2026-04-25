@@ -100,7 +100,7 @@ rollback openab per the upgrade SOP — the upgrade to v0.7.7 failed
 
 > **Pod label selector:** `app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=kiro`
 
-> **Gateway config migration (one-time, if applicable):** If you previously enabled a custom gateway by manually patching the ConfigMap (e.g. adding `[gateway]` to `config.toml` by hand), that block is not captured by `helm get values`. Before upgrading, copy the gateway settings into your `values.yaml` under `agents.<name>.gateway` so they are preserved on every subsequent `helm upgrade`. See chart `values.yaml` for the field reference (`url`, `platform`, `token`, `botUsername`). After migrating, do not manually edit the ConfigMap again — manage gateway config through `values.yaml` only.
+> **Gateway config migration (one-time, if applicable):** If you previously enabled a custom gateway by manually patching the ConfigMap (e.g. adding `[gateway]` to `config.toml` by hand), that block is not captured by `helm get values`. Before upgrading, copy the gateway settings into your `values.yaml` under `agents.<name>.gateway` and set `enabled: true` so they are preserved on every subsequent `helm upgrade`. See chart `values.yaml` for the field reference (`enabled`, `url`, `platform`, `token`, `botUsername`). After migrating, do not manually edit the ConfigMap again — manage gateway config through `values.yaml` only.
 
 ---
 

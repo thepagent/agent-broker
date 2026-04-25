@@ -114,7 +114,10 @@ data:
     model = {{ ($cfg.stt).model | default "whisper-large-v3-turbo" | toJson }}
     base_url = {{ ($cfg.stt).baseUrl | default "https://api.groq.com/openai/v1" | toJson }}
     {{- end }}
-    {{- if ($cfg.gateway).url }}
+    {{- if ($cfg.gateway).enabled }}
+    {{- if not ($cfg.gateway).url }}
+    {{ fail (printf "agents.%s.gateway.url is required when gateway.enabled=true" $name) }}
+    {{- end }}
 
     [gateway]
     url = {{ ($cfg.gateway).url | toJson }}
