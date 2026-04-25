@@ -10,6 +10,11 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 
+#[cfg(unix)]
+use std::os::unix::process::CommandExt as _;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt as _;
+
 /// Pick the most permissive selectable permission option from ACP options.
 fn pick_best_option(options: &[Value]) -> Option<String> {
     let mut fallback: Option<&Value> = None;
@@ -140,6 +145,7 @@ impl AcpConnection {
         // SAFETY: setpgid is async-signal-safe (POSIX.1-2008) and called
         // before exec. Return value checked — failure means the child won't
         // have its own process group, so kill(-pgid) would be unsafe.
+        #[cfg(unix)]
         unsafe {
             cmd.pre_exec(|| {
                 if libc::setpgid(0, 0) != 0 {
@@ -147,6 +153,10 @@ impl AcpConnection {
                 }
                 Ok(())
             });
+        }
+        #[cfg(windows)]
+        {
+            cmd.creation_flags(0x00000200); // CREATE_NEW_PROCESS_GROUP
         }
         for (k, v) in env {
             cmd.env(k, expand_env(v));
@@ -500,13 +510,20 @@ impl AcpConnection {
             Some(pid) if pid > 0 => pid,
             _ => return,
         };
-        // Stage 1: SIGTERM the process group
-        unsafe { libc::kill(-pgid, libc::SIGTERM); }
-        // Stage 2: SIGKILL after brief grace (std::thread survives runtime shutdown)
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(1500));
-            unsafe { libc::kill(-pgid, libc::SIGKILL); }
-        });
+        #[cfg(unix)]
+        {
+            // Stage 1: SIGTERM the process group
+            unsafe { libc::kill(-pgid, libc::SIGTERM); }
+            // Stage 2: SIGKILL after brief grace (std::thread survives runtime shutdown)
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+                unsafe { libc::kill(-pgid, libc::SIGKILL); }
+            });
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = pgid; // suppress unused warning on Windows
+        }
     }
 }
 
