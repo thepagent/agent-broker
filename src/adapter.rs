@@ -13,6 +13,14 @@ use crate::reactions::StatusReactionController;
 // --- Platform-agnostic types ---
 
 /// Identifies a channel or thread across platforms.
+///
+/// Used for **routing**: `channel_id` is the ID the adapter sends messages to.
+/// For Discord threads, this is the thread's own channel ID (Discord API
+/// requires it for `say`/`edit`). Use `parent_id` to find the parent channel.
+///
+/// Compare with `SenderContext`, which is **metadata for the agent**: there
+/// `channel_id` is the parent channel and `thread_id` is the thread,
+/// matching Slack's model for cross-platform consistency.
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub struct ChannelRef {
     pub platform: String,
@@ -32,6 +40,14 @@ pub struct MessageRef {
 }
 
 /// Sender identity injected into prompts for downstream agent context.
+///
+/// This is **metadata for the agent** — `channel_id` always refers to the
+/// logical parent channel, and `thread_id` identifies the thread (if any).
+/// This convention is consistent across platforms (Slack, Discord, Telegram).
+///
+/// Compare with `ChannelRef`, which is used for **routing**: there
+/// `channel_id` is the ID the adapter sends messages to (for Discord
+/// threads, that's the thread's own channel ID, not the parent).
 #[derive(Clone, Debug, Serialize)]
 pub struct SenderContext {
     pub schema: String,

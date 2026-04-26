@@ -490,16 +490,14 @@ impl EventHandler for Handler {
             .as_ref()
             .and_then(|m| m.nick.as_ref())
             .unwrap_or(&msg.author.name);
-        let sender = SenderContext {
-            schema: "openab.sender.v1".into(),
-            sender_id: msg.author.id.to_string(),
-            sender_name: msg.author.name.clone(),
-            display_name: display_name.to_string(),
-            channel: "discord".into(),
-            channel_id: thread_parent_id.clone().unwrap_or_else(|| msg.channel_id.to_string()),
-            thread_id: if thread_parent_id.is_some() { Some(msg.channel_id.to_string()) } else { None },
-            is_bot: msg.author.bot,
-        };
+        let sender = build_sender_context(
+            &msg.author.id.to_string(),
+            &msg.author.name,
+            display_name,
+            &msg.channel_id.to_string(),
+            thread_parent_id.as_deref(),
+            msg.author.bot,
+        );
 
         // Build extra content blocks from attachments (audio → STT, text → inline, image → encode)
         let mut extra_blocks = Vec::new();
@@ -577,7 +575,7 @@ impl EventHandler for Handler {
                 platform: "discord".into(),
                 channel_id: msg.channel_id.get().to_string(),
                 thread_id: None,
-                parent_id: None,
+                parent_id: thread_parent_id.clone(),
             }
         } else {
             match get_or_create_thread(&ctx, &adapter, &msg, &prompt).await {
@@ -906,7 +904,39 @@ fn resolve_mentions(content: &str, bot_id: UserId) -> String {
     out.trim().to_string()
 }
 
-/// Whether the Discord adapter should use streaming edit.
+/// Build a `SenderContext` for Discord messages.
+///
+/// Pure function extracted from `EventHandler::message` for testability.
+/// When `thread_parent_id` is `Some`, the message is inside a thread:
+/// - `channel_id` → parent channel (where the thread lives)
+/// - `thread_id`  → thread's own channel ID
+///
+/// This mirrors Slack's model where `channel_id` is always the parent
+/// channel and `thread_id` (thread_ts) identifies the thread.
+///
+/// Note: `ChannelRef.channel_id` uses the *opposite* convention — it holds
+/// the thread's channel ID for routing (Discord API sends to thread by its
+/// channel ID). See `ChannelRef` doc comments for details.
+fn build_sender_context(
+    sender_id: &str,
+    sender_name: &str,
+    display_name: &str,
+    msg_channel_id: &str,
+    thread_parent_id: Option<&str>,
+    is_bot: bool,
+) -> SenderContext {
+    SenderContext {
+        schema: "openab.sender.v1".into(),
+        sender_id: sender_id.to_string(),
+        sender_name: sender_name.to_string(),
+        display_name: display_name.to_string(),
+        channel: "discord".into(),
+        channel_id: thread_parent_id.unwrap_or(msg_channel_id).to_string(),
+        thread_id: thread_parent_id.map(|_| msg_channel_id.to_string()),
+        is_bot,
+    }
+}
+
 /// Pure thread detection: determines whether a channel is a Discord thread
 /// in an allowed parent, and whether the bot owns it.
 ///
@@ -1192,6 +1222,38 @@ mod tests {
         assert_eq!(t.on_bot_message("t1"), TurnResult::Ok);
         // No on_human_message (system message filtered out at call site)
         assert_eq!(t.on_bot_message("t1"), TurnResult::SoftLimit(3));
+    }
+
+    // --- build_sender_context tests (regression for #581 → #584) ---
+    // PR #583 fixed SenderContext to use parent channel_id when in a thread.
+    // These tests verify the pure function extracted from EventHandler::message.
+
+    /// In-thread message: channel_id = parent, thread_id = thread channel ID.
+    #[test]
+    fn build_sender_context_in_thread() {
+        let ctx = build_sender_context("user1", "alice", "Alice", "thread_ch", Some("parent_ch"), false);
+        assert_eq!(ctx.channel_id, "parent_ch");
+        assert_eq!(ctx.thread_id, Some("thread_ch".to_string()));
+        assert_eq!(ctx.channel, "discord");
+        assert_eq!(ctx.sender_id, "user1");
+        assert!(!ctx.is_bot);
+    }
+
+    /// Non-thread message: channel_id = message channel, thread_id = None.
+    #[test]
+    fn build_sender_context_not_in_thread() {
+        let ctx = build_sender_context("user1", "alice", "Alice", "main_ch", None, false);
+        assert_eq!(ctx.channel_id, "main_ch");
+        assert_eq!(ctx.thread_id, None);
+    }
+
+    /// Bot sender: is_bot flag propagated correctly.
+    #[test]
+    fn build_sender_context_bot_sender() {
+        let ctx = build_sender_context("bot1", "mybot", "MyBot", "ch", Some("parent"), true);
+        assert!(ctx.is_bot);
+        assert_eq!(ctx.channel_id, "parent");
+        assert_eq!(ctx.thread_id, Some("ch".to_string()));
     }
 
     // --- detect_thread tests (regression for #506 → #518 → #519) ---
