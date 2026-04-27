@@ -477,7 +477,7 @@ impl EventHandler for Handler {
             }
         }
 
-        if !self.allow_all_users && !self.allowed_users.contains(&msg.author.id.get()) {
+        if is_denied_user(msg.author.bot, self.allow_all_users, &self.allowed_users, msg.author.id.get()) {
             tracing::info!(user_id = %msg.author.id, "denied user, ignoring");
             let msg_ref = discord_msg_ref(&msg);
             let _ = adapter.add_reaction(&msg_ref, "🚫").await;
@@ -980,6 +980,12 @@ fn detect_thread(
     (in_allowed_thread, Some(bot_owns))
 }
 
+/// Returns `true` if the author should be denied by the user allowlist.
+/// Bot authors skip this check — they are gated by `allow_bot_messages` + `trusted_bot_ids`.
+fn is_denied_user(is_bot: bool, allow_all_users: bool, allowed_users: &HashSet<u64>, user_id: u64) -> bool {
+    !is_bot && !allow_all_users && !allowed_users.contains(&user_id)
+}
+
 /// Pure decision function: should this message be processed or ignored?
 /// Returns `true` if the message should be processed (bot responds).
 /// Extracted from the EventHandler::message gating logic for testability.
@@ -1453,5 +1459,28 @@ mod tests {
             parent_id: None,
         };
         assert_eq!(DiscordAdapter::resolve_channel(&ch), "222");
+    }
+
+    // --- is_denied_user tests (regression for #604) ---
+
+    /// Human not in allowlist → denied.
+    #[test]
+    fn denied_user_human_not_in_allowlist() {
+        let allowed = HashSet::from([100]);
+        assert!(is_denied_user(false, false, &allowed, 999));
+    }
+
+    /// Human in allowlist → allowed.
+    #[test]
+    fn denied_user_human_in_allowlist() {
+        let allowed = HashSet::from([100]);
+        assert!(!is_denied_user(false, false, &allowed, 100));
+    }
+
+    /// Bot not in allowlist → allowed (bots skip user gate). This is the #604 fix.
+    #[test]
+    fn denied_user_bot_skips_allowlist() {
+        let allowed = HashSet::from([100]);
+        assert!(!is_denied_user(true, false, &allowed, 999));
     }
 }
