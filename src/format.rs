@@ -6,6 +6,18 @@
 /// the original opener (preserving language tag), so each chunk renders correctly.
 ///
 /// Invariant: every returned chunk satisfies `chunk.chars().count() <= limit`.
+///
+/// # State machine
+///
+/// ```text
+///   OUTSIDE ──[line starts with ```]──► INSIDE_FENCE
+///   INSIDE_FENCE ──[line starts with ```]──► OUTSIDE
+///
+///   On chunk split while INSIDE_FENCE:
+///     1. Append "\n```" to close the current chunk
+///     2. Start next chunk with the original opener (e.g. "```rust")
+///     → every emitted chunk has balanced fences
+/// ```
 pub fn split_message(text: &str, limit: usize) -> Vec<String> {
     if text.chars().count() <= limit {
         return vec![text.to_string()];
