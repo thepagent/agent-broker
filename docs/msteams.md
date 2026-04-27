@@ -51,9 +51,11 @@ After deployment, open the bot:
 
 ## 3. Build a Teams App Manifest
 
-Bot Framework only delivers messages once a Teams app installs your bot. Use [Teams Developer Portal](https://dev.teams.microsoft.com) (or Teams Toolkit / hand-rolled `manifest.json`).
+Bot Framework only delivers messages once a Teams app installs your bot. You have two paths:
 
-In Developer Portal → **Apps** → **New app**:
+### Option A — Teams Developer Portal (UI)
+
+In [Teams Developer Portal](https://dev.teams.microsoft.com) → **Apps** → **New app**:
 
 1. **Basic information** → fill name, description, developer info
 2. **App features** → **Bot** → **Create new bot** → select **Use existing bot ID** → paste `TEAMS_APP_ID`
@@ -62,6 +64,54 @@ In Developer Portal → **Apps** → **New app**:
    - **Team** — channel chat (must be @mentioned)
    - **Group chat** — multi-person DMs
 4. **Publish** → **Publish to your org** (single tenant) or sideload via **Apps for your org**
+
+### Option B — Hand-rolled `manifest.json`
+
+If you'd rather build the manifest yourself and sideload as a `.zip`, drop this in `manifest.json` next to two icons (`outline.png` — transparent 32×32 white, `color.png` — 192×192 colored), zip them, and in Teams: **Apps → Manage your apps → Upload a custom app**.
+
+```json
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.25/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.25",
+  "version": "1.0.0",
+  "id": "<generate-a-fresh-uuid-v4>",
+  "developer": {
+    "name": "<Your Org>",
+    "websiteUrl": "https://example.com",
+    "privacyUrl": "https://example.com/privacy",
+    "termsOfUseUrl": "https://example.com/terms"
+  },
+  "name": {
+    "short": "<bot-short-name>",
+    "full": "<Bot Full Name>"
+  },
+  "description": {
+    "short": "<one-line bot description>",
+    "full": "<longer description shown on the app details page>"
+  },
+  "icons": {
+    "outline": "outline.png",
+    "color": "color.png"
+  },
+  "accentColor": "#ffffff",
+  "bots": [
+    {
+      "botId": "<TEAMS_BOT_ID>",
+      "scopes": ["personal", "team", "groupChat"],
+      "isNotificationOnly": false,
+      "supportsFiles": false
+    }
+  ],
+  "validDomains": []
+}
+```
+
+Notes:
+- `id` is the **Teams app id** — generate a fresh UUID v4 (`uuidgen` on macOS). It is **not** the same as `botId`.
+- `botId` is the **Microsoft App (Bot) id** from step 1 (the value you put in `TEAMS_APP_ID`).
+- The three `developer.*` URLs are required by the schema. They can point at your GitHub repo / privacy page / license — they just have to resolve.
+- Leave `supportsFiles: false` until OAB's Teams adapter actually handles file attachments.
+- Drop fields like `defaultGroupCapability`, `supportsChannelFeatures`, `composeExtensions`, `staticTabs` unless you're adding tabs / messaging extensions / meeting features. They don't apply to a bot-only app.
 
 > If your tenant requires admin approval, an admin must approve the published app in Teams Admin Center → Manage apps.
 
