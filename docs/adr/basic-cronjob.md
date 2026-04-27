@@ -58,6 +58,7 @@ schedule = "0 9 * * 1-5"                    # cron expression (UTC)
 channel = "123456789"                        # target channel ID
 message = "summarize yesterday's merged PRs" # message sent to agent
 platform = "discord"                         # optional, defaults to first configured
+sender_name = "CronScheduler"               # optional, defaults to "openab-cron"
 
 [[cronjobs]]
 schedule = "0 0 * * 0"
@@ -70,7 +71,23 @@ schedule = "0 18 * * 1-5"
 channel = "C0123456789"
 message = "check for any critical alerts in the last 8 hours"
 platform = "slack"
+sender_name = "OpsBot"
 ```
+
+### Sender Identity
+
+When a cron job fires, the message injected into the agent session includes a sender header so the agent knows who/what triggered it:
+
+- **Default:** `openab-cron` (if `sender_name` is not specified)
+- **Customizable:** operators can set `sender_name` per cron entry
+
+The agent sees this in the prompt context the same way it sees a Discord/Slack username, e.g.:
+
+```
+[openab-cron]: summarize yesterday's merged PRs
+```
+
+This helps the agent distinguish scheduled prompts from interactive users, and operators can use meaningful names like `"DailyOps"` or `"WeeklyReport"` for clarity in logs and thread titles.
 
 ### Execution Flow
 
