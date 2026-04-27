@@ -277,7 +277,10 @@ Key mapping (`values.yaml` → `config.toml`):
 | `agents.<name>.cronjobs[].schedule` | `[[cronjobs]] schedule` |
 | `agents.<name>.cronjobs[].channel` | `[[cronjobs]] channel` |
 | `agents.<name>.cronjobs[].message` | `[[cronjobs]] message` |
+| `agents.<name>.cronjobs[].platform` | `[[cronjobs]] platform` |
+| `agents.<name>.cronjobs[].senderName` | `[[cronjobs]] sender_name` |
 | `agents.<name>.cronjobs[].timezone` | `[[cronjobs]] timezone` |
+| `agents.<name>.cronjobs[].threadId` | `[[cronjobs]] thread_id` |
 
 > ⚠️ Use `--set-string` (not `--set`) for Discord/Slack IDs to avoid float64 precision loss:
 > ```bash
