@@ -26,6 +26,9 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 unicode-width = "0.2"
 pulldown-cmark = { version = "0.13", default-features = false }
 tokio-tungstenite = { version = "0.21", features = ["rustls-tls-webpki-roots"] }
+cron = "0.16.0"
+chrono = "0.4.44"
+chrono-tz = "0.10.4"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
