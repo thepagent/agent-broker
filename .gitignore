@@ -6,3 +6,4 @@ config.toml
 .kiro/
 CLAUDE.md
 gateway/target/
+node_modules/

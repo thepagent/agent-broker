@@ -4,7 +4,7 @@
 
 ![OpenAB banner](images/banner.jpg)
 
-A lightweight, secure, cloud-native ACP harness that bridges **Discord, Slack**, and any [Agent Client Protocol](https://github.com/anthropics/agent-protocol)-compatible coding CLI (Kiro CLI, Claude Code, Codex, Gemini, OpenCode, Copilot CLI, etc.) over stdio JSON-RPC — delivering the next-generation development experience. **Telegram, LINE**, and other webhook-based platforms are supported via the standalone [Custom Gateway](gateway/).
+A lightweight, secure, cloud-native ACP harness that bridges **Discord, Slack**, and any [Agent Client Protocol](https://github.com/anthropics/agent-protocol)-compatible coding CLI (Kiro CLI, Claude Code, Codex, Gemini, OpenCode, Copilot CLI, etc.) over stdio JSON-RPC — delivering the next-generation development experience. **Telegram, LINE**, and other webhook-based platforms are supported via the standalone [Custom Gateway](gateway/). **WhatsApp** is supported via a [Baileys bridge](docs/whatsapp.md).
 
 🪼 **Join our community!** Come say hi on Discord — we'd love to have you: **[🪼 OpenAB — Official](https://discord.gg/YNksK9M6)** 🎉
 
@@ -71,6 +71,13 @@ See [docs/telegram.md](docs/telegram.md) for the full setup guide. Requires the 
 <summary><strong>LINE</strong> (via Custom Gateway)</summary>
 
 See [docs/line.md](docs/line.md) for the full setup guide. Requires the standalone [Custom Gateway](gateway/) service.
+
+</details>
+
+<details>
+<summary><strong>WhatsApp</strong> (via Baileys Bridge)</summary>
+
+See [docs/whatsapp.md](docs/whatsapp.md) for the full setup guide. Uses a Node.js subprocess bridge — no separate service needed.
 
 </details>
 
@@ -177,6 +184,11 @@ args = ["acp", "--trust-all-tools"]   # ACP mode args
 working_dir = "/tmp"                  # agent working directory
 env = {}                              # extra env vars passed to the agent
 
+# [whatsapp]                          # optional: WhatsApp via Baileys bridge
+# bridge_script = "whatsapp/baileys-bridge.js"
+# session_dir = "/data/whatsapp-session"
+# allowed_contacts = ["628123456789@s.whatsapp.net"]
+
 [pool]
 max_sessions = 10                     # max concurrent sessions
 session_ttl_hours = 24                # idle session TTL
@@ -264,6 +276,8 @@ kubectl apply -f k8s/deployment.yaml
     ├── config.rs       # TOML config + ${ENV_VAR} expansion
     ├── discord.rs      # DiscordAdapter: serenity EventHandler + ChatAdapter impl
     ├── slack.rs        # SlackAdapter: Socket Mode + ChatAdapter impl
+    ├── gateway.rs      # GatewayAdapter: WebSocket bridge for Telegram/LINE
+    ├── whatsapp.rs     # WhatsAppAdapter: Baileys subprocess bridge for WhatsApp
     ├── media.rs        # shared image resize/compress + STT download
     ├── format.rs       # message splitting, thread name shortening
     ├── reactions.rs    # status reaction controller (debounce, stall detection)
