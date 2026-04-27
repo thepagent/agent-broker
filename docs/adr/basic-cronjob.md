@@ -176,7 +176,7 @@ Rendered into `config.toml` via the existing Helm ConfigMap template.
 - Static cron expressions in `config.toml`
 - One-way message injection to agent
 - Reply posted to configured channel
-- Standard 5-field cron syntax (minute, hour, day-of-month, month, day-of-week)
+- Standard 5-field cron syntax (minute, hour, day-of-month, month, day-of-week) — same format as Linux crontab, Kubernetes CronJob, and GitHub Actions
 - Timezone support via optional `timezone` field (defaults to UTC)
 
 ### Explicitly Out of Scope
