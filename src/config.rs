@@ -45,7 +45,6 @@ pub struct Config {
     #[serde(default)]
     pub stt: SttConfig,
     #[serde(default)]
-    #[serde(default)]
     pub markdown: MarkdownConfig,
     #[serde(default)]
     pub cronjobs: Vec<CronJobConfig>,

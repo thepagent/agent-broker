@@ -1,6 +1,6 @@
 use crate::adapter::{AdapterRouter, ChatAdapter, ChannelRef, SenderContext};
 use crate::config::CronJobConfig;
-use chrono::Utc;
+use chrono::{Timelike, Utc};
 use chrono_tz::Tz;
 use cron::Schedule;
 use std::collections::{HashMap, HashSet};
@@ -16,14 +16,23 @@ pub fn parse_cron_expr(expr: &str) -> Result<Schedule, cron::error::Error> {
     Schedule::from_str(&six_field)
 }
 
-/// Check whether a cron schedule should fire given the current time and a tick interval.
-/// Returns true if the next upcoming event is within `tick_secs` seconds from now.
-pub fn should_fire(schedule: &Schedule, tz: Tz, tick_secs: i64) -> bool {
-    let now_tz = Utc::now().with_timezone(&tz);
+/// Check whether a cron schedule should fire right now.
+/// Truncates the current time to the minute boundary and checks if the
+/// schedule has an event at exactly that minute.
+pub fn should_fire(schedule: &Schedule, tz: Tz) -> bool {
+    let now = Utc::now().with_timezone(&tz);
+    // Truncate to start of current minute
+    let minute_start = now
+        .with_second(0).unwrap()
+        .with_nanosecond(0).unwrap();
+    // Query upcoming events from 1 second before the minute boundary.
+    // `upcoming()` returns events strictly > the query time, so querying
+    // from (minute_start - 1s) will include minute_start itself.
+    let query_from = minute_start - chrono::Duration::seconds(1);
     schedule
-        .upcoming(tz)
+        .after(&query_from)
         .next()
-        .map(|next| (next - now_tz).num_seconds() <= tick_secs)
+        .map(|next| next == minute_start)
         .unwrap_or(false)
 }
 
@@ -120,7 +129,7 @@ pub async fn run_scheduler(
         tokio::select! {
             _ = ticker.tick() => {
                 for (idx, (schedule, tz, job)) in jobs.iter().enumerate() {
-                    if !should_fire(schedule, *tz, 60) {
+                    if !should_fire(schedule, *tz) {
                         continue;
                     }
                     // Skip if previous execution still running
@@ -251,6 +260,7 @@ async fn fire_cronjob(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{Datelike, Timelike};
 
     #[test]
     fn parse_valid_cron_expression() {
@@ -301,23 +311,20 @@ mod tests {
 
     #[test]
     fn should_fire_every_minute_returns_true() {
-        // "* * * * *" fires every minute, so next event is always within 60s
+        // "* * * * *" fires every minute — current minute always matches
         let schedule = parse_cron_expr("* * * * *").unwrap();
-        assert!(should_fire(&schedule, chrono_tz::UTC, 60));
-    }
-
-    #[test]
-    fn should_fire_with_zero_tick_window_returns_false() {
-        // "* * * * *" next event is up to 60s away; 0-second window should not fire
-        let schedule = parse_cron_expr("* * * * *").unwrap();
-        assert!(!should_fire(&schedule, chrono_tz::UTC, 0));
+        assert!(should_fire(&schedule, chrono_tz::UTC));
     }
 
     #[test]
     fn should_fire_returns_false_for_distant_schedule() {
-        // Schedule for Jan 1 at 00:00 — unless we happen to be on Jan 1, this is months away
+        // Schedule for Jan 1 at 00:00 — unless we happen to be on Jan 1, this won't match
         let schedule = parse_cron_expr("0 0 1 1 *").unwrap();
-        assert!(!should_fire(&schedule, chrono_tz::UTC, 60));
+        // Only passes if today is NOT Jan 1 at 00:xx UTC
+        let now = chrono::Utc::now();
+        if now.month() != 1 || now.day() != 1 || now.hour() != 0 {
+            assert!(!should_fire(&schedule, chrono_tz::UTC));
+        }
     }
 
     #[test]
@@ -325,7 +332,7 @@ mod tests {
         let schedule = parse_cron_expr("* * * * *").unwrap();
         let tz: Tz = "Asia/Taipei".parse().unwrap();
         // Every-minute schedule should fire regardless of timezone
-        assert!(should_fire(&schedule, tz, 60));
+        assert!(should_fire(&schedule, tz));
     }
 
     #[test]

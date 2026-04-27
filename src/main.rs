@@ -320,7 +320,8 @@ async fn main() -> anyhow::Result<()> {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
     }
     if let Some(handle) = cron_handle {
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+        // cron.rs drains in-flight tasks for up to 30s, so wait slightly longer
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(35), handle).await;
     }
     let shutdown_pool = pool;
     shutdown_pool.shutdown().await;
