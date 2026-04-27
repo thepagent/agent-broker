@@ -27,6 +27,9 @@ pub fn should_fire(schedule: &Schedule, tz: Tz, tick_secs: i64) -> bool {
         .unwrap_or(false)
 }
 
+/// Known platforms that have adapter support.
+const VALID_PLATFORMS: &[&str] = &["discord", "slack"];
+
 /// Validate all cronjob configs at startup (fail-fast on bad cron expressions or timezones).
 pub fn validate_cronjobs(cronjobs: &[CronJobConfig]) -> anyhow::Result<()> {
     for (i, job) in cronjobs.iter().enumerate() {
@@ -36,6 +39,9 @@ pub fn validate_cronjobs(cronjobs: &[CronJobConfig]) -> anyhow::Result<()> {
         job.timezone.parse::<Tz>().map_err(|e| {
             anyhow::anyhow!("cronjobs[{i}]: invalid timezone {:?}: {e}", job.timezone)
         })?;
+        if !VALID_PLATFORMS.contains(&job.platform.as_str()) {
+            anyhow::bail!("cronjobs[{i}]: unknown platform {:?} (expected one of: {VALID_PLATFORMS:?})", job.platform);
+        }
     }
     Ok(())
 }
@@ -52,7 +58,8 @@ pub async fn run_scheduler(
         return;
     }
 
-    // Parse and validate all cron expressions upfront
+    // Parse cron expressions into Schedule objects. Already validated at
+    // startup by validate_cronjobs(), so errors here are purely defensive.
     let jobs: Vec<(Schedule, Tz, CronJobConfig)> = cronjobs
         .into_iter()
         .filter_map(|job| {
@@ -170,7 +177,9 @@ impl Drop for InFlightGuard {
     fn drop(&mut self) {
         let idx = self.idx;
         let set = self.set.clone();
-        // spawn a tiny task because Drop is sync and we need an async lock
+        // spawn a tiny task because Drop is sync and we need an async lock.
+        // If the runtime is shutting down this spawn may be ignored, which is
+        // fine — the in-flight set is irrelevant once the scheduler exits.
         tokio::spawn(async move {
             set.lock().await.remove(&idx);
         });
