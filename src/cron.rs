@@ -1,4 +1,4 @@
-use crate::adapter::{AdapterRouter, ChatAdapter, ChannelRef, MessageRef, SenderContext};
+use crate::adapter::{AdapterRouter, ChatAdapter, ChannelRef, SenderContext};
 use crate::config::CronJobConfig;
 use chrono::Utc;
 use chrono_tz::Tz;
@@ -8,6 +8,24 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
+
+/// Parse a 5-field POSIX cron expression into a `Schedule`.
+/// The `cron` crate expects a 6-field expression (with seconds), so we prepend "0".
+pub fn parse_cron_expr(expr: &str) -> Result<Schedule, cron::error::Error> {
+    let six_field = format!("0 {}", expr);
+    Schedule::from_str(&six_field)
+}
+
+/// Check whether a cron schedule should fire given the current time and a tick interval.
+/// Returns true if the next upcoming event is within `tick_secs` seconds from now.
+pub fn should_fire(schedule: &Schedule, tz: Tz, tick_secs: i64) -> bool {
+    let now_tz = Utc::now().with_timezone(&tz);
+    schedule
+        .upcoming(tz)
+        .next()
+        .map(|next| (next - now_tz).num_seconds() <= tick_secs)
+        .unwrap_or(false)
+}
 
 /// Run the internal cron scheduler. Evaluates cron expressions once per minute.
 pub async fn run_scheduler(
@@ -22,11 +40,10 @@ pub async fn run_scheduler(
     }
 
     // Parse and validate all cron expressions upfront
-    let jobs: Vec<(Schedule, Tz, &CronJobConfig)> = cronjobs
-        .iter()
+    let jobs: Vec<(Schedule, Tz, CronJobConfig)> = cronjobs
+        .into_iter()
         .filter_map(|job| {
-            let expr = format!("0 {}", job.schedule);
-            let schedule = match Schedule::from_str(&expr) {
+            let schedule = match parse_cron_expr(&job.schedule) {
                 Ok(s) => s,
                 Err(e) => {
                     error!(schedule = %job.schedule, error = %e, "invalid cron expression, skipping");
@@ -62,46 +79,88 @@ pub async fn run_scheduler(
     // Track in-flight jobs to prevent overlapping executions
     let in_flight: Arc<Mutex<HashSet<usize>>> = Arc::new(Mutex::new(HashSet::new()));
 
+    // Use interval instead of sleep to compensate for drift.
+    // Delay (not Burst) so we skip missed ticks instead of rapid-firing.
+    // First, align to the next minute boundary so cron fires at :00, not at
+    // whatever second the process happened to start.
+    let now = Utc::now();
+    let secs_into_minute = now.timestamp() % 60;
+    let align_delay = if secs_into_minute == 0 { 0 } else { 60 - secs_into_minute as u64 };
+    if align_delay > 0 {
+        debug!(align_secs = align_delay, "aligning to next minute boundary");
+        tokio::time::sleep(std::time::Duration::from_secs(align_delay)).await;
+    }
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    // Track spawned tasks so we can wait for them on shutdown
+    let mut tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
+
     loop {
         tokio::select! {
-            _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
-                let now = Utc::now();
+            _ = ticker.tick() => {
                 for (idx, (schedule, tz, job)) in jobs.iter().enumerate() {
-                    let now_tz = now.with_timezone(tz);
-                    if let Some(next) = schedule.upcoming(*tz).next() {
-                        let diff = (next - now_tz).num_seconds();
-                        debug!(schedule = %job.schedule, timezone = %job.timezone, next = %next, diff_secs = diff, "checking");
-                        if diff <= 60 {
-                            // Skip if previous execution still running
-                            {
-                                let running = in_flight.lock().await;
-                                if running.contains(&idx) {
-                                    warn!(schedule = %job.schedule, channel = %job.channel, "skipping cronjob, previous execution still running");
-                                    continue;
-                                }
-                            }
-                            info!(
-                                schedule = %job.schedule,
-                                channel = %job.channel,
-                                platform = %job.platform,
-                                message = %job.message,
-                                sender = %job.sender_name,
-                                "🔔 cronjob fired"
-                            );
-                            let in_flight = in_flight.clone();
-                            in_flight.lock().await.insert(idx);
-                            fire_cronjob(idx, job, &router, &adapters, in_flight).await;
+                    if !should_fire(schedule, *tz, 60) {
+                        continue;
+                    }
+                    // Skip if previous execution still running
+                    {
+                        let running = in_flight.lock().await;
+                        if running.contains(&idx) {
+                            warn!(schedule = %job.schedule, channel = %job.channel, "skipping cronjob, previous execution still running");
+                            continue;
                         }
                     }
+                    info!(
+                        schedule = %job.schedule,
+                        channel = %job.channel,
+                        platform = %job.platform,
+                        message = %job.message,
+                        sender = %job.sender_name,
+                        "🔔 cronjob fired"
+                    );
+                    in_flight.lock().await.insert(idx);
+
+                    // Spawn the entire fire_cronjob so send_message doesn't block the loop
+                    let job = job.clone();
+                    let router = router.clone();
+                    let adapters = adapters.clone();
+                    let in_flight = in_flight.clone();
+                    tasks.spawn(async move {
+                        fire_cronjob(idx, &job, &router, &adapters, in_flight).await;
+                    });
                 }
+                // Reap completed tasks to avoid unbounded growth
+                while tasks.try_join_next().is_some() {}
             }
             _ = shutdown_rx.changed() => {
                 if *shutdown_rx.borrow() {
-                    info!("cron scheduler shutting down");
+                    info!("cron scheduler shutting down, waiting for in-flight tasks");
+                    // Wait for all in-flight tasks with a timeout
+                    let drain = async { while tasks.join_next().await.is_some() {} };
+                    let _ = tokio::time::timeout(std::time::Duration::from_secs(30), drain).await;
                     return;
                 }
             }
         }
+    }
+}
+
+/// RAII guard that removes a job index from the in-flight set on drop.
+/// Ensures cleanup even if the task panics or returns early.
+struct InFlightGuard {
+    idx: usize,
+    set: Arc<Mutex<HashSet<usize>>>,
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        let idx = self.idx;
+        let set = self.set.clone();
+        // spawn a tiny task because Drop is sync and we need an async lock
+        tokio::spawn(async move {
+            set.lock().await.remove(&idx);
+        });
     }
 }
 
@@ -112,11 +171,13 @@ async fn fire_cronjob(
     adapters: &HashMap<String, Arc<dyn ChatAdapter>>,
     in_flight: Arc<Mutex<HashSet<usize>>>,
 ) {
+    // Guard ensures idx is removed from in_flight even on panic or early return
+    let _guard = InFlightGuard { idx, set: in_flight };
+
     let adapter = match adapters.get(&job.platform) {
         Some(a) => a.clone(),
         None => {
             error!(platform = %job.platform, "no adapter for platform, skipping cronjob");
-            in_flight.lock().await.remove(&idx);
             return;
         }
     };
@@ -138,30 +199,151 @@ async fn fire_cronjob(
         thread_id: job.thread_id.clone(),
         is_bot: true,
     };
-    let sender_json = serde_json::to_string(&sender).unwrap_or_default();
+    let sender_json = match serde_json::to_string(&sender) {
+        Ok(j) => j,
+        Err(e) => {
+            warn!(error = %e, "failed to serialize cron sender context, skipping");
+            return;
+        }
+    };
 
     // Send visible message first so users see what triggered
     let trigger_msg = match adapter.send_message(&thread_channel, &format!("🕐 [{}]: {}", job.sender_name, job.message)).await {
         Ok(msg) => msg,
         Err(e) => {
             error!(channel = %job.channel, error = %e, "failed to send cron message");
-            in_flight.lock().await.remove(&idx);
             return;
         }
     };
 
     // Trigger agent processing
-    let router = router.clone();
-    let adapter = adapter.clone();
-    let prompt = job.message.clone();
-    let thread_channel = thread_channel.clone();
-    tokio::spawn(async move {
-        if let Err(e) = router
-            .handle_message(&adapter, &thread_channel, &sender_json, &prompt, vec![], &trigger_msg, false)
-            .await
-        {
-            error!("cron handle_message error: {e}");
-        }
-        in_flight.lock().await.remove(&idx);
-    });
+    if let Err(e) = router
+        .handle_message(&adapter, &thread_channel, &sender_json, &job.message, vec![], &trigger_msg, false)
+        .await
+    {
+        error!("cron handle_message error: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_valid_cron_expression() {
+        let schedule = parse_cron_expr("0 9 * * 1-5").unwrap();
+        // Should produce upcoming times
+        let next = schedule.upcoming(chrono_tz::UTC).next();
+        assert!(next.is_some());
+    }
+
+    #[test]
+    fn parse_every_minute_cron() {
+        let schedule = parse_cron_expr("* * * * *").unwrap();
+        let next = schedule.upcoming(chrono_tz::UTC).next();
+        assert!(next.is_some());
+    }
+
+    #[test]
+    fn parse_invalid_cron_expression() {
+        let result = parse_cron_expr("not a cron");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_invalid_cron_too_many_fields() {
+        // 6 fields (user provides seconds) — should fail or behave unexpectedly
+        let result = parse_cron_expr("0 0 9 * * 1-5");
+        // With our "0 " prefix this becomes 7 fields — should error
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn valid_timezone_parses() {
+        let tz: Result<Tz, _> = "Asia/Taipei".parse();
+        assert!(tz.is_ok());
+    }
+
+    #[test]
+    fn invalid_timezone_fails() {
+        let tz: Result<Tz, _> = "Mars/Olympus".parse();
+        assert!(tz.is_err());
+    }
+
+    #[test]
+    fn utc_timezone_parses() {
+        let tz: Result<Tz, _> = "UTC".parse();
+        assert!(tz.is_ok());
+    }
+
+    #[test]
+    fn should_fire_every_minute_returns_true() {
+        // "* * * * *" fires every minute, so next event is always within 60s
+        let schedule = parse_cron_expr("* * * * *").unwrap();
+        assert!(should_fire(&schedule, chrono_tz::UTC, 60));
+    }
+
+    #[test]
+    fn should_fire_with_zero_tick_window_returns_false() {
+        // "* * * * *" next event is up to 60s away; 0-second window should not fire
+        let schedule = parse_cron_expr("* * * * *").unwrap();
+        assert!(!should_fire(&schedule, chrono_tz::UTC, 0));
+    }
+
+    #[test]
+    fn should_fire_returns_false_for_distant_schedule() {
+        // Schedule for Jan 1 at 00:00 — unless we happen to be on Jan 1, this is months away
+        let schedule = parse_cron_expr("0 0 1 1 *").unwrap();
+        assert!(!should_fire(&schedule, chrono_tz::UTC, 60));
+    }
+
+    #[test]
+    fn should_fire_respects_timezone() {
+        let schedule = parse_cron_expr("* * * * *").unwrap();
+        let tz: Tz = "Asia/Taipei".parse().unwrap();
+        // Every-minute schedule should fire regardless of timezone
+        assert!(should_fire(&schedule, tz, 60));
+    }
+
+    #[test]
+    fn cronjob_config_defaults() {
+        let toml_str = r#"
+[[cronjobs]]
+schedule = "0 9 * * 1-5"
+channel = "123"
+message = "hello"
+"#;
+        let cfg: CronJobsWrapper = toml::from_str(toml_str).unwrap();
+        let job = &cfg.cronjobs[0];
+        assert_eq!(job.platform, "discord");
+        assert_eq!(job.sender_name, "openab-cron");
+        assert_eq!(job.timezone, "UTC");
+        assert!(job.thread_id.is_none());
+    }
+
+    #[test]
+    fn cronjob_config_custom_values() {
+        let toml_str = r#"
+[[cronjobs]]
+schedule = "0 18 * * 1-5"
+channel = "456"
+message = "report"
+platform = "slack"
+sender_name = "DailyOps"
+timezone = "Asia/Taipei"
+thread_id = "789"
+"#;
+        let cfg: CronJobsWrapper = toml::from_str(toml_str).unwrap();
+        let job = &cfg.cronjobs[0];
+        assert_eq!(job.platform, "slack");
+        assert_eq!(job.sender_name, "DailyOps");
+        assert_eq!(job.timezone, "Asia/Taipei");
+        assert_eq!(job.thread_id.as_deref(), Some("789"));
+    }
+
+    /// Helper struct for deserializing just the cronjobs array in tests.
+    #[derive(serde::Deserialize)]
+    struct CronJobsWrapper {
+        cronjobs: Vec<CronJobConfig>,
+    }
 }
