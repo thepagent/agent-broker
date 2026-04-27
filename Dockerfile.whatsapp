@@ -14,6 +14,6 @@ ARG BASE_IMAGE=ghcr.io/openabdev/openab-claude:latest
 FROM ${BASE_IMAGE}
 
 USER root
-COPY whatsapp/ /app/whatsapp/
-RUN cd /app/whatsapp && npm install --production && chown -R node:node /app/whatsapp
+COPY whatsapp/ /home/node/whatsapp/
+RUN cd /home/node/whatsapp && npm install --production && chown -R node:node /home/node/whatsapp
 USER node
