@@ -284,6 +284,9 @@ async fn main() -> anyhow::Result<()> {
     if let Some(handle) = gateway_handle {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
     }
+    if let Some(handle) = cron_handle {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+    }
     let shutdown_pool = pool;
     shutdown_pool.shutdown().await;
     info!("openab shut down");

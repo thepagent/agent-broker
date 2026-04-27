@@ -379,6 +379,17 @@ fn parse_config(raw: &str, source: &str) -> anyhow::Result<Config> {
     let expanded = expand_env_vars(raw);
     let config: Config = toml::from_str(&expanded)
         .map_err(|e| anyhow::anyhow!("failed to parse config from {source}: {e}"))?;
+
+    // Validate cronjob expressions and timezones at load time (fail-fast)
+    for (i, job) in config.cronjobs.iter().enumerate() {
+        if let Err(e) = crate::cron::validate_cron_expression(&job.schedule) {
+            anyhow::bail!("cronjobs[{i}]: invalid cron expression \"{}\": {e}", job.schedule);
+        }
+        if let Err(e) = crate::cron::validate_timezone(&job.timezone) {
+            anyhow::bail!("cronjobs[{i}]: invalid timezone \"{}\": {e}", job.timezone);
+        }
+    }
+
     Ok(config)
 }
 
