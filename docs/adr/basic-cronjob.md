@@ -25,7 +25,7 @@ Requirements:
 
 ## 2. Context & Decision Drivers
 
-### Lessons from In-App CronJob (Lobster Pattern)
+### Lessons from In-App CronJob (OpenClaw Pattern)
 
 The "in-app cronjob" pattern — where the agent configures its own cron via natural language — has known issues:
 
@@ -163,7 +163,7 @@ Rendered into `config.toml` via the existing Helm ConfigMap template.
 
 | Feature | Reason | Alternative |
 |---|---|---
-| Agent self-configuring cron | Opacity + reliability concerns (Lobster lesson) | Operator edits config |
+| Agent self-configuring cron | Opacity + reliability concerns (OpenClaw lesson) | Operator edits config |
 | Conditional execution | Complexity belongs in external schedulers | K8s CronJob / GHA |
 | Retry with backoff | Over-engineering for Phase 1 | External scheduler |
 | Cron result persistence / history | Adds state management to OAB | External observability |
