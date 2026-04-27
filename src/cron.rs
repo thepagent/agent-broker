@@ -40,7 +40,8 @@ pub fn should_fire(schedule: &Schedule, tz: Tz) -> bool {
 const VALID_PLATFORMS: &[&str] = &["discord", "slack"];
 
 /// Validate all cronjob configs at startup (fail-fast on bad cron expressions or timezones).
-pub fn validate_cronjobs(cronjobs: &[CronJobConfig]) -> anyhow::Result<()> {
+/// `configured_platforms` is the set of platforms that have adapters configured (e.g. "discord", "slack").
+pub fn validate_cronjobs(cronjobs: &[CronJobConfig], configured_platforms: &[&str]) -> anyhow::Result<()> {
     for (i, job) in cronjobs.iter().enumerate() {
         parse_cron_expr(&job.schedule).map_err(|e| {
             anyhow::anyhow!("cronjobs[{i}]: invalid cron expression {:?}: {e}", job.schedule)
@@ -50,6 +51,9 @@ pub fn validate_cronjobs(cronjobs: &[CronJobConfig]) -> anyhow::Result<()> {
         })?;
         if !VALID_PLATFORMS.contains(&job.platform.as_str()) {
             anyhow::bail!("cronjobs[{i}]: unknown platform {:?} (expected one of: {VALID_PLATFORMS:?})", job.platform);
+        }
+        if !configured_platforms.contains(&job.platform.as_str()) {
+            anyhow::bail!("cronjobs[{i}]: platform {:?} is not configured — add [{}] to config.toml", job.platform, job.platform);
         }
     }
     Ok(())

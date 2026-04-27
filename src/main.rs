@@ -161,7 +161,10 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Validate cronjob config at startup (fail-fast on bad cron expressions or timezones)
-    cron::validate_cronjobs(&cfg.cronjobs)?;
+    let mut configured_platforms: Vec<&str> = Vec::new();
+    if cfg.discord.is_some() { configured_platforms.push("discord"); }
+    if cfg.slack.is_some() { configured_platforms.push("slack"); }
+    cron::validate_cronjobs(&cfg.cronjobs, &configured_platforms)?;
 
     // Spawn Slack adapter (background task)
     let slack_handle = if let Some(slack_cfg) = cfg.slack {

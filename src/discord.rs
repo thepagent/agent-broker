@@ -48,7 +48,9 @@ impl ChatAdapter for DiscordAdapter {
     }
 
     async fn send_message(&self, channel: &ChannelRef, content: &str) -> anyhow::Result<MessageRef> {
-        let ch_id: u64 = channel.channel_id.parse()?;
+        // Discord threads are channels, so prefer thread_id when set
+        let target = channel.thread_id.as_deref().unwrap_or(&channel.channel_id);
+        let ch_id: u64 = target.parse()?;
         let msg = ChannelId::new(ch_id).say(&self.http, content).await?;
         Ok(MessageRef {
             channel: channel.clone(),
