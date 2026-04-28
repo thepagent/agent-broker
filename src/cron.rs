@@ -1,5 +1,6 @@
 use crate::adapter::{AdapterRouter, ChatAdapter, ChannelRef, SenderContext};
 use crate::config::CronJobConfig;
+use crate::format;
 use chrono::{Timelike, Utc};
 use chrono_tz::Tz;
 use cron::Schedule;
@@ -257,13 +258,28 @@ async fn fire_cronjob(
         }
     };
 
+    // Create a thread from the trigger message (matches normal Discord flow)
+    let thread_name = format::shorten_thread_name(&job.message);
+    let reply_channel = if job.thread_id.is_some() {
+        // Already targeting an existing thread, no need to create one
+        thread_channel.clone()
+    } else {
+        match adapter.create_thread(&thread_channel, &trigger_msg, &thread_name).await {
+            Ok(ch) => ch,
+            Err(e) => {
+                error!(channel = %job.channel, error = %e, "failed to create cron thread");
+                return;
+            }
+        }
+    };
+
     // Trigger agent processing
     if let Err(e) = router
-        .handle_message(&adapter, &thread_channel, &sender_json, &job.message, vec![], &trigger_msg, false)
+        .handle_message(&adapter, &reply_channel, &sender_json, &job.message, vec![], &trigger_msg, false)
         .await
     {
         error!("cron handle_message error: {e}");
-        let _ = adapter.send_message(&thread_channel, &format!("⚠️ cronjob error: {e}")).await;
+        let _ = adapter.send_message(&reply_channel, &format!("⚠️ cronjob error: {e}")).await;
     }
 }
 
