@@ -47,12 +47,15 @@ url = "ws://gateway:8080/ws"
 | `TELEGRAM_BOT_TOKEN` | (required) | Telegram Bot API token |
 | `GATEWAY_LISTEN` | `0.0.0.0:8080` | Listen address |
 | `TELEGRAM_WEBHOOK_PATH` | `/webhook/telegram` | Webhook endpoint path |
+| `LINE_CHANNEL_SECRET` | (optional) | LINE channel secret for webhook HMAC signature verification |
+| `LINE_CHANNEL_ACCESS_TOKEN` | (optional) | LINE channel access token for Reply/Push API |
 
 ### Endpoints
 
 | Path | Description |
 |---|---|
 | `POST /webhook/telegram` | Telegram webhook receiver |
+| `POST /webhook/line` | LINE webhook receiver |
 | `GET /ws` | WebSocket server (OAB connects here) |
 | `GET /health` | Health check |
 
