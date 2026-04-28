@@ -196,17 +196,11 @@ This enables mobile-friendly schedule management — talk to your agent from you
 
 ### Kubernetes Deployment
 
-Mount `cronjob.toml` on a PVC so it persists across pod restarts:
+Mount `cronjob.toml` on a PVC so it persists across pod restarts, and set `usercron_path` in your config.toml:
 
-```yaml
-# values.yaml
-persistence:
-  enabled: true
-
-agents:
-  kiro:
-    env:
-      USERCRON_PATH: /data/cronjob.toml
+```toml
+# config.toml
+usercron_path = "/data/cronjob.toml"
 ```
 
 ## Behaviors

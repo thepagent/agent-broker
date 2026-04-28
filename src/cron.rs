@@ -216,7 +216,12 @@ pub async fn run_scheduler(
                     if current_mtime != last_usercron_mtime {
                         let configs = load_usercron_file(path, &platform_refs);
                         info!(count = configs.len(), path = %path.display(), "usercron file changed, reloading");
-                        // Clear in-flight tracking for usercron jobs (indices shift on reload)
+                        // Clear in-flight tracking for usercron jobs (indices shift on reload).
+                        // Design note: if a still-running old usercron task's InFlightGuard
+                        // drops after this point, the remove is a no-op (index already cleared).
+                        // A new job at the same index *could* fire concurrently in this tick —
+                        // probability is negligible (reload + fire on same tick + same index)
+                        // and acceptable for a hot-reload feature.
                         {
                             let mut running = in_flight.lock().await;
                             let baseline_len = baseline_jobs.len();
