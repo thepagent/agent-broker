@@ -155,6 +155,24 @@ usercron_path = "cronjob.toml"
 
 Usercron is **disabled by default**. Both fields are required to activate it.
 
+#### Minimal config.toml example
+
+```toml
+[discord]
+bot_token = "${DISCORD_BOT_TOKEN}"
+
+[agent]
+command = "kiro-cli"
+args = ["acp", "--trust-all-tools"]
+working_dir = "/home/agent"
+
+# Usercron: agent-managed schedules
+usercron_enabled = true
+usercron_path = "cronjob.toml"    # → $HOME/cronjob.toml
+```
+
+> Note: `usercron_enabled` and `usercron_path` are **top-level** fields, not nested under `[agent]`. They appear after `[agent]` but belong to the root config scope.
+
 The path is relative to `$HOME` (e.g. `"cronjob.toml"` resolves to `$HOME/cronjob.toml`). Absolute paths are used as-is. The scheduler starts watching immediately, even if the file doesn't exist yet.
 
 ### Create `cronjob.toml`
