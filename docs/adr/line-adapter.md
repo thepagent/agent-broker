@@ -1,8 +1,8 @@
 # ADR: LINE Messaging API Adapter
 
 - **Status:** Accepted
-- **Date:** 2026-04-22
-- **Last Updated:** 2026-04-28
+- **Initial Date:** 2026-04-22
+- **Last Updated Date:** 2026-04-28
 - **Author:** @chaodu-agent, @iamninihuang
 
 ---
