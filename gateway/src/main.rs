@@ -127,8 +127,10 @@ struct TelegramUser {
 
 // --- App state ---
 
-/// Cache entry for LINE reply tokens: (replyToken, insertion_time)
-type ReplyTokenCache = Arc<Mutex<std::collections::HashMap<String, (String, Instant)>>>;
+/// Cache entry for LINE reply tokens: (replyToken, insertion_time).
+/// Uses std::sync::Mutex — critical sections are short (insert/remove/retain)
+/// and never held across .await, so async Mutex overhead is unnecessary.
+type ReplyTokenCache = Arc<std::sync::Mutex<std::collections::HashMap<String, (String, Instant)>>>;
 
 /// Maximum age (in seconds) before a cached reply token is considered expired.
 /// LINE tokens are valid for ~1 minute; we use 50s as a conservative margin.
@@ -346,7 +348,7 @@ async fn line_webhook(
 
         // Cache the reply token for hybrid Reply/Push dispatch
         if let Some(ref reply_token) = event.reply_token {
-            let mut cache = state.reply_token_cache.lock().await;
+            let mut cache = state.reply_token_cache.lock().unwrap();
             cache.insert(event_id.clone(), (reply_token.clone(), Instant::now()));
             info!(event_id = %event_id, "cached LINE replyToken");
         }
@@ -560,7 +562,7 @@ async fn handle_oab_connection(state: Arc<AppState>, socket: axum::extract::ws::
                             if let Some(ref access_token) = line_access_token {
                                 // Extract token from cache (drop lock before HTTP call)
                                 let cached_token = {
-                                    let mut cache = reply_cache.lock().await;
+                                    let mut cache = reply_cache.lock().unwrap();
                                     cache
                                         .remove(&reply.reply_to)
                                         .and_then(|(token, cached_at)| {
@@ -592,7 +594,9 @@ async fn handle_oab_connection(state: Arc<AppState>, socket: axum::extract::ws::
                                             used_reply = true;
                                         }
                                         Ok(r) => {
-                                            warn!(status = %r.status(), "LINE Reply API failed, falling back to Push");
+                                            let status = r.status();
+                                            let body = r.text().await.unwrap_or_default();
+                                            warn!(status = %status, body = %body, "LINE Reply API failed, falling back to Push");
                                         }
                                         Err(e) => {
                                             warn!(err = %e, "LINE Reply API error, falling back to Push");
@@ -677,7 +681,8 @@ async fn main() -> Result<()> {
     }
 
     let (event_tx, _) = broadcast::channel::<String>(256);
-    let reply_token_cache: ReplyTokenCache = Arc::new(Mutex::new(std::collections::HashMap::new()));
+    let reply_token_cache: ReplyTokenCache =
+        Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
 
     let state = Arc::new(AppState {
         bot_token,
@@ -689,13 +694,13 @@ async fn main() -> Result<()> {
         reply_token_cache,
     });
 
-    // Background task: sweep expired reply tokens every 60 seconds
+    // Background task: sweep expired reply tokens every REPLY_TOKEN_TTL_SECS
     {
         let cache_state = state.clone();
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                let mut cache = cache_state.reply_token_cache.lock().await;
+                tokio::time::sleep(std::time::Duration::from_secs(REPLY_TOKEN_TTL_SECS)).await;
+                let mut cache = cache_state.reply_token_cache.lock().unwrap();
                 let before = cache.len();
                 cache.retain(|_, (_, t)| t.elapsed().as_secs() < REPLY_TOKEN_TTL_SECS);
                 let after = cache.len();
