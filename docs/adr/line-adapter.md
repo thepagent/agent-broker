@@ -104,14 +104,17 @@ LINE is not ideal when:
 7. Agent response is sent back via LINE Push Message API
 ```
 
-### Reply Strategy: Push Messages
+### Reply Strategy: Hybrid Reply/Push Messages
 
 LINE offers two reply mechanisms:
-- **Reply message**: uses a reply token, but the token expires in 1 minute
-- **Push message**: no time limit, can send to any user/group at any time
+- **Reply message**: uses a reply token, but the token expires in 1 minute (free).
+- **Push message**: no time limit, can send to any user/group at any time (consumes quota).
 
-OpenAB uses **push messages** because agent processing typically exceeds the 1-minute reply token window. The trade-off is that push messages count against the monthly messaging quota on free-tier LINE accounts.
-
+Historically, OpenAB relied solely on **push messages** because agent processing can exceed the 1-minute reply token window. To optimize costs for free-tier accounts, OpenAB now uses a **Hybrid Strategy** implemented at the gateway level:
+1. The gateway caches incoming `replyToken`s for 50 seconds.
+2. It tracks the last `event_id` sent to each OAB client to auto-fill the `reply_to` context.
+3. If an agent replies within the window, the gateway intercepts and routes it via the free **Reply API**.
+4. If the token is expired or missing, it gracefully falls back to the **Push API**.
 ---
 
 ## 3. Architectural Differences from Discord/Slack
