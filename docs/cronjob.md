@@ -180,6 +180,35 @@ timezone = "Asia/Taipei"
 
 ### How It Works
 
+```
+                         config.toml                        $HOME/cronjob.toml
+                    ┌──────────────────┐                 ┌──────────────────────┐
+                    │ usercron_enabled  │                 │ [[cronjobs]]         │
+                    │   = true         │                 │ schedule = "* * * *" │
+                    │ usercron_path    │                 │ channel  = "123..."  │
+                    │   = "cronjob.toml│"                │ message  = "ping"    │
+                    │                  │                 └──────────┬───────────┘
+                    │ [[cronjobs]]     │                            │
+                    │ (baseline jobs)  │                   Agent writes here
+                    └────────┬─────────┘                   anytime (mobile/CLI)
+                             │                                     │
+                    ┌────────▼─────────┐                           │
+                    │  OAB Scheduler   │◄──────────────────────────┘
+                    │  (ticks every    │   check mtime every tick
+                    │   1 minute)      │   reload if changed
+                    └────────┬─────────┘
+                             │
+              ┌──────────────┼──────────────┐
+              │              │              │
+     baseline jobs    usercron jobs    should_fire()?
+     (immutable)      (hot-reload)         │
+              │              │         ┌────▼────┐
+              └──────────────┘    no── │ match?  │ ──yes──► fire_cronjob()
+                                      └─────────┘          → send message
+                                                            → create thread
+                                                            → agent processes
+```
+
 1. Every scheduler tick (~1 minute), the file's modification time is checked
 2. If the file changed → re-parse and replace the dynamic job list
 3. `config.toml` cronjobs are the **immutable baseline**; `cronjob.toml` jobs are the **dynamic overlay**
