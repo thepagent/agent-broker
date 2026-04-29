@@ -303,6 +303,25 @@ static OUTBOUND_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"!\[[^\]]*\]\((/[^\)]+)\)").unwrap()
 });
 
+/// Check file magic bytes to verify it is an image. Only images are
+/// allowed for outbound attachments to prevent data exfiltration via
+/// text files.
+fn is_image_file(path: &std::path::Path) -> bool {
+    let Ok(buf) = std::fs::read(path) else {
+        return false;
+    };
+    // Check magic bytes for common image formats
+    let header = buf.get(..12).unwrap_or(&buf);
+    matches!(
+        header,
+        [0x89, 0x50, 0x4E, 0x47, ..]           // PNG
+        | [0xFF, 0xD8, 0xFF, ..]                 // JPEG
+        | [0x47, 0x49, 0x46, 0x38, ..]           // GIF
+        | [0x52, 0x49, 0x46, 0x46, _, _, _, _, 0x57, 0x45, 0x42, 0x50] // WebP
+        | [0x42, 0x4D, ..]                       // BMP
+    )
+}
+
 /// Scan agent response `text` for `![alt](/path)` markers, validate each
 /// path against `config`, and return `(cleaned_text, list_of_paths)`.
 ///
@@ -358,6 +377,10 @@ pub fn extract_outbound_attachments(
 
         match std::fs::metadata(&canonical) {
             Ok(meta) if meta.is_file() && meta.len() <= config.max_size_bytes() => {
+                if !is_image_file(&canonical) {
+                    warn!(path = %canonical.display(), "outbound: not an image file, only images are allowed");
+                    continue;
+                }
                 info!(path = %canonical.display(), size = meta.len(), "outbound: attachment accepted");
                 attachments.push(canonical);
                 markers_to_strip.push(full_match.to_string());
@@ -498,7 +521,8 @@ mod outbound_tests {
         let dir = outgoing_dir();
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test_happy.png");
-        std::fs::write(&path, b"png").unwrap();
+        // Valid PNG magic bytes
+        std::fs::write(&path, &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]).unwrap();
         let text = format!("Here: ![screenshot]({}) done.", path.display());
         let (cleaned, atts) = extract_outbound_attachments(&text, &cfg_enabled());
         assert_eq!(atts.len(), 1);
@@ -549,11 +573,12 @@ mod outbound_tests {
     fn enforces_max_per_message() {
         let dir = outgoing_dir();
         std::fs::create_dir_all(&dir).unwrap();
+        let png = [0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
         let mut text = String::new();
         let mut paths = Vec::new();
         for i in 0..5 {
             let p = dir.join(format!("cap_{i}.png"));
-            std::fs::write(&p, b"x").unwrap();
+            std::fs::write(&p, &png).unwrap();
             text.push_str(&format!("![a{i}]({})\n", p.display()));
             paths.push(p);
         }
@@ -568,11 +593,41 @@ mod outbound_tests {
     }
 
     #[test]
+    fn blocks_text_file_exfiltration() {
+        let dir = outgoing_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("secrets.txt");
+        std::fs::write(&path, b"SECRET_KEY=hunter2").unwrap();
+        let text = format!("![leak]({})", path.display());
+        let (cleaned, atts) = extract_outbound_attachments(&text, &cfg_enabled());
+        assert!(atts.is_empty(), "text files must be blocked");
+        assert!(cleaned.contains("secrets.txt"), "blocked marker stays visible");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn accepts_real_png() {
+        let dir = outgoing_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("real.png");
+        // Minimal valid PNG header
+        let png_header: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        std::fs::write(&path, &png_header).unwrap();
+        let text = format!("![img]({})", path.display());
+        let (_, atts) = extract_outbound_attachments(&text, &cfg_enabled());
+        assert_eq!(atts.len(), 1, "real PNG must be accepted");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
     fn enforces_max_file_size() {
         let dir = outgoing_dir();
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("large.bin");
-        std::fs::write(&path, vec![0u8; 2 * 1024 * 1024]).unwrap();
+        // PNG header + padding to exceed size limit
+        let mut data = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        data.resize(2 * 1024 * 1024, 0);
+        std::fs::write(&path, &data).unwrap();
         let cfg = OutboundConfig {
             enabled: true,
             max_file_size_mb: 1,
