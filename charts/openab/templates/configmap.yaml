@@ -128,6 +128,23 @@ data:
     {{- if ($cfg.gateway).botUsername }}
     bot_username = {{ ($cfg.gateway).botUsername | toJson }}
     {{- end }}
+    allow_all_channels = {{ if and (hasKey ($cfg.gateway) "allowAllChannels") (ne ($cfg.gateway).allowAllChannels nil) }}{{ ($cfg.gateway).allowAllChannels }}{{ else if ($cfg.gateway).allowedChannels }}false{{ else }}true{{ end }}
+    {{- range ($cfg.gateway).allowedChannels }}
+    {{- if regexMatch "e\+|E\+" (toString .) }}
+    {{- fail (printf "gateway.allowedChannels contains a mangled ID: %s — use --set-string instead of --set for channel IDs" (toString .)) }}
+    {{- end }}
+    {{- end }}
+    allowed_channels = {{ ($cfg.gateway).allowedChannels | default list | toJson }}
+    allow_all_users = {{ if and (hasKey ($cfg.gateway) "allowAllUsers") (ne ($cfg.gateway).allowAllUsers nil) }}{{ ($cfg.gateway).allowAllUsers }}{{ else if ($cfg.gateway).allowedUsers }}false{{ else }}true{{ end }}
+    {{- range ($cfg.gateway).allowedUsers }}
+    {{- if regexMatch "e\+|E\+" (toString .) }}
+    {{- fail (printf "gateway.allowedUsers contains a mangled ID: %s — use --set-string instead of --set for user IDs" (toString .)) }}
+    {{- end }}
+    {{- end }}
+    allowed_users = {{ ($cfg.gateway).allowedUsers | default list | toJson }}
+    {{- if ($cfg.gateway).botUsername }}
+    bot_username = {{ ($cfg.gateway).botUsername | toJson }}
+    {{- end }}
     {{- end }}
     {{- if or ($cfg.cronjobs) (($cfg.cron).usercronEnabled) (($cfg.cron).usercronPath) }}
 
