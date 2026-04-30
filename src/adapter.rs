@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tracing::error;
 
 use crate::acp::{classify_notification, AcpEvent, ContentBlock, SessionPool};
-use crate::config::ReactionsConfig;
+use crate::config::{ReactionsConfig, ToolDisplay};
 use crate::error_display::{format_coded_error, format_user_error};
 use crate::format;
 use crate::markdown::{self, TableMode};
@@ -143,7 +143,11 @@ pub struct AdapterRouter {
 }
 
 impl AdapterRouter {
-    pub fn new(pool: Arc<SessionPool>, reactions_config: ReactionsConfig, table_mode: TableMode) -> Self {
+    pub fn new(
+        pool: Arc<SessionPool>,
+        reactions_config: ReactionsConfig,
+        table_mode: TableMode,
+    ) -> Self {
         Self {
             pool,
             reactions_config,
@@ -274,6 +278,7 @@ impl AdapterRouter {
         let message_limit = adapter.message_limit();
         let streaming = adapter.use_streaming(other_bot_present);
         let table_mode = self.table_mode;
+        let tool_display = self.reactions_config.tool_display;
 
         self.pool
             .with_connection(thread_key, |conn| {
@@ -313,15 +318,21 @@ impl AdapterRouter {
                                     let content = buf_rx.borrow_and_update().clone();
                                     if content != last {
                                         let display = if content.chars().count() > limit - 100 {
-                                            format!("…{}", format::truncate_chars_tail(&content, limit - 100))
+                                            format!(
+                                                "…{}",
+                                                format::truncate_chars_tail(&content, limit - 100)
+                                            )
                                         } else {
                                             content.clone()
                                         };
-                                        let _ = edit_adapter.edit_message(&edit_msg, &display).await;
+                                        let _ =
+                                            edit_adapter.edit_message(&edit_msg, &display).await;
                                         last = content;
                                     }
                                 }
-                                if buf_rx.has_changed().is_err() { break; }
+                                if buf_rx.has_changed().is_err() {
+                                    break;
+                                }
                             }
                         });
                         (Some(tx), Some(msg))
@@ -333,7 +344,8 @@ impl AdapterRouter {
                     let mut response_error: Option<String> = None;
                     let recv_timeout = std::time::Duration::from_secs(600);
                     loop {
-                        let notification = match tokio::time::timeout(recv_timeout, rx.recv()).await {
+                        let notification = match tokio::time::timeout(recv_timeout, rx.recv()).await
+                        {
                             Ok(Some(n)) => n,
                             Ok(None) => break, // channel closed
                             Err(_) => {
@@ -353,7 +365,12 @@ impl AdapterRouter {
                                 AcpEvent::Text(t) => {
                                     text_buf.push_str(&t);
                                     if let Some(tx) = &buf_tx {
-                                        let _ = tx.send(compose_display(&tool_lines, &text_buf, true));
+                                        let _ = tx.send(compose_display(
+                                            &tool_lines,
+                                            &text_buf,
+                                            true,
+                                            tool_display,
+                                        ));
                                     }
                                 }
                                 AcpEvent::Thinking => {
@@ -373,7 +390,12 @@ impl AdapterRouter {
                                         });
                                     }
                                     if let Some(tx) = &buf_tx {
-                                        let _ = tx.send(compose_display(&tool_lines, &text_buf, true));
+                                        let _ = tx.send(compose_display(
+                                            &tool_lines,
+                                            &text_buf,
+                                            true,
+                                            tool_display,
+                                        ));
                                     }
                                 }
                                 AcpEvent::ToolDone { id, title, status } => {
@@ -396,7 +418,12 @@ impl AdapterRouter {
                                         });
                                     }
                                     if let Some(tx) = &buf_tx {
-                                        let _ = tx.send(compose_display(&tool_lines, &text_buf, true));
+                                        let _ = tx.send(compose_display(
+                                            &tool_lines,
+                                            &text_buf,
+                                            true,
+                                            tool_display,
+                                        ));
                                     }
                                 }
                                 AcpEvent::ConfigUpdate { options } => {
@@ -412,7 +439,8 @@ impl AdapterRouter {
                     drop(buf_tx);
 
                     // Build final content
-                    let final_content = compose_display(&tool_lines, &text_buf, false);
+                    let final_content =
+                        compose_display(&tool_lines, &text_buf, false, tool_display);
                     let final_content = if final_content.is_empty() {
                         if let Some(err) = response_error {
                             format!("⚠️ {err}")
@@ -451,7 +479,10 @@ impl AdapterRouter {
 
 /// Flatten a tool-call title into a single line safe for inline-code spans.
 fn sanitize_title(title: &str) -> String {
-    title.replace('\r', "").replace('\n', " ; ").replace('`', "'")
+    title
+        .replace('\r', "")
+        .replace('\n', " ; ")
+        .replace('`', "'")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -475,7 +506,11 @@ impl ToolEntry {
             ToolState::Completed => "✅",
             ToolState::Failed => "❌",
         };
-        let suffix = if self.state == ToolState::Running { "..." } else { "" };
+        let suffix = if self.state == ToolState::Running {
+            "..."
+        } else {
+            ""
+        };
         format!("{icon} `{}`{}", self.title, suffix)
     }
 }
@@ -484,47 +519,93 @@ impl ToolEntry {
 /// during streaming before collapsing into a summary line.
 const TOOL_COLLAPSE_THRESHOLD: usize = 3;
 
-fn compose_display(tool_lines: &[ToolEntry], text: &str, streaming: bool) -> String {
+fn compose_display(
+    tool_lines: &[ToolEntry],
+    text: &str,
+    streaming: bool,
+    tool_display: ToolDisplay,
+) -> String {
     let mut out = String::new();
-    if !tool_lines.is_empty() {
-        if streaming {
-            let done = tool_lines.iter().filter(|e| e.state == ToolState::Completed).count();
-            let failed = tool_lines.iter().filter(|e| e.state == ToolState::Failed).count();
-            let running: Vec<_> = tool_lines.iter().filter(|e| e.state == ToolState::Running).collect();
-            let finished = done + failed;
+    if !tool_lines.is_empty() && tool_display != ToolDisplay::None {
+        let done = tool_lines
+            .iter()
+            .filter(|e| e.state == ToolState::Completed)
+            .count();
+        let failed = tool_lines
+            .iter()
+            .filter(|e| e.state == ToolState::Failed)
+            .count();
+        let running = tool_lines
+            .iter()
+            .filter(|e| e.state == ToolState::Running)
+            .count();
+        let finished = done + failed;
 
-            if finished <= TOOL_COLLAPSE_THRESHOLD {
-                for entry in tool_lines.iter().filter(|e| e.state != ToolState::Running) {
-                    out.push_str(&entry.render());
-                    out.push('\n');
-                }
-            } else {
+        match tool_display {
+            ToolDisplay::Compact => {
+                // Always show count summary, never per-tool details
                 let mut parts = Vec::new();
-                if done > 0 { parts.push(format!("✅ {done}")); }
-                if failed > 0 { parts.push(format!("❌ {failed}")); }
-                out.push_str(&format!("{} tool(s) completed\n", parts.join(" · ")));
+                if done > 0 {
+                    parts.push(format!("✅ {done}"));
+                }
+                if failed > 0 {
+                    parts.push(format!("❌ {failed}"));
+                }
+                if running > 0 {
+                    parts.push(format!("🔧 {running}"));
+                }
+                if !parts.is_empty() {
+                    out.push_str(&format!("{} tool(s)\n", parts.join(" · ")));
+                }
             }
+            ToolDisplay::Full => {
+                if streaming {
+                    let running_entries: Vec<_> = tool_lines
+                        .iter()
+                        .filter(|e| e.state == ToolState::Running)
+                        .collect();
 
-            if running.len() <= TOOL_COLLAPSE_THRESHOLD {
-                for entry in &running {
-                    out.push_str(&entry.render());
-                    out.push('\n');
-                }
-            } else {
-                let hidden = running.len() - TOOL_COLLAPSE_THRESHOLD;
-                out.push_str(&format!("🔧 {hidden} more running\n"));
-                for entry in running.iter().skip(hidden) {
-                    out.push_str(&entry.render());
-                    out.push('\n');
+                    if finished <= TOOL_COLLAPSE_THRESHOLD {
+                        for entry in tool_lines.iter().filter(|e| e.state != ToolState::Running) {
+                            out.push_str(&entry.render());
+                            out.push('\n');
+                        }
+                    } else {
+                        let mut parts = Vec::new();
+                        if done > 0 {
+                            parts.push(format!("✅ {done}"));
+                        }
+                        if failed > 0 {
+                            parts.push(format!("❌ {failed}"));
+                        }
+                        out.push_str(&format!("{} tool(s) completed\n", parts.join(" · ")));
+                    }
+
+                    if running_entries.len() <= TOOL_COLLAPSE_THRESHOLD {
+                        for entry in &running_entries {
+                            out.push_str(&entry.render());
+                            out.push('\n');
+                        }
+                    } else {
+                        let hidden = running_entries.len() - TOOL_COLLAPSE_THRESHOLD;
+                        out.push_str(&format!("🔧 {hidden} more running\n"));
+                        for entry in running_entries.iter().skip(hidden) {
+                            out.push_str(&entry.render());
+                            out.push('\n');
+                        }
+                    }
+                } else {
+                    for entry in tool_lines {
+                        out.push_str(&entry.render());
+                        out.push('\n');
+                    }
                 }
             }
-        } else {
-            for entry in tool_lines {
-                out.push_str(&entry.render());
-                out.push('\n');
-            }
+            ToolDisplay::None => {} // guarded above, but safe no-op
         }
-        if !out.is_empty() { out.push('\n'); }
+        if !out.is_empty() {
+            out.push('\n');
+        }
     }
     out.push_str(text.trim_end());
     out
@@ -547,18 +628,33 @@ mod tests {
 
         #[async_trait]
         impl ChatAdapter for TestAdapter {
-            fn platform(&self) -> &'static str { "test" }
-            fn message_limit(&self) -> usize { 2000 }
+            fn platform(&self) -> &'static str {
+                "test"
+            }
+            fn message_limit(&self) -> usize {
+                2000
+            }
             async fn send_message(&self, _: &ChannelRef, _: &str) -> Result<MessageRef> {
                 unimplemented!()
             }
-            async fn create_thread(&self, _: &ChannelRef, _: &MessageRef, _: &str) -> Result<ChannelRef> {
+            async fn create_thread(
+                &self,
+                _: &ChannelRef,
+                _: &MessageRef,
+                _: &str,
+            ) -> Result<ChannelRef> {
                 unimplemented!()
             }
-            async fn add_reaction(&self, _: &MessageRef, _: &str) -> Result<()> { Ok(()) }
-            async fn remove_reaction(&self, _: &MessageRef, _: &str) -> Result<()> { Ok(()) }
+            async fn add_reaction(&self, _: &MessageRef, _: &str) -> Result<()> {
+                Ok(())
+            }
+            async fn remove_reaction(&self, _: &MessageRef, _: &str) -> Result<()> {
+                Ok(())
+            }
             // use_streaming() MUST be declared — removing this line should fail compilation
-            fn use_streaming(&self, _other_bot_present: bool) -> bool { false }
+            fn use_streaming(&self, _other_bot_present: bool) -> bool {
+                false
+            }
         }
 
         let adapter = TestAdapter;
@@ -626,5 +722,62 @@ mod tests {
             ..ch.clone()
         };
         assert_eq!(thread_ch.origin_event_id.as_deref(), Some("evt_abc"));
+    }
+
+    fn tool(id: &str, title: &str, state: ToolState) -> ToolEntry {
+        ToolEntry {
+            id: id.into(),
+            title: title.into(),
+            state,
+        }
+    }
+
+    #[test]
+    fn compose_display_full_shows_complete_title() {
+        let tools = vec![tool(
+            "1",
+            "curl -s https://example.com",
+            ToolState::Completed,
+        )];
+        let out = compose_display(&tools, "done", false, ToolDisplay::Full);
+        assert!(out.contains("`curl -s https://example.com`"));
+    }
+
+    #[test]
+    fn compose_display_compact_shows_count_summary() {
+        let tools = vec![
+            tool("1", "curl -s https://example.com", ToolState::Completed),
+            tool("2", "grep -r pattern src/", ToolState::Completed),
+            tool("3", "cat /etc/hosts", ToolState::Failed),
+        ];
+        let out = compose_display(&tools, "done", false, ToolDisplay::Compact);
+        assert!(out.contains("✅ 2"), "expected completed count: {out}");
+        assert!(out.contains("❌ 1"), "expected failed count: {out}");
+        assert!(out.contains("tool(s)"), "expected tool(s) label: {out}");
+        // Must NOT contain individual tool names
+        assert!(!out.contains("curl"), "should not show tool names: {out}");
+        assert!(!out.contains("grep"), "should not show tool names: {out}");
+    }
+
+    #[test]
+    fn compose_display_compact_shows_running_count() {
+        let tools = vec![
+            tool("1", "curl", ToolState::Completed),
+            tool("2", "npm install", ToolState::Running),
+        ];
+        let out = compose_display(&tools, "", true, ToolDisplay::Compact);
+        assert!(out.contains("✅ 1"), "expected completed count: {out}");
+        assert!(out.contains("🔧 1"), "expected running count: {out}");
+    }
+
+    #[test]
+    fn compose_display_none_hides_tools() {
+        let tools = vec![tool(
+            "1",
+            "curl -s https://example.com",
+            ToolState::Completed,
+        )];
+        let out = compose_display(&tools, "response text", false, ToolDisplay::None);
+        assert_eq!(out, "response text");
     }
 }

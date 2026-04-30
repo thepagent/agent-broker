@@ -103,6 +103,12 @@ data:
     [reactions]
     enabled = {{ ($cfg.reactions).enabled | default true }}
     remove_after_reply = {{ ($cfg.reactions).removeAfterReply | default false }}
+    {{- if ($cfg.reactions).toolDisplay }}
+    {{- if not (has ($cfg.reactions).toolDisplay (list "full" "compact" "none")) }}
+    {{- fail (printf "agents.%s.reactions.toolDisplay must be one of: full, compact, none — got: %s" $name ($cfg.reactions).toolDisplay) }}
+    {{- end }}
+    tool_display = {{ ($cfg.reactions).toolDisplay | toJson }}
+    {{- end }}
     {{- if ($cfg.stt).enabled }}
     {{- if not ($cfg.stt).apiKey }}
     {{ fail (printf "agents.%s.stt.apiKey is required when stt.enabled=true" $name) }}

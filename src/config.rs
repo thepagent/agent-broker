@@ -251,12 +251,39 @@ fn default_cron_platform() -> String { "discord".into() }
 fn default_cron_sender() -> String { "openab-cron".into() }
 fn default_cron_timezone() -> String { "UTC".into() }
 
+/// Controls how tool calls are rendered in chat messages.
+///
+/// - `full`: show complete tool title including arguments (original behavior)
+/// - `compact`: show only a count summary, e.g. `✅ 3 · 🔧 1 tool(s)` (default)
+/// - `none`: hide tool lines entirely, only show final response
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ToolDisplay {
+    Full,
+    #[default]
+    Compact,
+    None,
+}
+
+impl<'de> Deserialize<'de> for ToolDisplay {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        match s.to_lowercase().as_str() {
+            "full" => Ok(Self::Full),
+            "compact" => Ok(Self::Compact),
+            "none" | "off" | "hidden" => Ok(Self::None),
+            other => Err(serde::de::Error::unknown_variant(other, &["full", "compact", "none"])),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ReactionsConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
     pub remove_after_reply: bool,
+    #[serde(default)]
+    pub tool_display: ToolDisplay,
     #[serde(default)]
     pub emojis: ReactionEmojis,
     #[serde(default)]
@@ -327,6 +354,7 @@ impl Default for ReactionsConfig {
         Self {
             enabled: true,
             remove_after_reply: false,
+            tool_display: ToolDisplay::default(),
             emojis: ReactionEmojis::default(),
             timing: ReactionTiming::default(),
         }

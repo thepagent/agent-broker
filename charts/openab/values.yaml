@@ -48,6 +48,7 @@ agents:
     #   reactions:
     #     enabled: true
     #     removeAfterReply: false
+    #     # toolDisplay: "compact" (default) | "full" | "none"
     #   persistence:
     #     enabled: true
     #     storageClass: ""
@@ -80,6 +81,7 @@ agents:
     #   reactions:
     #     enabled: true
     #     removeAfterReply: false
+    #     # toolDisplay: "compact" (default) | "full" | "none"
     #   persistence:
     #     enabled: true
     #     storageClass: ""
@@ -109,6 +111,7 @@ agents:
     #   reactions:
     #     enabled: true
     #     removeAfterReply: false
+    #     # toolDisplay: "compact" (default) | "full" | "none"
     #   persistence:
     #     enabled: true
     #     storageClass: ""
@@ -164,6 +167,10 @@ agents:
     reactions:
       enabled: true
       removeAfterReply: false
+      # toolDisplay: "compact" (default) | "full" | "none"
+      # compact: show count summary (e.g. ✅ 3 · 🔧 1 tool(s))
+      # full: show complete tool titles (for debugging)
+      # none: hide tool lines entirely
     stt:
       enabled: false
       apiKey: ""
