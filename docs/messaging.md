@@ -1,11 +1,48 @@
 # Messaging Model
 
-This document explains the four messaging patterns in OpenAB, each building on the previous one:
+This document explains the five messaging patterns in OpenAB, each building on the previous one:
 
+0. **Human → Bot in DM** — Private 1:1 conversations (opt-in).
 1. **Human → Bot in Channel** — How a conversation starts via @mention.
 2. **Human → Bot in Thread** — How follow-up messages work without @mention.
 3. **Human → Multiple Bots in Thread** — How multi-bot threads behave and how to control them.
 4. **Bot → Bot in Thread** — How bots can talk to each other and how to prevent loops.
+
+---
+
+## 0. Human → Bot in DM
+
+Users can interact with the bot privately via direct message. DMs are **opt-in** — disabled by default to prevent unexpected resource usage.
+
+When `allow_dm = true`, a DM is treated as an **implicit @mention** (mirrors Slack behavior). No thread is created — the bot replies directly in the DM channel.
+
+```
+User DMs BotA: help me with X
+  → BotA replies in DM (no thread, no @mention needed)
+```
+
+### Key behaviors
+
+- **`allowed_users` still enforced** — DMs are not a backdoor past user allowlists.
+- **Bot turn tracking applies** — `max_bot_turns` prevents loops in DM conversations.
+- **Session pool shared** — Each DM user consumes one session slot (`discord:{dm_channel_id}`). Existing TTL cleanup and eviction apply.
+- **Discord only** — Slack natively supports DMs without extra config. This setting applies to the Discord adapter only.
+
+### Relevant config
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `allow_dm` | bool | `false` | `true` = respond to Discord DMs; `false` = ignore DMs. |
+| `allowed_users` | string[] | `[]` | User IDs allowed to interact. Still enforced in DMs. |
+
+### Example config.toml
+
+```toml
+[discord]
+bot_token = "${DISCORD_BOT_TOKEN}"
+allow_dm = true                      # opt-in to DM support
+allowed_users = ["9876543210"]       # restrict who can DM the bot
+```
 
 ---
 
@@ -175,6 +212,10 @@ max_bot_turns = 10
 ## Quick Reference
 
 ```
+Layer 0 — Human → Bot (DM)
+  Config: allow_dm, allowed_users
+  DM to bot                     →  Bot replies directly (no thread, no @mention)
+
 Layer 1 — Human → Bot (Channel)
   Config: allowed_channels, allowed_users, reactions
   @BotA in channel              →  OAB creates thread, BotA responds

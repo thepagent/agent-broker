@@ -154,6 +154,8 @@ pub struct Handler {
     pub max_bot_turns: u32,
     /// Per-thread bot turn tracker. Both counters reset on human msg.
     pub bot_turns: tokio::sync::Mutex<BotTurnTracker>,
+    /// Allow the bot to respond to Discord DMs.
+    pub allow_dm: bool,
 }
 
 impl Handler {
@@ -397,7 +399,7 @@ impl EventHandler for Handler {
         // Thread detection: single to_channel() call for both allowed and
         // non-allowed channels. Uses thread_metadata (not parent_id) to
         // identify threads — see detect_thread() doc comments for rationale.
-        let (in_thread, bot_owns_thread, thread_parent_id) = match msg.channel_id.to_channel(&ctx.http).await {
+        let (in_thread, bot_owns_thread, thread_parent_id, is_dm) = match msg.channel_id.to_channel(&ctx.http).await {
             Ok(serenity::model::channel::Channel::Guild(gc)) => {
                 let parent = gc.parent_id.map(|id| id.get().to_string());
                 let result = detect_thread(
@@ -418,19 +420,29 @@ impl EventHandler for Handler {
                     bot_owns = ?result.1,
                     "thread check"
                 );
-                (result.0, result.1.unwrap_or(false), if result.0 { parent } else { None })
+                (result.0, result.1.unwrap_or(false), if result.0 { parent } else { None }, false)
+            }
+            Ok(serenity::model::channel::Channel::Private(_)) => {
+                tracing::debug!(channel_id = %msg.channel_id, "DM channel");
+                (false, false, None, true)
             }
             Ok(other) => {
                 tracing::debug!(channel_id = %msg.channel_id, kind = ?other, "not a guild thread");
-                (false, false, None)
+                (false, false, None, false)
             }
             Err(e) => {
                 tracing::debug!(channel_id = %msg.channel_id, error = %e, "to_channel failed");
-                (false, false, None)
+                (false, false, None, false)
             }
         };
 
-        if !in_allowed_channel && !in_thread {
+        // DM gating: allow_dm must be true, otherwise reject
+        if is_dm && !self.allow_dm {
+            tracing::debug!(channel_id = %msg.channel_id, "DM rejected (allow_dm=false)");
+            return;
+        }
+
+        if !is_dm && !in_allowed_channel && !in_thread {
             return;
         }
 
@@ -440,7 +452,8 @@ impl EventHandler for Handler {
         //   (Option A) OR has previously posted in it (Option B).
         // MultibotMentions: same as Involved, but if other bots are also
         //   in the thread, require @mention to avoid all bots responding.
-        if !is_mentioned {
+        // DMs are treated as implicit @mention (mirrors Slack behavior).
+        if !is_mentioned && !is_dm {
             match self.allow_user_messages {
                 AllowUsers::Mentions => return,
                 AllowUsers::Involved => {
@@ -583,7 +596,8 @@ impl EventHandler for Handler {
             "processing"
         );
 
-        let thread_channel = if in_thread {
+        let thread_channel = if in_thread || is_dm {
+            // DMs use the DM channel directly (no threads in DMs).
             ChannelRef {
                 platform: "discord".into(),
                 channel_id: msg.channel_id.get().to_string(),
@@ -996,6 +1010,27 @@ fn detect_thread(
 /// Bot authors skip this check — they are gated by `allow_bot_messages` + `trusted_bot_ids`.
 fn is_denied_user(is_bot: bool, allow_all_users: bool, allowed_users: &HashSet<u64>, user_id: u64) -> bool {
     !is_bot && !allow_all_users && !allowed_users.contains(&user_id)
+}
+
+/// Pure decision function: should a DM be processed?
+/// Returns `true` if the DM should be processed (bot responds).
+/// Mirrors the DM gating logic in EventHandler::message:
+/// - `allow_dm` must be true
+/// - `allowed_users` still applies (checked separately via `is_denied_user`)
+/// - DMs bypass `allowed_channels` and `@mention` requirements
+#[cfg(test)]
+fn should_process_dm(allow_dm: bool) -> bool {
+    allow_dm
+}
+
+/// Pure decision function: should thread creation be skipped?
+/// Returns `true` when the message should reuse the current channel
+/// directly (existing thread or DM), `false` when a new thread should
+/// be created. Pins the invariant that DMs never call
+/// `get_or_create_thread()` — Discord DM channels cannot create threads.
+#[cfg(test)]
+fn should_skip_thread_creation(in_thread: bool, is_dm: bool) -> bool {
+    in_thread || is_dm
 }
 
 /// Pure decision function: should this message be processed or ignored?
@@ -1509,5 +1544,88 @@ mod tests {
     fn denied_user_bot_skips_allowlist() {
         let allowed = HashSet::from([100]);
         assert!(!is_denied_user(true, false, &allowed, 999));
+    }
+
+    // --- DM gating tests (#656) ---
+    // DMs are gated by `allow_dm` config. When allowed, DMs bypass
+    // `allowed_channels` and treat the message as implicit @mention.
+
+    /// GIVEN: allow_dm = false
+    /// WHEN:  user sends a DM
+    /// THEN:  DM is rejected
+    #[test]
+    fn dm_rejected_when_allow_dm_false() {
+        assert!(!should_process_dm(false));
+    }
+
+    /// GIVEN: allow_dm = true
+    /// WHEN:  user sends a DM
+    /// THEN:  DM is accepted
+    #[test]
+    fn dm_accepted_when_allow_dm_true() {
+        assert!(should_process_dm(true));
+    }
+
+    /// GIVEN: allow_dm = true, user NOT in allowed_users
+    /// WHEN:  user sends a DM
+    /// THEN:  user is denied (allowed_users still enforced in DMs)
+    #[test]
+    fn dm_denied_user_still_enforced() {
+        let allowed = HashSet::from([100]);
+        // DM passes allow_dm gate, but user gate still applies
+        assert!(should_process_dm(true));
+        assert!(is_denied_user(false, false, &allowed, 999));
+    }
+
+    /// GIVEN: allow_dm = true, user in allowed_users
+    /// WHEN:  user sends a DM
+    /// THEN:  user is allowed
+    #[test]
+    fn dm_allowed_user_passes() {
+        let allowed = HashSet::from([100]);
+        assert!(should_process_dm(true));
+        assert!(!is_denied_user(false, false, &allowed, 100));
+    }
+
+    /// DMs are treated as implicit @mention — should_process_user_message
+    /// is never called for DMs (the `!is_dm` guard skips it).
+    /// This test verifies the Involved mode would reject a non-thread,
+    /// non-mentioned message — confirming DMs MUST bypass this check.
+    #[test]
+    fn dm_must_bypass_user_message_gating() {
+        // Without the `!is_dm` bypass, a DM would be rejected by Involved mode
+        // because is_mentioned=false and in_thread=false.
+        assert!(!should_process_user_message(
+            AllowUsers::Involved,
+            false,  // is_mentioned (DMs don't have @mention)
+            false,  // in_thread (DMs are not threads)
+            false,  // involved
+            false,  // other_bot_present
+        ));
+    }
+
+    // --- Thread creation skip tests (regression for #656 DM bug) ---
+    // Pins the invariant: DMs must never call get_or_create_thread().
+    // Discord DM channels do not support thread creation.
+
+    /// GIVEN: is_dm = true, not in a thread
+    /// THEN:  skip thread creation (use DM channel directly)
+    #[test]
+    fn dm_skips_thread_creation() {
+        assert!(should_skip_thread_creation(false, true));
+    }
+
+    /// GIVEN: already in a thread, not a DM
+    /// THEN:  skip thread creation (reuse existing thread)
+    #[test]
+    fn existing_thread_skips_thread_creation() {
+        assert!(should_skip_thread_creation(true, false));
+    }
+
+    /// GIVEN: not in a thread, not a DM (normal channel message)
+    /// THEN:  do NOT skip — create a new thread
+    #[test]
+    fn normal_channel_creates_thread() {
+        assert!(!should_skip_thread_creation(false, false));
     }
 }
