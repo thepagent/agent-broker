@@ -70,7 +70,20 @@ Every message includes a `<sender_context>` JSON block:
 
 Use **`thread_id`** as the target. Fall back to `channel_id` if `thread_id` is absent.
 
-### 2. Upload the File
+### 2. Get the Bot Token
+
+The agent needs the Discord Bot Token to call the API. Two common approaches:
+
+- **Environment variable** — If `DISCORD_BOT_TOKEN` is set as a system-level env var (e.g. via Kubernetes Secret, Docker `-e`, or shell export), the agent subprocess inherits it automatically.
+- **Explicit config** — Pass it to the agent via `[agent] env` in `config.toml`:
+  ```toml
+  [agent]
+  env = { DISCORD_BOT_TOKEN = "${DISCORD_BOT_TOKEN}" }
+  ```
+
+> ⚠️ The token in `[discord] bot_token` is consumed by OpenAB itself and is **not** automatically forwarded to the agent subprocess.
+
+### 3. Upload the File
 
 ```
 POST https://discord.com/api/v10/channels/{thread_id}/messages
