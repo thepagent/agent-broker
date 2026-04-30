@@ -6,11 +6,19 @@ To send an image back to the user, the agent must call the Discord API directly.
 ## How It Works
 
 ```
-Agent generates image → saves to local file
-  → reads thread_id from sender_context
-  → POST /channels/{thread_id}/messages with image attachment
-  → image appears in the Discord thread
+┌──────────┐  text only   ┌──────────┐  ACP stdio   ┌──────────────┐
+│  Discord  │◄────────────│  OpenAB   │◄────────────│  Agent (CLI)  │
+│  Thread   │             └──────────┘              └──────┬───────┘
+│           │                                              │
+│           │         Discord REST API                     │
+│           │◄─────────────────────────────────────────────┘
+│           │  POST /channels/{thread_id}/messages
+│           │  + multipart file attachment
+└──────────┘
 ```
+
+OpenAB only streams text via ACP. To send an image, the agent calls the
+Discord API directly using the `thread_id` from `sender_context`.
 
 ## Step-by-Step
 

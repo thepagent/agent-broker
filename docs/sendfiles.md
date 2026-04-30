@@ -7,12 +7,40 @@ To send a file back to the user, the agent must call the Discord API directly.
 
 ## How It Works
 
+### Direct Upload (small files)
+
 ```
-Agent produces file (code, PDF, CSV, zip, etc.)
-  → reads thread_id from sender_context
-  → POST /channels/{thread_id}/messages with file attachment
-  → file appears in the Discord thread
+┌──────────┐  text only   ┌──────────┐  ACP stdio   ┌──────────────┐
+│  Discord  │◄────────────│  OpenAB   │◄────────────│  Agent (CLI)  │
+│  Thread   │             └──────────┘              └──────┬───────┘
+│           │                                              │
+│           │         Discord REST API                     │
+│           │◄─────────────────────────────────────────────┘
+│           │  POST /channels/{thread_id}/messages
+│           │  + multipart file attachment
+└──────────┘
 ```
+
+### Enterprise / Large Files (presigned URL)
+
+```
+┌──────────┐  text only   ┌──────────┐  ACP stdio   ┌──────────────┐
+│  Discord  │◄────────────│  OpenAB   │◄────────────│  Agent (CLI)  │
+│  Thread   │             └──────────┘              └──────┬───────┘
+│           │                                              │
+│           │  send presigned URL as message                │  upload file
+│           │◄─────────────────────────────────────────────┤─────────────►┌─────┐
+│           │  POST /channels/{thread_id}/messages         │              │ S3  │
+└─────┬────┘                                               │              │ R2  │
+      │                                                    │              │ GCS │
+      │  user clicks link                                  │              └──┬──┘
+      └────────────────────────────────────────────────────────────────────►│
+                              presigned GET                                 │
+                              ◄─────────────────────────────────────────────┘
+```
+
+OpenAB only streams text via ACP. To send a file, the agent calls the
+Discord API directly using the `thread_id` from `sender_context`.
 
 ## Step-by-Step
 
@@ -109,12 +137,7 @@ For enterprise use or files exceeding Discord's upload limit, the recommended pa
 2. **Generate a temporary link** — e.g. an [S3 presigned URL](https://docs.aws.amazon.com/AmazonS3/latest/userguide/ShareObjectPresignedURL.html) with a short TTL.
 3. **Send the link back to Discord** — post the URL as a regular message in the thread.
 
-```
-Agent produces large file
-  → uploads to S3 bucket
-  → generates presigned URL (e.g. expires in 1 hour)
-  → sends URL as a Discord message in the thread
-```
+> See the [Enterprise / Large Files diagram](#enterprise--large-files-presigned-url) above for the full flow.
 
 #### Why this is better for enterprise
 
