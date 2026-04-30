@@ -96,6 +96,8 @@ url = "ws://openab-gateway:8080/ws"
 platform = "telegram"
 token = "${GATEWAY_WS_TOKEN}"
 bot_username = "your_bot_username"
+# allowed_users = ["123456789"]          # restrict to specific Telegram user IDs
+# allowed_channels = ["-1001234567890"]  # restrict to specific chat/group IDs
 
 [agent]
 command = "kiro-cli"
@@ -109,6 +111,8 @@ working_dir = "/home/agent"
 | `platform` | No | Session key namespace (default: `telegram`) |
 | `token` | No | Shared WS auth token (recommended) |
 | `bot_username` | No | Bot username for @mention gating in groups |
+| `allowed_users` | No | Restrict to listed user IDs (empty = allow all) |
+| `allowed_channels` | No | Restrict to listed chat IDs (empty = allow all) |
 
 ## 4. Set the Telegram Webhook
 

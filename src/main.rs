@@ -222,7 +222,7 @@ async fn main() -> anyhow::Result<()> {
         let allowed_usr = gw_cfg.allowed_users.clone();
         info!(url = %gw_cfg.url, "starting gateway adapter");
         Some(tokio::spawn(async move {
-        if let Err(e) = gateway::run_gateway_adapter(gw_cfg.url, gw_cfg.platform, gw_cfg.token, gw_cfg.bot_username, allow_all_ch, allowed_ch, allow_all_usr, allowed_usr, router, shutdown_rx).await {
+            if let Err(e) = gateway::run_gateway_adapter(gw_cfg.url, gw_cfg.platform, gw_cfg.token, gw_cfg.bot_username, allow_all_ch, allowed_ch, allow_all_usr, allowed_usr, router, shutdown_rx).await {
                 error!("gateway adapter error: {e}");
             }
         }))
