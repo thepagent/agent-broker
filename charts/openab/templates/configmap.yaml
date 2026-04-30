@@ -51,6 +51,9 @@ data:
     {{- end }}
     allow_user_messages = {{ $cfg.discord.allowUserMessages | toJson }}  {{- /* involved (default): respond in bot's threads without @mention | mentions: always require @mention | multibot-mentions: require @mention only when another bot has posted in the thread */ -}}
     {{- end }}
+    {{- if hasKey $cfg.discord "allowDm" }}
+    allow_dm = {{ $cfg.discord.allowDm }}
+    {{- end }}
     {{- end }}
 
     {{- if and ($cfg.slack).enabled }}

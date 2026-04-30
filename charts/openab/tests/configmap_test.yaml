@@ -97,3 +97,25 @@ tests:
       - matchRegex:
           path: data["config.toml"]
           pattern: 'allow_user_messages = "multibot-mentions"'
+
+  - it: renders allow_dm = false by default
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: 'allow_dm = false'
+
+  - it: renders allow_dm = true when set
+    set:
+      agents.kiro.discord.allowDm: true
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: 'allow_dm = true'
+
+  - it: renders allow_dm = false when explicitly set
+    set:
+      agents.kiro.discord.allowDm: false
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: 'allow_dm = false'

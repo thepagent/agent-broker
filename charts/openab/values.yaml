@@ -135,6 +135,8 @@ agents:
         - "YOUR_CHANNEL_ID"
       # ⚠️ Use --set-string for user IDs to avoid float64 precision loss
       allowedUsers: []  # only checked when allowAllUsers=false
+      # allowDm: true | false (default) — whether the bot responds to direct messages
+      allowDm: false
       # allowBotMessages: "off" (default) | "mentions" | "all"
       # recommended for multi-agent collaboration
       allowBotMessages: "off"
