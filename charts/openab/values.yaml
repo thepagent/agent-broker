@@ -48,7 +48,7 @@ agents:
     #   reactions:
     #     enabled: true
     #     removeAfterReply: false
-    #     # toolDisplay: "compact" (default) | "full" | "none"
+    #     # toolDisplay: "full" (default) | "compact" | "none"
     #   persistence:
     #     enabled: true
     #     storageClass: ""
@@ -81,7 +81,7 @@ agents:
     #   reactions:
     #     enabled: true
     #     removeAfterReply: false
-    #     # toolDisplay: "compact" (default) | "full" | "none"
+    #     # toolDisplay: "full" (default) | "compact" | "none"
     #   persistence:
     #     enabled: true
     #     storageClass: ""
@@ -111,7 +111,7 @@ agents:
     #   reactions:
     #     enabled: true
     #     removeAfterReply: false
-    #     # toolDisplay: "compact" (default) | "full" | "none"
+    #     # toolDisplay: "full" (default) | "compact" | "none"
     #   persistence:
     #     enabled: true
     #     storageClass: ""
@@ -167,7 +167,7 @@ agents:
     reactions:
       enabled: true
       removeAfterReply: false
-      # toolDisplay: "compact" (default) | "full" | "none"
+      # toolDisplay: "full" (default) | "compact" | "none"
       # compact: show count summary (e.g. ✅ 3 · 🔧 1 tool(s))
       # full: show complete tool titles (for debugging)
       # none: hide tool lines entirely
