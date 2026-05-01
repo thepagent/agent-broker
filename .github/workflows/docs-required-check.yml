@@ -16,7 +16,7 @@ jobs:
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          if echo "$PR_TITLE" | grep -qE '^(feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)(\(.+\))?!?:'; then
+          if echo "$PR_TITLE" | grep -qE '^(feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)(\(.+\))?!?: .+'; then
             echo "✅ PR title follows Conventional Commits format."
           else
             echo "::error::PR title must follow Conventional Commits format: <type>(<scope>): <description>"
@@ -26,12 +26,19 @@ jobs:
       - name: Check docs update for fix/feat PRs
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          if echo "$PR_TITLE" | grep -qiE '^(fix|feat)(\(.+\))?!?:'; then
+          # Escape hatch: skip docs check if PR body contains "skip-docs-check"
+          if echo "$PR_BODY" | grep -qi 'skip-docs-check'; then
+            echo "⏭️ skip-docs-check found in PR body, skipping docs check."
+            exit 0
+          fi
+
+          if echo "$PR_TITLE" | grep -qE '^(fix|feat)(\(.+\))?!?: '; then
             echo "This is a fix/feat PR, checking docs/ changes..."
-            DOCS_CHANGED=$(git diff --name-only origin/${{ github.event.pull_request.base.ref }}...HEAD -- docs/ | wc -l)
+            DOCS_CHANGED=$(git diff --name-only ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} -- docs/ | wc -l)
             if [ "$DOCS_CHANGED" -eq 0 ]; then
-              echo "::error::fix/feat PR 必須包含 docs/ 下的文件更新！"
+              echo "::error::fix/feat PRs must include at least one docs/ update. Add skip-docs-check to the PR body to bypass."
               exit 1
             else
               echo "✅ docs/ has $DOCS_CHANGED file(s) changed."
