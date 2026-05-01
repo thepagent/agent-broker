@@ -4,21 +4,11 @@
 
 Closes #
 
-Discord Discussion URL: https://discord.com/channels/...
+Discord Discussion URL: <!-- Strongly recommended. Link the Discord thread where this was discussed. -->
 
 ## At a Glance
 
-<!-- ASCII diagram showing the high-level flow or where this change fits in the system. Example:
-
-┌──────────────┐     ┌───────┐     ┌───────────┐
-│ Discord User │────►│ openab│────►│ ACP Agent │
-└──────────────┘     └───┬───┘     └───────────┘
-                         │
-                         ▼
-                  ┌──────────────┐
-                  │ your change  │
-                  └──────────────┘
--->
+<!-- ASCII diagram showing the high-level flow or where this change fits in the system. For docs-only or trivial changes, write "N/A". -->
 
 ```
 (your diagram here)
@@ -26,7 +16,10 @@ Discord Discussion URL: https://discord.com/channels/...
 
 ## Prior Art & Industry Research
 
-<!-- 
+<!--
+Required for architectural, runtime, agent, scheduling, delivery, or persistence changes.
+For docs-only, chore, CI, release, or trivial bug fixes, write "Not applicable — [reason]".
+
 Research how at least OpenClaw and Hermes Agent handle this problem.
 Include links to relevant docs, source code, or discussions.
 -->
@@ -45,7 +38,7 @@ Include links to relevant docs, source code, or discussions.
 
 ## Why this approach?
 
-<!-- 
+<!--
 Explain why you chose this approach over the alternatives found in your research.
 What are the tradeoffs? What are the known limitations?
 -->
@@ -56,9 +49,26 @@ What are the tradeoffs? What are the known limitations?
 
 ## Validation
 
-<!-- How do you prove this works? Show, don't just tell. -->
+<!--
+Show that your change works. Pick the checks relevant to your PR type:
 
+Rust changes:
 - [ ] `cargo check` passes
 - [ ] `cargo test` passes (including new tests)
+- [ ] `cargo clippy` clean
+
+Helm chart changes:
+- [ ] `helm lint charts/openab` passes
+- [ ] `helm template` renders correctly
+
+CI/workflow changes:
+- [ ] Workflow syntax is valid
+- [ ] Tested with act or dry-run where possible
+
+Docs-only changes:
+- [ ] Links are valid
+- [ ] Renders correctly in GitHub preview
+
+All PRs:
 - [ ] Manual testing — describe the steps you took and what you observed
-- [ ] Screenshots, logs, or terminal output demonstrating the feature working end-to-end
+-->

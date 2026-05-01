@@ -2,13 +2,15 @@
 
 Thanks for your interest in contributing! This guide covers what we expect in pull requests.
 
+For the full rationale behind these guidelines, see the [PR Contribution Guidelines ADR](/docs/adr/pr-contribution-guidelines.md).
+
 ## Pull Request Guidelines
 
 Every PR must address the following in its description. The [PR template](/.github/pull_request_template.md) will prompt you for each section.
 
 ### 0. Discord Discussion URL
 
-Every PR must include a Discord Discussion URL in the body (e.g. `https://discord.com/channels/...`). PRs without one will be labeled `closing-soon` and auto-closed after 3 days.
+We strongly recommend including a Discord Discussion URL in the PR body (e.g. `https://discord.com/channels/...`). Discussing your idea in Discord before opening a PR helps align on direction and avoids wasted effort. If no Discord discussion exists, explain the context directly in the PR description.
 
 ### 1. What problem does this solve?
 
@@ -16,7 +18,9 @@ Describe the pain point or requirement in plain language. Link the related issue
 
 ### 2. Prior Art & Industry Research
 
-Before proposing a solution, research how the industry handles the same problem. At minimum, investigate:
+**Required for architectural, runtime, agent, scheduling, delivery, or persistence changes.** For docs-only, chore, CI, release, or trivial bug fixes, write "Not applicable" with a brief reason.
+
+When prior art research is required, investigate at minimum:
 
 - **[OpenClaw](https://github.com/openclaw/openclaw)** — the largest open-source AI agent gateway
 - **[Hermes Agent](https://github.com/NousResearch/hermes-agent)** — Nous Research's self-hosted agent with multi-platform messaging
@@ -35,11 +39,16 @@ Describe your technical approach, then explain why you chose it over the alterna
 
 List approaches you evaluated but did not choose, and explain why they were rejected.
 
-### 5. Test Plan
+### 5. Validation
 
-- `cargo check` and `cargo test` must pass
-- Describe any manual testing performed
-- Add unit tests for new functionality
+Pick the checks relevant to your PR type:
+
+- **Rust changes:** `cargo check`, `cargo test`, `cargo clippy`
+- **Helm chart changes:** `helm lint`, `helm template`
+- **CI/workflow changes:** workflow syntax validation, dry-run where possible
+- **Docs-only changes:** links are valid, renders correctly in GitHub preview
+
+Describe any manual testing performed and add unit tests for new functionality.
 
 ## Why We Require Prior Art Research
 

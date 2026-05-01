@@ -21,7 +21,7 @@ This front-loads research cost onto the contributor (who understands the problem
 
 ## 2. Decision
 
-Establish a standard PR template requiring contributors to research prior art (at minimum OpenClaw and Hermes Agent) before proposing solutions, and to document the problem, approach, tradeoffs, and alternatives in every PR description.
+Establish a standard PR template and tiered contribution guidelines. All PRs document the problem, approach, tradeoffs, and alternatives. Architectural and runtime changes additionally require prior art research (at minimum OpenClaw and Hermes Agent). Docs-only, chore, CI, release, and trivial bug fixes use a lighter process.
 
 ### Required PR Sections
 
@@ -29,20 +29,20 @@ Every PR must include these sections in its description:
 
 | # | Section | Purpose |
 |---|---------|---------|
-| 0 | **Discord Discussion URL** | Link to the prior Discord discussion. PRs without one are auto-labeled `closing-soon` and closed after 3 days. |
+| 0 | **Discord Discussion URL** | Strongly recommended. Link to the prior Discord discussion. If none exists, explain context in the PR description. |
 | 1 | **What problem does this solve?** | Pain point or requirement in plain language. Link the related issue. |
-| 2 | **At a Glance** | ASCII diagram showing the high-level flow, architecture, or where the change fits in the system. |
-| 3 | **Prior Art & Industry Research** | How OpenClaw and Hermes Agent handle the same problem. Links to code/docs. |
+| 2 | **At a Glance** | ASCII diagram showing the high-level flow, architecture, or where the change fits in the system. "N/A" for docs-only or trivial changes. |
+| 3 | **Prior Art & Industry Research** | Required for architectural/runtime changes. "Not applicable" with reason for docs/chore/CI/release/trivial fixes. |
 | 4 | **Proposed Solution** | Technical approach, architecture decisions, key implementation details. |
 | 5 | **Why This Approach** | Why this over the alternatives from research. Tradeoffs and limitations. |
 | 6 | **Alternatives Considered** | Approaches evaluated but not chosen, and why. |
-| 7 | **Validation** | How do you prove it works? Unit tests, integration tests, manual testing steps, screenshots, logs. |
+| 7 | **Validation** | Relevant checks for the PR type: Rust, Helm, CI, or docs validation as applicable. |
 
-### Mandatory Prior Art Research
+### Tiered Prior Art Research
 
-Contributors must research at minimum these two projects:
+Prior art research is **required** for PRs that touch architectural, runtime, agent, scheduling, delivery, or persistence concerns. Contributors must research at minimum these two projects:
 
-| Project | Why it's mandatory |
+| Project | Why it's a reference |
 |---|---|
 | [OpenClaw](https://github.com/openclaw/openclaw) | Largest open-source AI agent gateway. Plugin architecture across 7+ messaging platforms. Mature patterns for media, security, session management. |
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | Nous Research's self-hosted agent. Gateway architecture across 17+ platforms. Strong prior art on messaging, tool integration, and service management. |
@@ -53,6 +53,8 @@ For each project, document:
 - What we can learn from their approach
 
 If neither project addresses the problem, state that explicitly with evidence.
+
+For **docs-only, chore, CI, release, or trivial bug fixes**, write "Not applicable — [reason]" in the prior art section.
 
 ### Research Flow
 
@@ -81,7 +83,7 @@ Contributor researches prior art
 | Phase | Deliverable | Description |
 |-------|-------------|-------------|
 | **1** | `.github/pull_request_template.md` | Auto-populated PR form with all required sections |
-| **2** | `CONTRIBUTING.md` | Contributor guide explaining the guidelines and linking to this ADR |
+| **2** | `CONTRIBUTING.md` | Contributor guide explaining the tiered guidelines and linking to this ADR |
 | **3** | Review process update | Reviewers check for prior art section completeness |
 
 ## 4. Alternatives Considered
@@ -96,7 +98,7 @@ Contributor researches prior art
 - Pros: uniform quality across all PRs
 - Cons: excessive overhead for trivial/docs/small fixes; may discourage contributions
 
-### Option 3: Tiered policy by PR type (recommended follow-up)
+### Option 3: Tiered policy by PR type (adopted)
 
 - Pros: full prior-art analysis for architectural changes, lighter structure for minor PRs
 - Cons: requires defining the boundary between "minor" and "architectural"
@@ -110,8 +112,8 @@ Contributor researches prior art
 ## Consequences
 
 - **Positive:** Higher-quality PRs, faster reviews, architectural consistency, less reinventing the wheel
-- **Negative:** Higher upfront cost for contributors; may slow down first-time contributions
-- **Mitigation:** Clear examples (PR #225), PR template auto-populates sections, consider tiered policy for trivial changes
+- **Negative:** Higher upfront cost for contributors on architectural PRs; may slow down first-time contributions
+- **Mitigation:** Clear examples (PR #225), PR template auto-populates sections, tiered policy keeps docs/chore/CI contributions lightweight
 
 ## References
 
