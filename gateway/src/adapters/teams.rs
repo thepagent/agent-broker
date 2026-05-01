@@ -96,6 +96,8 @@ struct JwkKey {
     n: String,
     e: String,
     kty: String,
+    #[serde(default)]
+    endorsements: Vec<String>,
 }
 
 // --- OAuth token ---
@@ -243,7 +245,8 @@ impl TeamsAdapter {
     }
 
     /// Validate the JWT bearer token from an inbound Bot Framework request.
-    pub async fn validate_jwt(&self, auth_header: &str) -> anyhow::Result<()> {
+    /// Checks: signature, issuer, audience, expiry, serviceUrl claim, and channel endorsements.
+    pub async fn validate_jwt(&self, auth_header: &str, activity: &Activity) -> anyhow::Result<()> {
         let token = auth_header
             .strip_prefix("Bearer ")
             .ok_or_else(|| anyhow::anyhow!("missing Bearer prefix"))?;
@@ -271,6 +274,16 @@ impl TeamsAdapter {
             anyhow::bail!("unsupported key type: {}", key.kty);
         }
 
+        // B2: Validate channel endorsements — key must endorse the activity's channelId
+        if let Some(channel_id) = activity.channel_id.as_deref() {
+            if !key.endorsements.is_empty() && !key.endorsements.iter().any(|e| e == channel_id) {
+                anyhow::bail!(
+                    "JWK endorsements {:?} do not include channelId={channel_id}",
+                    key.endorsements
+                );
+            }
+        }
+
         let decoding_key = DecodingKey::from_rsa_components(&key.n, &key.e)?;
         let mut validation = Validation::new(Algorithm::RS256);
         validation.set_audience(&[&self.config.app_id]);
@@ -282,7 +295,19 @@ impl TeamsAdapter {
         validation.validate_exp = true;
         validation.validate_nbf = false;
 
-        decode::<serde_json::Value>(token, &decoding_key, &validation)?;
+        let token_data = decode::<serde_json::Value>(token, &decoding_key, &validation)?;
+
+        // B1: Validate serviceUrl claim matches activity's serviceUrl
+        if let Some(activity_service_url) = activity.service_url.as_deref() {
+            if let Some(token_service_url) = token_data.claims.get("serviceurl").and_then(|v| v.as_str()) {
+                if token_service_url != activity_service_url {
+                    anyhow::bail!(
+                        "serviceUrl mismatch: token={token_service_url}, activity={activity_service_url}"
+                    );
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -398,18 +423,16 @@ pub async fn webhook(
         None => return StatusCode::NOT_FOUND,
     };
 
-    // JWT validation
-    if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
-        if let Err(e) = teams.validate_jwt(auth).await {
-            warn!(error = %e, "teams JWT validation failed");
+    // Extract auth header early (before parsing activity)
+    let auth_header = match headers.get("authorization").and_then(|v| v.to_str().ok()) {
+        Some(h) => h.to_string(),
+        None => {
+            warn!("teams webhook: missing authorization header");
             return StatusCode::UNAUTHORIZED;
         }
-    } else {
-        warn!("teams webhook: missing authorization header");
-        return StatusCode::UNAUTHORIZED;
-    }
+    };
 
-    // Parse activity
+    // Parse activity first (needed for JWT serviceUrl + endorsements validation)
     let activity: Activity = match serde_json::from_str(&body) {
         Ok(a) => a,
         Err(e) => {
@@ -417,6 +440,12 @@ pub async fn webhook(
             return StatusCode::BAD_REQUEST;
         }
     };
+
+    // JWT validation (with activity context for serviceUrl + channelId checks)
+    if let Err(e) = teams.validate_jwt(&auth_header, &activity).await {
+        warn!(error = %e, "teams JWT validation failed");
+        return StatusCode::UNAUTHORIZED;
+    }
 
     // Only handle message activities
     if activity.activity_type != "message" {
@@ -458,6 +487,12 @@ pub async fn webhook(
         .and_then(|f| f.name.as_deref())
         .unwrap_or("Unknown");
     let activity_id = activity.id.as_deref().unwrap_or("");
+
+    // B3: Guard against empty service_url — replies will fail without it
+    if service_url.is_empty() {
+        warn!("teams: activity missing service_url, cannot route replies");
+        return StatusCode::OK;
+    }
 
     let event = GatewayEvent::new(
         "teams",
@@ -686,7 +721,8 @@ mod tests {
     #[tokio::test]
     async fn jwt_rejects_missing_bearer_prefix() {
         let adapter = TeamsAdapter::new(make_config(vec![]));
-        let result = adapter.validate_jwt("NotBearer xyz").await;
+        let activity = make_activity_with_tenant(Some("t1"));
+        let result = adapter.validate_jwt("NotBearer xyz", &activity).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Bearer"));
     }
@@ -694,14 +730,16 @@ mod tests {
     #[tokio::test]
     async fn jwt_rejects_empty_bearer() {
         let adapter = TeamsAdapter::new(make_config(vec![]));
-        let result = adapter.validate_jwt("Bearer ").await;
+        let activity = make_activity_with_tenant(Some("t1"));
+        let result = adapter.validate_jwt("Bearer ", &activity).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn jwt_rejects_garbage_token() {
         let adapter = TeamsAdapter::new(make_config(vec![]));
-        let result = adapter.validate_jwt("Bearer not.a.valid.jwt").await;
+        let activity = make_activity_with_tenant(Some("t1"));
+        let result = adapter.validate_jwt("Bearer not.a.valid.jwt", &activity).await;
         assert!(result.is_err());
     }
 
