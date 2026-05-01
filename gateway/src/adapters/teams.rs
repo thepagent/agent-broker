@@ -275,13 +275,16 @@ impl TeamsAdapter {
         }
 
         // B2: Validate channel endorsements — key must endorse the activity's channelId
-        if let Some(channel_id) = activity.channel_id.as_deref() {
-            if !key.endorsements.is_empty() && !key.endorsements.iter().any(|e| e == channel_id) {
-                anyhow::bail!(
-                    "JWK endorsements {:?} do not include channelId={channel_id}",
-                    key.endorsements
-                );
-            }
+        let channel_id = activity.channel_id.as_deref()
+            .ok_or_else(|| anyhow::anyhow!("activity missing channelId"))?;
+        if key.endorsements.is_empty() {
+            anyhow::bail!("JWK has no endorsements — cannot verify channelId={channel_id}");
+        }
+        if !key.endorsements.iter().any(|e| e == channel_id) {
+            anyhow::bail!(
+                "JWK endorsements {:?} do not include channelId={channel_id}",
+                key.endorsements
+            );
         }
 
         let decoding_key = DecodingKey::from_rsa_components(&key.n, &key.e)?;
@@ -298,14 +301,15 @@ impl TeamsAdapter {
         let token_data = decode::<serde_json::Value>(token, &decoding_key, &validation)?;
 
         // B1: Validate serviceUrl claim matches activity's serviceUrl
-        if let Some(activity_service_url) = activity.service_url.as_deref() {
-            if let Some(token_service_url) = token_data.claims.get("serviceurl").and_then(|v| v.as_str()) {
-                if token_service_url != activity_service_url {
-                    anyhow::bail!(
-                        "serviceUrl mismatch: token={token_service_url}, activity={activity_service_url}"
-                    );
-                }
-            }
+        let activity_service_url = activity.service_url.as_deref()
+            .ok_or_else(|| anyhow::anyhow!("activity missing serviceUrl"))?;
+        let token_service_url = token_data.claims.get("serviceurl")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("JWT missing serviceurl claim"))?;
+        if token_service_url != activity_service_url {
+            anyhow::bail!(
+                "serviceUrl mismatch: token={token_service_url}, activity={activity_service_url}"
+            );
         }
 
         Ok(())
