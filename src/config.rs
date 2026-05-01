@@ -1,6 +1,7 @@
 use crate::markdown::TableMode;
 use regex::Regex;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::Path;
 
 /// Controls whether the bot processes messages from other Discord bots.
@@ -214,6 +215,8 @@ pub struct AgentConfig {
     pub args: Vec<String>,
     #[serde(default = "default_working_dir")]
     pub working_dir: String,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]

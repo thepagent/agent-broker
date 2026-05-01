@@ -73,6 +73,14 @@ fn build_permission_response(params: Option<&Value>) -> Value {
     }
 }
 
+fn expand_env(val: &str) -> String {
+    if val.starts_with("${") && val.ends_with('}') {
+        let key = &val[2..val.len() - 1];
+        std::env::var(key).unwrap_or_default()
+    } else {
+        val.to_string()
+    }
+}
 use tokio::time::Instant;
 
 /// A content block for the ACP prompt — either text or image.
@@ -119,6 +127,7 @@ impl AcpConnection {
         command: &str,
         args: &[String],
         working_dir: &str,
+        env: &std::collections::HashMap<String, String>,
     ) -> Result<Self> {
         info!(cmd = command, ?args, cwd = working_dir, "spawning agent");
 
@@ -146,10 +155,13 @@ impl AcpConnection {
             cmd.creation_flags(0x00000200); // CREATE_NEW_PROCESS_GROUP
         }
         // Clear inherited env to prevent credential leakage (e.g. DISCORD_BOT_TOKEN).
-        // Only HOME and PATH are passed through. All backends use OAuth/file-based auth.
+        // Only [agent].env values + essential baseline vars are passed through.
         cmd.env_clear();
         cmd.env("HOME", working_dir);
         cmd.env("PATH", std::env::var("PATH").unwrap_or_default());
+        for (k, v) in env {
+            cmd.env(k, expand_env(v));
+        }
         let mut proc = cmd
             .spawn()
             .map_err(|e| anyhow!("failed to spawn {command}: {e}"))?;

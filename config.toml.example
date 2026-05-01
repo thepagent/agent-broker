@@ -54,26 +54,34 @@ working_dir = "/home/agent"
 # command = "claude"
 # args = ["--acp"]
 # working_dir = "/home/agent"
+# env = { ANTHROPIC_API_KEY = "${ANTHROPIC_API_KEY}" }
 
 # [agent]
 # command = "codex"
 # args = ["--acp"]
 # working_dir = "/home/agent"
+# env = { OPENAI_API_KEY = "${OPENAI_API_KEY}" }
 
 # [agent]
 # command = "gemini"
 # args = ["--acp"]
 # working_dir = "/home/agent"
+# env = { GEMINI_API_KEY = "${GEMINI_API_KEY}" }
 
 # [agent]
 # command = "copilot"
 # args = ["--acp", "--stdio"]
 # working_dir = "/home/agent"
+# env = {}  # Auth via: kubectl exec -it <pod> -- gh auth login -p https -w
 
 # [agent]
 # command = "opencode"
 # args = ["acp"]
 # working_dir = "/home/node"
+# # Note: opencode handles tool authorization internally and never emits
+# # session/request_permission — all tools run without user confirmation,
+# # equivalent to --trust-all-tools on other backends.
+# # Run `opencode auth login` once before starting openab.
 
 # [agent]
 # command = "cursor-agent"
