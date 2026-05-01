@@ -203,6 +203,7 @@ agents:
       tag: ""           # defaults to Chart.AppVersion
       strategy: "Recreate"  # Recreate (default, preserves WS connections) or RollingUpdate
       resources: {}     # e.g. { requests: { cpu: 50m, memory: 64Mi }, limits: { memory: 128Mi } }
+      rustLog: "info"  # RUST_LOG for gateway container (e.g. "openab_gateway=debug")
       # MS Teams adapter config (gateway-side env vars)
       # See docs/msteams-enterprise.md for full setup guide
       teams:
