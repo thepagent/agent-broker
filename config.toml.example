@@ -128,7 +128,7 @@ error_hold_ms = 2500
 
 # [cron]
 # usercron_enabled = true                      # enable hot-reload (default: false)
-# usercron_path = "cronjob.toml"               # relative to $HOME, or absolute
+# usercron_path = "cronjob.toml"               # relative to $HOME/.openab/, or absolute
 
 # [[cron.jobs]]
 # enabled = true                               # optional, default: true

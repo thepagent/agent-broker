@@ -243,10 +243,11 @@ async fn main() -> anyhow::Result<()> {
             if path.is_absolute() {
                 path
             } else {
-                // Relative paths resolve from $HOME (e.g. "cronjob.toml" → "$HOME/cronjob.toml")
+                // Relative paths resolve from $HOME/.openab/ (e.g. "cronjob.toml" → "$HOME/.openab/cronjob.toml")
                 std::env::var("HOME")
                     .map(std::path::PathBuf::from)
                     .unwrap_or_default()
+                    .join(".openab")
                     .join(path)
             }
         })

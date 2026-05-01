@@ -169,12 +169,22 @@ working_dir = "/home/agent"
 
 [cron]
 usercron_enabled = true
-usercron_path = "cronjob.toml"    # → $HOME/cronjob.toml
+usercron_path = "cronjob.toml"    # → $HOME/.openab/cronjob.toml
 ```
 
 > Note: Everything cron-related lives under `[cron]` — both usercron settings and baseline `[[cron.jobs]]`.
 
-The path is relative to `$HOME` (e.g. `"cronjob.toml"` resolves to `$HOME/cronjob.toml`). Absolute paths are used as-is. The scheduler starts watching immediately, even if the file doesn't exist yet.
+The path is relative to `$HOME/.openab/` (e.g. `"cronjob.toml"` resolves to `$HOME/.openab/cronjob.toml`). Absolute paths are used as-is. The scheduler starts watching immediately, even if the file doesn't exist yet.
+
+> **New installations**: If `~/.openab/` does not exist yet, the scheduler silently skips the file and continues running. Once you create the directory and place `cronjob.toml` inside, it will be picked up automatically on the next tick — no restart required.
+
+> [!CAUTION]
+> **Breaking Change** — `usercron_path` relative path base changed from `$HOME` to `$HOME/.openab/`.
+> If you are upgrading from a previous version, move your existing file:
+> ```bash
+> mkdir -p ~/.openab
+> mv ~/cronjob.toml ~/.openab/cronjob.toml
+> ```
 
 ### Create `cronjob.toml`
 
@@ -200,7 +210,7 @@ timezone = "Asia/Taipei"
 ### How It Works
 
 ```
-                         config.toml                        $HOME/cronjob.toml
+                         config.toml                   $HOME/.openab/cronjob.toml
                     ┌──────────────────┐                 ┌──────────────────────┐
                     │ [cron]           │                 │ [[jobs]]             │
                     │ usercron_enabled │                 │ schedule = "* * * *" │
@@ -254,7 +264,7 @@ Mount `cronjob.toml` on a PVC so it persists across pod restarts, and set `userc
 # config.toml
 [cron]
 usercron_enabled = true
-# Relative to $HOME — resolves to $HOME/cronjob.toml
+# Relative to $HOME/.openab/ — resolves to $HOME/.openab/cronjob.toml
 usercron_path = "cronjob.toml"
 ```
 

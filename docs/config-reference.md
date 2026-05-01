@@ -211,7 +211,7 @@ Everything cron-related lives under `[cron]`.
 ```toml
 [cron]
 usercron_enabled = true                      # enable hot-reload (default: false)
-usercron_path = "cronjob.toml"               # relative to $HOME, or absolute
+usercron_path = "cronjob.toml"               # relative to $HOME/.openab/, or absolute
 
 [[cron.jobs]]
 enabled = true                               # optional, default: true
@@ -236,7 +236,7 @@ timezone = "UTC"
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `usercron_enabled` | bool | `false` | Enable usercron hot-reload. Must be explicitly set to `true`. |
-| `usercron_path` | string | — | Path to the external `cronjob.toml`. Relative paths resolve from `$HOME`. |
+| `usercron_path` | string | — | Path to the external `cronjob.toml`. Relative paths resolve from `$HOME/.openab/`. |
 
 ### `[[cron.jobs]]` fields
 
