@@ -201,14 +201,14 @@ agents:
       botUsername: ""   # optional, for @mention gating
       image: "ghcr.io/openabdev/openab-gateway"  # gateway container image
       tag: ""           # defaults to Chart.AppVersion
-      strategy: "Recreate"  # Recreate (default, preserves WS connections) or RollingUpdate
+      strategy: "Recreate"  # Recreate (default, prevents concurrent WS conflicts) or RollingUpdate
       resources: {}     # e.g. { requests: { cpu: 50m, memory: 64Mi }, limits: { memory: 128Mi } }
       rustLog: "info"  # RUST_LOG for gateway container (e.g. "openab_gateway=debug")
       # MS Teams adapter config (gateway-side env vars)
       # See docs/msteams-enterprise.md for full setup guide
       teams:
         appId: ""              # Azure Entra ID application (client) ID → TEAMS_APP_ID
-        appSecret: ""          # Azure Entra ID client secret → TEAMS_APP_SECRET
+        appSecret: ""          # Azure Entra ID client secret → TEAMS_APP_SECRET (use --set-literal or external secret mgmt)
         # ⚠️ Required for Single Tenant bots — use tenant-specific endpoint
         oauthEndpoint: ""      # → TEAMS_OAUTH_ENDPOINT
         openidMetadata: ""     # Override for sovereign clouds → TEAMS_OPENID_METADATA

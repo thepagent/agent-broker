@@ -42,10 +42,11 @@ spec:
               protocol: TCP
           env:
             {{- if ($cfg.gateway).token }}
+            {{- $agentD := dict "ctx" $ "agent" $name "cfg" $cfg }}
             - name: GATEWAY_WS_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "openab.agentFullname" $d }}
+                  name: {{ include "openab.agentFullname" $agentD }}
                   key: gateway-ws-token
             {{- end }}
             {{- if $hasTeams }}
