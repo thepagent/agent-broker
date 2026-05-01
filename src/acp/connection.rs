@@ -162,6 +162,13 @@ impl AcpConnection {
         for (k, v) in env {
             cmd.env(k, expand_env(v));
         }
+        if !env.is_empty() {
+            let keys: Vec<&String> = env.keys().collect();
+            tracing::warn!(
+                ?keys,
+                "⚠️ [agent].env is set — these values are accessible to the agent and could be exfiltrated via prompt injection"
+            );
+        }
         let mut proc = cmd
             .spawn()
             .map_err(|e| anyhow!("failed to spawn {command}: {e}"))?;
