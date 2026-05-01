@@ -129,7 +129,10 @@ pub async fn webhook(
                     }
                 }
             }
-            None => continue,
+            None => {
+                warn!("LINE event missing source, skipping");
+                continue;
+            }
         };
         let user_id = source
             .and_then(|s| s.user_id.as_deref())
