@@ -51,6 +51,43 @@ kubectl rollout restart deployment/openab-kiro
 | `~/.kiro/` | Settings, skills, sessions |
 | `~/.local/share/kiro-cli/` | OAuth tokens (`data.sqlite3` → `auth_kv` table), conversation history |
 
+## Default Agent Resources
+
+When Kiro CLI starts with the built-in `kiro_default` agent, it automatically reads the following resources into context:
+
+| Resource | Description |
+|----------|-------------|
+| `AGENTS.md` | Agent coordination file (if exists in working dir) |
+| `README.md` | Project readme (if exists in working dir) |
+| `.kiro/skills/*/SKILL.md` | Skill files (local and global `~/.kiro/skills/`) |
+| `.kiro/steering/**/*.md` | Steering docs (local and global, if exists) |
+| `AmazonQ.md` | Legacy prompt file (if exists in working dir) |
+
+> **Tip:** Place an `AGENTS.md` in the agent's working directory (default: `/home/agent`) to provide persistent context — identity, instructions, or project-specific knowledge — that the agent reads on every session start.
+
+### Customizing the Default Agent
+
+You can override the default agent by creating a custom agent config:
+
+```bash
+# Inside the pod or on the PVC
+cat > ~/.kiro/agents/my-agent.json << 'EOF'
+{
+  "name": "my-agent",
+  "prompt": "You are a helpful assistant.",
+  "tools": ["*"],
+  "resources": [
+    "file://AGENTS.md",
+    "file://README.md",
+    "skill://.kiro/skills/**/SKILL.md"
+  ]
+}
+EOF
+
+# Set as default
+kiro-cli settings chat.defaultAgent my-agent
+```
+
 ## Slash Commands
 
 | Command | Purpose | Status |
