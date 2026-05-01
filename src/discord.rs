@@ -778,10 +778,17 @@ impl Handler {
     }
 
     /// Build the full component rows (select menu + optional pagination) for a config category.
-    fn build_config_components(options: &[ConfigOption], category: &str, page: usize) -> Option<Vec<CreateActionRow>> {
+    /// When `page` is `None`, auto-selects the page containing the current value.
+    fn build_config_components(options: &[ConfigOption], category: &str, page: Option<usize>) -> Option<Vec<CreateActionRow>> {
         let opt = options.iter().find(|o| o.category.as_deref() == Some(category))?;
         let total_pages = opt.options.len().div_ceil(SELECT_MENU_PAGE_SIZE);
-        let page = page.min(total_pages.saturating_sub(1));
+        let page = match page {
+            Some(p) => p.min(total_pages.saturating_sub(1)),
+            None => opt.options.iter()
+                .position(|o| o.value == opt.current_value)
+                .map(|i| i / SELECT_MENU_PAGE_SIZE)
+                .unwrap_or(0),
+        };
 
         let select = Self::build_config_select(options, category, page)?;
         let mut rows = vec![CreateActionRow::SelectMenu(select)];
@@ -801,7 +808,7 @@ impl Handler {
         let thread_key = format!("discord:{}", cmd.channel_id.get());
         let config_options = self.router.pool().get_config_options(&thread_key).await;
 
-        let response = match Self::build_config_components(&config_options, category, 0) {
+        let response = match Self::build_config_components(&config_options, category, None) {
             Some(rows) => CreateInteractionResponse::Message(
                 CreateInteractionResponseMessage::new()
                     .content(format!("🔧 Select a {label}:"))
@@ -936,10 +943,15 @@ impl Handler {
             _ => return,
         };
 
+        // Only allow known config categories.
+        if !matches!(category, "model" | "agent") {
+            return;
+        }
+
         let thread_key = format!("discord:{}", comp.channel_id.get());
         let config_options = self.router.pool().get_config_options(&thread_key).await;
 
-        let response = match Self::build_config_components(&config_options, category, page) {
+        let response = match Self::build_config_components(&config_options, category, Some(page)) {
             Some(rows) => CreateInteractionResponse::UpdateMessage(
                 CreateInteractionResponseMessage::new()
                     .content(format!("🔧 Select a {category}:"))
