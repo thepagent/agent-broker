@@ -43,35 +43,11 @@ Discord/Slack event
 
 Understand this pipeline before modifying any adapter code.
 
-## Rust Conventions
-
-### Do
-- `cargo fmt` + `cargo clippy -- -D warnings` before every commit
-- Use `?` operator and `thiserror` enums for error handling
-- Use `tracing` macros (`debug!`, `info!`, `warn!`, `error!`) — never `println!`
-- Keep functions <50 lines, modules focused on one responsibility
-- Test boundary cases: empty input, max limits, platform API constraints
-
-### Do NOT
-- `.unwrap()` / `.expect()` in production code — only in `#[cfg(test)]`
-- `unsafe` without safety comment and explicit justification
-- Blocking calls in async context — use `tokio::task::spawn_blocking`
-- Global mutable state — pass via function args or `Arc<T>`
-- Premature `.collect()` — keep iterators lazy
-
-## Critical Rules (from past incidents)
+## Critical Rules
 
 ### 1. Backward-Compatible Defaults
 
 New config fields MUST default to the previous behavior. Never change what existing deployments experience without an explicit opt-in.
-
-```rust
-// WRONG: changes behavior for existing users
-tool_display: String = "compact".to_string()
-
-// RIGHT: preserves existing behavior
-tool_display: String = "full".to_string()  // was always "full" before
-```
 
 ### 2. Thread Detection
 
@@ -89,11 +65,11 @@ Agent subprocesses start with `env_clear()`. Only `HOME`, `PATH`, and explicit `
 
 There are 7 Dockerfiles: `Dockerfile`, `Dockerfile.claude`, `Dockerfile.codex`, `Dockerfile.copilot`, `Dockerfile.cursor`, `Dockerfile.gemini`, `Dockerfile.opencode`.
 
-**A change to one MUST be evaluated against ALL.** Common layers (base image, openab binary, tini) are shared — update all or explain why not.
+A change to one MUST be evaluated against ALL. Common layers (base image, openab binary, tini) are shared — update all or explain why not.
 
 ### 5. Cross-Platform
 
-Gate platform-specific code with `#[cfg(target_os = "...")]`. After adding Unix-only calls (libc, signals), verify with:
+Gate platform-specific code with `#[cfg(target_os = "...")]`. After adding Unix-only calls (libc, signals), verify:
 ```bash
 cargo check --target x86_64-pc-windows-gnu
 ```
@@ -102,25 +78,18 @@ cargo check --target x86_64-pc-windows-gnu
 
 - Select menu: max 25 options (truncate with count, don't crash)
 - Message content: max 2000 chars (use `format.rs` splitting)
-- Embeds: max 4096 chars description
-- Rate limits: respect `Ratelimit` headers, use serenity's built-in ratelimiter
+- Rate limits: respect serenity's built-in ratelimiter
 
 ## Helm Chart Checklist
 
 Before merging any chart change:
 
 ```bash
-# Minimal values (default kiro agent)
 helm template test charts/openab
-
-# Full values (all agents enabled)
 helm template test charts/openab -f charts/openab/ci/full-values.yaml
-
-# Disabled agent path
 helm template test charts/openab --set agents.kiro.enabled=false
 ```
 
-Rules:
 - Boolean fields: use `{{ if hasKey .Values "field" }}` not `{{ if .Values.field }}` (Go nil trap)
 - Channel/user IDs: always `--set-string` (float64 precision loss)
 - PVCs: set `"helm.sh/resource-policy": keep` — never delete user data on uninstall
@@ -135,22 +104,31 @@ If your change alters existing behavior:
 3. Update relevant docs with migration callout
 4. Ensure release note has ⚠️ Breaking Change section
 
+## Build & Verify
+
+```bash
+cargo fmt
+cargo clippy -- -D warnings
+cargo test
+```
+
+All three must pass before pushing. For cross-platform changes, add:
+```bash
+cargo check --target x86_64-pc-windows-gnu
+```
+
 ## PR Standards
 
 - One logical change per PR
 - Commit message: `type(scope): description` — types: `feat`, `fix`, `docs`, `refactor`, `test`, `ci`, `build`
-- Include tests for bug fixes (regression test proving the fix)
-- Run full check before pushing:
-  ```bash
-  cargo fmt && cargo clippy -- -D warnings && cargo test
-  ```
-- Reference issue numbers: `Closes #123` or `Fixes #456`
+- Include regression tests for bug fixes
+- Reference issues: `Closes #123` or `Fixes #456`
 
-## ADRs (Architecture Decision Records)
+## ADRs
 
 Read `docs/adr/` before implementing features in these areas:
 - Cron scheduler → `docs/adr/basic-cronjob.md`
 - Custom Gateway → `docs/adr/custom-gateway.md`
 - LINE adapter → `docs/adr/line-adapter.md`
 
-Write a new ADR if your feature touches >3 files or introduces a new subsystem.
+Write a new ADR if your feature introduces a new subsystem.
