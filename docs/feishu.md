@@ -11,7 +11,7 @@ Connect OpenAB to Feishu (China) or Lark (international) so users can chat with 
 5. Grant the following permission scopes:
    - `im:message` — receive messages
    - `im:message:send_as_bot` — send messages as bot
-   - `contact:user.base:readonly` — resolve sender names (optional)
+   - `contact:user.base:readonly` — resolve sender display names (recommended; without it, senders show as `ou_xxx`)
 6. Copy the **App ID** and **App Secret** from **Credentials & Basic Info**.
 
 ## Quick Start (Helm)

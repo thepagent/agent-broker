@@ -481,6 +481,7 @@ pub struct FeishuAdapter {
     pub bot_open_id: Arc<RwLock<Option<String>>>,
     pub dedupe: Arc<DedupeCache>,
     pub rate_limiter: Arc<RateLimiter>,
+    pub name_cache: Arc<std::sync::Mutex<HashMap<String, String>>>,
     pub client: reqwest::Client,
 }
 
@@ -495,6 +496,7 @@ impl FeishuAdapter {
             dedupe,
             rate_limiter,
             bot_open_id: Arc::new(RwLock::new(None)),
+            name_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
             client: reqwest::Client::new(),
         }
     }
@@ -586,6 +588,7 @@ pub async fn start_websocket(
     let dedupe = adapter.dedupe.clone();
     let config = adapter.config.clone();
     let client = adapter.client.clone();
+    let name_cache = adapter.name_cache.clone();
 
     let handle = tokio::spawn(async move {
         let mut backoff_secs = 1u64;
@@ -598,6 +601,7 @@ pub async fn start_websocket(
                 &client,
                 &event_tx,
                 &mut shutdown_rx,
+                &name_cache,
             )
             .await;
 
@@ -636,6 +640,7 @@ async fn ws_connect_loop(
     client: &reqwest::Client,
     event_tx: &broadcast::Sender<String>,
     shutdown_rx: &mut watch::Receiver<bool>,
+    name_cache: &Arc<std::sync::Mutex<HashMap<String, String>>>,
 ) -> anyhow::Result<()> {
     let api_base = config.api_base();
 
@@ -663,6 +668,7 @@ async fn ws_connect_loop(
                     Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
                         handle_ws_message(
                             &text, bot_open_id_store, dedupe, config, event_tx,
+                            name_cache, token_cache, client,
                         ).await;
                     }
                     Some(Ok(tokio_tungstenite::tungstenite::Message::Ping(data))) => {
@@ -682,6 +688,7 @@ async fn ws_connect_loop(
                                     if let Ok(text) = String::from_utf8(payload.clone()) {
                                         handle_ws_message(
                                             &text, bot_open_id_store, dedupe, config, event_tx,
+                                            name_cache, token_cache, client,
                                         ).await;
                                     }
                                 }
@@ -709,6 +716,9 @@ async fn handle_ws_message(
     dedupe: &Arc<DedupeCache>,
     config: &FeishuConfig,
     event_tx: &broadcast::Sender<String>,
+    name_cache: &Arc<std::sync::Mutex<HashMap<String, String>>>,
+    token_cache: &Arc<FeishuTokenCache>,
+    client: &reqwest::Client,
 ) {
     let envelope: FeishuEventEnvelope = match serde_json::from_str(text) {
         Ok(e) => e,
@@ -744,11 +754,17 @@ async fn handle_ws_message(
     let bot_id = bot_open_id_store.read().await;
     let bot_id_ref = bot_id.as_deref();
 
-    if let Some(gateway_event) = parse_message_event(&envelope, bot_id_ref, config) {
+    if let Some(mut gateway_event) = parse_message_event(&envelope, bot_id_ref, config) {
         // Also dedupe by message_id
         if dedupe.is_duplicate(&gateway_event.message_id) {
             return;
         }
+        // Resolve sender display name (lazy, cached)
+        let name = resolve_user_name(
+            &gateway_event.sender.id, name_cache, token_cache, client, &config.api_base(),
+        ).await;
+        gateway_event.sender.name = name.clone();
+        gateway_event.sender.display_name = name;
         let json = serde_json::to_string(&gateway_event).unwrap();
         info!(
             channel = %gateway_event.channel.id,
@@ -757,6 +773,45 @@ async fn handle_ws_message(
         );
         let _ = event_tx.send(json);
     }
+}
+
+/// Resolve user display name from open_id via Contact API, with caching.
+async fn resolve_user_name(
+    open_id: &str,
+    name_cache: &Arc<std::sync::Mutex<HashMap<String, String>>>,
+    token_cache: &Arc<FeishuTokenCache>,
+    client: &reqwest::Client,
+    api_base: &str,
+) -> String {
+    {
+        let cache = name_cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(name) = cache.get(open_id) {
+            return name.clone();
+        }
+    }
+    let token = match token_cache.get_token(client).await {
+        Ok(t) => t,
+        Err(_) => return open_id.to_string(),
+    };
+    let url = format!(
+        "{}/open-apis/contact/v3/users/{}?user_id_type=open_id",
+        api_base, open_id
+    );
+    let name = match client.get(&url).bearer_auth(&token).send().await {
+        Ok(resp) => {
+            let body: serde_json::Value = resp.json().await.unwrap_or_default();
+            body.pointer("/data/user/name")
+                .and_then(|v| v.as_str())
+                .unwrap_or(open_id)
+                .to_string()
+        }
+        Err(_) => open_id.to_string(),
+    };
+    let mut cache = name_cache.lock().unwrap_or_else(|e| e.into_inner());
+    if cache.len() < 10_000 {
+        cache.insert(open_id.to_string(), name.clone());
+    }
+    name
 }
 
 // ---------------------------------------------------------------------------
@@ -1215,8 +1270,14 @@ pub async fn webhook(
     let bot_id = feishu.bot_open_id.read().await;
     let bot_id_ref = bot_id.as_deref();
 
-    if let Some(gateway_event) = parse_message_event(&envelope, bot_id_ref, &feishu.config) {
+    if let Some(mut gateway_event) = parse_message_event(&envelope, bot_id_ref, &feishu.config) {
         if !feishu.dedupe.is_duplicate(&gateway_event.message_id) {
+            let name = resolve_user_name(
+                &gateway_event.sender.id, &feishu.name_cache, &feishu.token_cache,
+                &feishu.client, &feishu.config.api_base(),
+            ).await;
+            gateway_event.sender.name = name.clone();
+            gateway_event.sender.display_name = name;
             let json = serde_json::to_string(&gateway_event).unwrap();
             info!(
                 channel = %gateway_event.channel.id,
@@ -1563,5 +1624,68 @@ mod tests {
         assert!(!rl.check("ip1"));
         assert!(!rl.check("ip1"));
         assert!(rl.check("ip1")); // 3rd request exceeds limit of 2
+    }
+
+    // --- Name resolution tests ---
+
+    #[tokio::test]
+    async fn resolve_user_name_success_and_cache() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/open-apis/auth/v3/tenant_access_token/internal"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0, "tenant_access_token": "t-tok", "expire": 7200
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/open-apis/contact/v3/users/ou_user1"))
+            .and(header("authorization", "Bearer t-tok"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0,
+                "data": { "user": { "name": "Alice", "open_id": "ou_user1" } }
+            })))
+            .expect(1) // should only be called once (cached on second call)
+            .mount(&server)
+            .await;
+
+        let config = test_config();
+        let token_cache = Arc::new(FeishuTokenCache::with_base(&config, &server.uri()));
+        let name_cache = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let client = reqwest::Client::new();
+
+        let name = resolve_user_name("ou_user1", &name_cache, &token_cache, &client, &server.uri()).await;
+        assert_eq!(name, "Alice");
+
+        // Second call should use cache (expect(1) above ensures no second API call)
+        let name2 = resolve_user_name("ou_user1", &name_cache, &token_cache, &client, &server.uri()).await;
+        assert_eq!(name2, "Alice");
+    }
+
+    #[tokio::test]
+    async fn resolve_user_name_api_error_falls_back_to_open_id() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/open-apis/auth/v3/tenant_access_token/internal"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0, "tenant_access_token": "t-tok", "expire": 7200
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/open-apis/contact/v3/users/ou_unknown"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 40003, "msg": "user not found"
+            })))
+            .mount(&server)
+            .await;
+
+        let config = test_config();
+        let token_cache = Arc::new(FeishuTokenCache::with_base(&config, &server.uri()));
+        let name_cache = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let client = reqwest::Client::new();
+
+        let name = resolve_user_name("ou_unknown", &name_cache, &token_cache, &client, &server.uri()).await;
+        assert_eq!(name, "ou_unknown");
     }
 }
