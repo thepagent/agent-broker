@@ -797,21 +797,24 @@ async fn resolve_user_name(
         "{}/open-apis/contact/v3/users/{}?user_id_type=open_id",
         api_base, open_id
     );
-    let name = match client.get(&url).bearer_auth(&token).send().await {
+    let resolved = match client.get(&url).bearer_auth(&token).send().await {
         Ok(resp) => {
             let body: serde_json::Value = resp.json().await.unwrap_or_default();
             body.pointer("/data/user/name")
                 .and_then(|v| v.as_str())
-                .unwrap_or(open_id)
-                .to_string()
+                .map(|s| s.to_string())
         }
-        Err(_) => open_id.to_string(),
+        Err(_) => None,
     };
-    let mut cache = name_cache.lock().unwrap_or_else(|e| e.into_inner());
-    if cache.len() < 10_000 {
-        cache.insert(open_id.to_string(), name.clone());
+    // Only cache successful resolutions — don't cache fallback open_id
+    // so retries can succeed after permissions are granted.
+    if let Some(ref name) = resolved {
+        let mut cache = name_cache.lock().unwrap_or_else(|e| e.into_inner());
+        if cache.len() < 10_000 {
+            cache.insert(open_id.to_string(), name.clone());
+        }
     }
-    name
+    resolved.unwrap_or_else(|| open_id.to_string())
 }
 
 // ---------------------------------------------------------------------------
