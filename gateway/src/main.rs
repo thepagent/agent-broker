@@ -256,6 +256,11 @@ async fn main() -> Result<()> {
     }
     let feishu = feishu_config.map(adapters::feishu::FeishuAdapter::new);
 
+    // Resolve feishu bot identity early (needed for mention gating in both modes)
+    if let Some(ref f) = feishu {
+        f.resolve_bot_identity().await;
+    }
+
     if telegram_bot_token.is_none()
         && line_access_token.is_none()
         && teams.is_none()
@@ -325,7 +330,9 @@ async fn main() -> Result<()> {
     let app = app.with_state(state.clone());
 
     // Spawn feishu WebSocket long-connection if configured
-    let (_feishu_shutdown_tx, feishu_shutdown_rx) = tokio::sync::watch::channel(false);
+    // feishu_shutdown_tx must remain alive for the lifetime of main() — dropping
+    // it signals shutdown to the WS task via feishu_shutdown_rx.
+    let (feishu_shutdown_tx, feishu_shutdown_rx) = tokio::sync::watch::channel(false);
     if feishu_ws_mode {
         if let Some(ref feishu) = state.feishu {
             match adapters::feishu::start_websocket(feishu, state.event_tx.clone(), feishu_shutdown_rx).await {
@@ -338,6 +345,7 @@ async fn main() -> Result<()> {
     info!(addr = %listen_addr, "gateway starting");
     let listener = tokio::net::TcpListener::bind(&listen_addr).await?;
     axum::serve(listener, app).await?;
+    drop(feishu_shutdown_tx);
     Ok(())
 }
 

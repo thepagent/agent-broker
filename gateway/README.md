@@ -53,6 +53,14 @@ url = "ws://gateway:8080/ws"
 | `FEISHU_APP_SECRET` | (optional) | Feishu/Lark App Secret |
 | `FEISHU_DOMAIN` | `feishu` | `feishu` (China) or `lark` (international) |
 | `FEISHU_CONNECTION_MODE` | `websocket` | `websocket` (recommended) or `webhook` |
+| `FEISHU_WEBHOOK_PATH` | `/webhook/feishu` | Webhook endpoint path |
+| `FEISHU_VERIFICATION_TOKEN` | (optional) | Webhook verification token |
+| `FEISHU_ENCRYPT_KEY` | (optional) | Webhook encrypt key for AES-256-CBC |
+| `FEISHU_ALLOWED_GROUPS` | (optional) | Comma-separated chat_id allowlist |
+| `FEISHU_ALLOWED_USERS` | (optional) | Comma-separated open_id allowlist |
+| `FEISHU_REQUIRE_MENTION` | `true` | Require @mention in groups |
+| `FEISHU_DEDUPE_TTL_SECS` | `300` | Event deduplication cache TTL (seconds) |
+| `FEISHU_MESSAGE_LIMIT` | `4000` | Max message length before auto-splitting (bytes) |
 
 ### Endpoints
 

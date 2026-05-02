@@ -8,6 +8,15 @@ use std::time::Instant;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
+/// Timing-safe string comparison to prevent side-channel attacks on tokens.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    if a.len() != b.len() {
+        return false;
+    }
+    a.as_bytes().ct_eq(b.as_bytes()).into()
+}
+
 // ---------------------------------------------------------------------------
 // Feishu WebSocket protobuf frame (pbbp2.Frame)
 // ---------------------------------------------------------------------------
@@ -144,10 +153,6 @@ fn parse_csv(var: &str) -> Vec<String> {
 // Feishu event types (im.message.receive_v1)
 // ---------------------------------------------------------------------------
 
-// These types and functions are used by parse_message_event, which will be
-// called from WebSocket/Webhook handlers in Step 4/5. Allow dead_code until
-// those callers are wired up.
-#[allow(dead_code)]
 mod event_types {
     use super::*;
 
@@ -319,7 +324,7 @@ mod event_types {
                 ids.push(oid.to_string());
                 if let Some(key) = m.key.as_deref() {
                     if bot_open_id == Some(oid) {
-                        text = text.replace(key, "");
+                        text = text.replacen(key, "", 1);
                     }
                 }
             }
@@ -328,7 +333,6 @@ mod event_types {
     }
 }
 
-#[allow(unused_imports)]
 pub use event_types::*;
 
 // ---------------------------------------------------------------------------
@@ -372,7 +376,8 @@ impl DedupeCache {
 // ---------------------------------------------------------------------------
 
 pub struct FeishuTokenCache {
-    token: RwLock<Option<(String, Instant)>>,
+    /// (token, created_at, ttl_secs)
+    token: RwLock<Option<(String, Instant, u64)>>,
     api_base: String,
     app_id: String,
     app_secret: String,
@@ -406,8 +411,8 @@ impl FeishuTokenCache {
         // Fast path: read lock
         {
             let guard = self.token.read().await;
-            if let Some((ref tok, ref ts)) = *guard {
-                if ts.elapsed().as_secs() < 7200 - TOKEN_REFRESH_MARGIN_SECS {
+            if let Some((ref tok, ref ts, ttl)) = *guard {
+                if ts.elapsed().as_secs() < ttl.saturating_sub(TOKEN_REFRESH_MARGIN_SECS) {
                     return Ok(tok.clone());
                 }
             }
@@ -415,17 +420,17 @@ impl FeishuTokenCache {
         // Slow path: write lock + refresh
         let mut guard = self.token.write().await;
         // Double-check after acquiring write lock
-        if let Some((ref tok, ref ts)) = *guard {
-            if ts.elapsed().as_secs() < 7200 - TOKEN_REFRESH_MARGIN_SECS {
+        if let Some((ref tok, ref ts, ttl)) = *guard {
+            if ts.elapsed().as_secs() < ttl.saturating_sub(TOKEN_REFRESH_MARGIN_SECS) {
                 return Ok(tok.clone());
             }
         }
-        let new_token = self.refresh(client).await?;
-        *guard = Some((new_token.clone(), Instant::now()));
+        let (new_token, expire) = self.refresh(client).await?;
+        *guard = Some((new_token.clone(), Instant::now(), expire));
         Ok(new_token)
     }
 
-    async fn refresh(&self, client: &reqwest::Client) -> anyhow::Result<String> {
+    async fn refresh(&self, client: &reqwest::Client) -> anyhow::Result<(String, u64)> {
         let url = format!(
             "{}/open-apis/auth/v3/tenant_access_token/internal",
             self.api_base
@@ -455,10 +460,14 @@ impl FeishuTokenCache {
             anyhow::bail!("feishu token refresh error: code={code} msg={msg} status={status}");
         }
 
-        body.get("tenant_access_token")
+        let expire = body.get("expire").and_then(|v| v.as_u64()).unwrap_or(7200);
+
+        let token = body.get("tenant_access_token")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .ok_or_else(|| anyhow::anyhow!("feishu token refresh: missing tenant_access_token"))
+            .ok_or_else(|| anyhow::anyhow!("feishu token refresh: missing tenant_access_token"))?;
+
+        Ok((token, expire))
     }
 }
 
@@ -487,6 +496,27 @@ impl FeishuAdapter {
             rate_limiter,
             bot_open_id: Arc::new(RwLock::new(None)),
             client: reqwest::Client::new(),
+        }
+    }
+
+    /// Resolve bot identity (open_id) via API. Called during startup for both
+    /// WebSocket and webhook modes so mention gating works in either mode.
+    pub async fn resolve_bot_identity(&self) {
+        let token = match self.token_cache.get_token(&self.client).await {
+            Ok(t) => t,
+            Err(e) => {
+                warn!(err = %e, "feishu bot identity lookup failed (token error), mention gating may not work");
+                return;
+            }
+        };
+        match get_bot_info(&self.client, &self.config.api_base(), &token).await {
+            Ok(bot_id) => {
+                info!(bot_open_id = %bot_id, "feishu bot identity resolved");
+                *self.bot_open_id.write().await = Some(bot_id);
+            }
+            Err(e) => {
+                warn!(err = %e, "feishu bot identity lookup failed, mention gating may not work");
+            }
         }
     }
 }
@@ -557,19 +587,6 @@ pub async fn start_websocket(
     let config = adapter.config.clone();
     let client = adapter.client.clone();
 
-    // Fetch bot identity
-    let token = token_cache.get_token(&client).await?;
-    let api_base = config.api_base();
-    match get_bot_info(&client, &api_base, &token).await {
-        Ok(bot_id) => {
-            info!(bot_open_id = %bot_id, "feishu bot identity resolved");
-            *bot_open_id_store.write().await = Some(bot_id);
-        }
-        Err(e) => {
-            warn!(err = %e, "feishu bot identity lookup failed, mention gating may not work");
-        }
-    }
-
     let handle = tokio::spawn(async move {
         let mut backoff_secs = 1u64;
         loop {
@@ -612,7 +629,7 @@ pub async fn start_websocket(
 
 /// Single WebSocket connection lifecycle.
 async fn ws_connect_loop(
-    _token_cache: &Arc<FeishuTokenCache>,
+    token_cache: &Arc<FeishuTokenCache>,
     bot_open_id_store: &Arc<RwLock<Option<String>>>,
     dedupe: &Arc<DedupeCache>,
     config: &FeishuConfig,
@@ -621,6 +638,17 @@ async fn ws_connect_loop(
     shutdown_rx: &mut watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     let api_base = config.api_base();
+
+    // Refresh bot identity on each reconnect in case it was not resolved earlier
+    if bot_open_id_store.read().await.is_none() {
+        if let Ok(token) = token_cache.get_token(client).await {
+            if let Ok(bot_id) = get_bot_info(client, &api_base, &token).await {
+                info!(bot_open_id = %bot_id, "feishu bot identity resolved on reconnect");
+                *bot_open_id_store.write().await = Some(bot_id);
+            }
+        }
+    }
+
     let ws_url = get_ws_endpoint(client, &api_base, &config.app_id, &config.app_secret).await?;
     info!(url = %ws_url, "feishu websocket connecting");
 
@@ -686,6 +714,12 @@ async fn handle_ws_message(
         Ok(e) => e,
         Err(_) => return,
     };
+
+    // Handle challenge frame (Feishu may send this in WS mode for verification)
+    if let Some(ref challenge) = envelope.challenge {
+        tracing::debug!(challenge = %challenge, "feishu ws challenge received (ignored in WS mode)");
+        return;
+    }
 
     // Debug: log sender_type for diagnosing bot-to-bot loops
     if let Some(ref event) = envelope.event {
@@ -995,7 +1029,7 @@ fn verify_signature(
     hasher.update(encrypt_key.as_bytes());
     hasher.update(body);
     let result = format!("{:x}", hasher.finalize());
-    result == expected_sig
+    constant_time_eq(&result, expected_sig)
 }
 
 /// Decrypt AES-CBC encrypted event body.
@@ -1085,6 +1119,8 @@ pub async fn webhook(
                 return axum::http::StatusCode::UNAUTHORIZED.into_response();
             }
         }
+    } else {
+        warn!("FEISHU_ENCRYPT_KEY not configured — webhook signature verification is SKIPPED (insecure)");
     }
 
     // Parse body — may be encrypted
@@ -1127,9 +1163,12 @@ pub async fn webhook(
         // Verify token if configured
         if let Some(ref expected_token) = feishu.config.verification_token {
             let token = event_json.get("token").and_then(|v| v.as_str());
-            if token != Some(expected_token.as_str()) {
-                warn!("feishu webhook: URL verification token mismatch");
-                return axum::http::StatusCode::UNAUTHORIZED.into_response();
+            match token {
+                Some(t) if constant_time_eq(t, expected_token) => {}
+                _ => {
+                    warn!("feishu webhook: URL verification token mismatch");
+                    return axum::http::StatusCode::UNAUTHORIZED.into_response();
+                }
             }
         }
         let challenge = event_json["challenge"].as_str().unwrap_or("");
@@ -1142,9 +1181,12 @@ pub async fn webhook(
             .pointer("/header/token")
             .or_else(|| event_json.get("token"))
             .and_then(|v| v.as_str());
-        if token != Some(expected_token.as_str()) {
-            warn!("feishu webhook rejected: invalid verification token");
-            return axum::http::StatusCode::UNAUTHORIZED.into_response();
+        match token {
+            Some(t) if constant_time_eq(t, expected_token) => {}
+            _ => {
+                warn!("feishu webhook rejected: invalid verification token");
+                return axum::http::StatusCode::UNAUTHORIZED.into_response();
+            }
         }
     }
 
