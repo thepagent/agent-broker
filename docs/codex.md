@@ -18,6 +18,7 @@ The image installs `@zed-industries/codex-acp` and `@openai/codex` globally via 
 ```bash
 helm install openab openab/openab \
   --set agents.kiro.enabled=false \
+  --set agents.codex.discord.enabled=true \
   --set agents.codex.discord.botToken="$DISCORD_BOT_TOKEN" \
   --set-string 'agents.codex.discord.allowedChannels[0]=YOUR_CHANNEL_ID' \
   --set agents.codex.image=ghcr.io/openabdev/openab-codex:latest \
