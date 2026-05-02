@@ -15,6 +15,7 @@ use serenity::model::channel::{AutoArchiveDuration, Message, MessageType, Reacti
 use serenity::model::gateway::Ready;
 use serenity::model::id::{ChannelId, MessageId, UserId};
 use serenity::prelude::*;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 use tracing::{debug, error, info};
@@ -1089,12 +1090,29 @@ async fn resolve_referenced_message(msg: &Message, http: &Http) -> Option<Messag
     }
 }
 
+/// Maximum length (in bytes) for quoted content before truncation.
+const MAX_QUOTE_LENGTH: usize = 1500;
+
 /// Format a quoted message block to prepend to the user's prompt.
 fn format_quote_context(author_name: &str, quoted_content: &str, prompt: &str) -> String {
     if quoted_content.is_empty() {
         return prompt.to_string();
     }
-    format!("[Quoted message from @{author_name}]:\n{quoted_content}\n\n{prompt}")
+    let content = truncate_utf8(quoted_content, MAX_QUOTE_LENGTH);
+    format!("[Quoted message from @{author_name}]:\n{content}\n\n{prompt}")
+}
+
+/// Truncate a string to at most `max_bytes` bytes on a valid UTF-8 char boundary.
+fn truncate_utf8(s: &str, max_bytes: usize) -> Cow<'_, str> {
+    if s.len() <= max_bytes {
+        return Cow::Borrowed(s);
+    }
+    // Find the last char boundary at or before max_bytes
+    let mut end = max_bytes;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    Cow::Owned(format!("{}… [truncated]", &s[..end]))
 }
 
 static ROLE_MENTION_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
@@ -1839,5 +1857,31 @@ mod tests {
             result,
             "[Quoted message from @Bot]:\nline1\nline2\nline3\n\nexplain"
         );
+    }
+
+    /// Long quoted content is truncated at MAX_QUOTE_LENGTH.
+    #[test]
+    fn format_quote_truncates_long_content() {
+        let long = "a".repeat(2000);
+        let result = format_quote_context("Alice", &long, "summarize");
+        assert!(result.contains("… [truncated]"));
+        // The quoted portion (between header and prompt) should be ≤ MAX_QUOTE_LENGTH + marker
+        let quoted_part = result
+            .strip_prefix("[Quoted message from @Alice]:\n")
+            .unwrap()
+            .strip_suffix("\n\nsummarize")
+            .unwrap();
+        assert!(quoted_part.len() < 2000);
+    }
+
+    /// Truncation respects UTF-8 char boundaries.
+    #[test]
+    fn format_quote_truncates_utf8_safe() {
+        // '你' is 3 bytes; fill just over the limit
+        let cjk = "你".repeat(600); // 1800 bytes
+        let result = format_quote_context("Bob", &cjk, "ok");
+        assert!(result.contains("… [truncated]"));
+        // Must be valid UTF-8 (would panic on construction if not)
+        assert!(result.is_char_boundary(result.len()));
     }
 }
