@@ -912,15 +912,19 @@ pub async fn handle_reply(
 }
 
 /// Split text into chunks of at most `limit` bytes, breaking at newline or
-/// space boundaries when possible.
+/// space boundaries when possible. Safe for multi-byte UTF-8 (e.g. Chinese).
 fn split_text(text: &str, limit: usize) -> Vec<&str> {
     let mut chunks = Vec::new();
     let mut start = 0;
     while start < text.len() {
-        let end = (start + limit).min(text.len());
-        if end == text.len() {
+        if start + limit >= text.len() {
             chunks.push(&text[start..]);
             break;
+        }
+        // Find a char-safe boundary at or before start + limit
+        let mut end = start + limit;
+        while !text.is_char_boundary(end) {
+            end -= 1;
         }
         // Try to break at a newline or space within the last 200 bytes
         let search_start = if end > start + 200 { end - 200 } else { start };
@@ -1315,6 +1319,17 @@ mod tests {
         let text = "a".repeat(100);
         let chunks = split_text(&text, 100);
         assert_eq!(chunks.len(), 1);
+    }
+
+    #[test]
+    fn split_text_chinese_utf8_safe() {
+        // Each Chinese char is 3 bytes. 20 chars = 60 bytes.
+        // Limit 10 would land mid-char without boundary check.
+        let text = "你好世界測試飛書中文聊天消息分割安全驗證完成";
+        let chunks = split_text(text, 10);
+        assert!(chunks.len() > 1);
+        let reassembled: String = chunks.concat();
+        assert_eq!(reassembled, text);
     }
 
     #[test]
