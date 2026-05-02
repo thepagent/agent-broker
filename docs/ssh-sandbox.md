@@ -39,7 +39,7 @@ args = [
   "-o", "BatchMode=yes",                    # fail-fast, no interactive prompts
   "-o", "ServerAliveInterval=30",           # keep-alive for long sessions
   "-o", "ServerAliveCountMax=3",
-  "-o", "StrictHostKeyChecking=accept-new", # daemon has no terminal for prompts
+  "-o", "StrictHostKeyChecking=accept-new", # TOFU on first connect; pre-populate known_hosts in production
   "user@sandbox-host",
   "claude", "--acp"
 ]
@@ -55,6 +55,16 @@ working_dir = "/tmp"
 | `-tt` | Forced PTY + piped stdin → hangs indefinitely | No — deadlock |
 
 PTY inserts CR/LF conversion (`\n` → `\r\n`), merges stderr into stdout, and enables echo mode — all of which break JSON-RPC parsing. **`-T` is mandatory, not optional.**
+
+### `StrictHostKeyChecking=accept-new` and TOFU
+
+`accept-new` trusts the host key on first connection without prompting. This is safe for ephemeral local VMs but is trust-on-first-use (TOFU) semantics. For production environments, pre-populate `~/.ssh/known_hosts` manually:
+
+```bash
+ssh-keyscan sandbox-host >> ~/.ssh/known_hosts
+```
+
+Then switch to `StrictHostKeyChecking=yes` for stronger verification.
 
 ### Why `BatchMode=yes`
 
@@ -101,7 +111,7 @@ claude (container) ──http://localhost:PORT──► MCP server (host)
 Killing the local SSH client process leaves the remote subprocess running. The SSH server sends SIGHUP to the remote shell, but the agent may survive (especially with `nohup` or ControlMaster active).
 
 Mitigations:
-- Do **not** use SSH ControlMaster for agent connections
+- Do **not** use SSH ControlMaster for agent connections. If your `~/.ssh/config` has `ControlMaster auto`, add `ControlMaster no` to the sandbox host entry.
 - Ensure the SSH server has `ClientAliveInterval` set to detect dead clients
 - Session pool TTL cleanup (`session_ttl_hours`) will eventually reclaim idle sessions
 

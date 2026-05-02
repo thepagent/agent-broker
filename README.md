@@ -184,7 +184,7 @@ args = [
   "user@sandbox-host",
   "claude", "--acp"
 ]
-working_dir = "/tmp"
+working_dir = "/tmp"                        # local cwd for the SSH process, not the remote agent's workdir
 ```
 
 See [docs/ssh-sandbox.md](docs/ssh-sandbox.md) for setup details, MCP server access patterns, and known limitations.
