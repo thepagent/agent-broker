@@ -48,7 +48,9 @@ pub struct AppState {
     pub teams_service_urls: Mutex<HashMap<String, (String, Instant)>>,
     /// Feishu adapter (None if Feishu disabled)
     pub feishu: Option<adapters::feishu::FeishuAdapter>,
-    /// Google Chat access token for reply API (None if not configured)
+    /// Google Chat token cache for auto-refresh (from service account key)
+    pub google_chat_token_cache: Option<adapters::googlechat::GoogleChatTokenCache>,
+    /// Google Chat static access token (fallback if no SA key)
     pub google_chat_access_token: Option<String>,
     /// WebSocket authentication token
     pub ws_token: Option<String>,
@@ -167,6 +169,7 @@ async fn handle_oab_connection(state: Arc<AppState>, socket: axum::extract::ws::
                             "googlechat" => {
                                 adapters::googlechat::handle_reply(
                                     &reply,
+                                    state_for_recv.google_chat_token_cache.as_ref(),
                                     state_for_recv.google_chat_access_token.as_deref(),
                                     &client,
                                 )
@@ -273,6 +276,18 @@ async fn main() -> Result<()> {
 
     // Google Chat adapter
     let google_chat_access_token = std::env::var("GOOGLE_CHAT_ACCESS_TOKEN").ok();
+    let google_chat_token_cache = std::env::var("GOOGLE_CHAT_SA_KEY_JSON")
+        .ok()
+        .or_else(|| {
+            std::env::var("GOOGLE_CHAT_SA_KEY_FILE")
+                .ok()
+                .and_then(|path| std::fs::read_to_string(&path).ok())
+        })
+        .and_then(|json| {
+            adapters::googlechat::GoogleChatTokenCache::new(&json)
+                .map_err(|e| warn!("googlechat SA key error: {e}"))
+                .ok()
+        });
     let google_chat_enabled = std::env::var("GOOGLE_CHAT_ENABLED")
         .map(|v| v == "true" || v == "1")
         .unwrap_or(false);
@@ -281,8 +296,12 @@ async fn main() -> Result<()> {
             .unwrap_or_else(|_| "/webhook/googlechat".into());
         info!(path = %webhook_path, "googlechat adapter enabled");
         app = app.route(&webhook_path, post(adapters::googlechat::webhook));
-        if google_chat_access_token.is_none() {
-            warn!("GOOGLE_CHAT_ACCESS_TOKEN not set — replies will be logged but not sent");
+        if google_chat_token_cache.is_some() {
+            info!("googlechat service account configured — token auto-refresh enabled");
+        } else if google_chat_access_token.is_some() {
+            warn!("googlechat using static access token — will expire in ~1 hour");
+        } else {
+            warn!("GOOGLE_CHAT_ACCESS_TOKEN / GOOGLE_CHAT_SA_KEY_JSON not set — replies will be logged but not sent");
         }
     }
 
@@ -303,6 +322,7 @@ async fn main() -> Result<()> {
         teams,
         teams_service_urls: Mutex::new(HashMap::new()),
         feishu,
+        google_chat_token_cache,
         google_chat_access_token,
         ws_token,
         event_tx,
