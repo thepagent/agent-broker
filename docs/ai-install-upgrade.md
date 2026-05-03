@@ -151,8 +151,8 @@ rollback openab per the upgrade SOP — the upgrade to v0.7.7 failed
   │    the URL has rotated                           │
   │  ✓ (if usercron enabled) cronjob.toml loaded     │
   │    — check for "loaded usercron jobs" in logs;   │
-  │    if count=0, verify file is at                 │
-  │    $HOME/.openab/cronjob.toml (not $HOME/)       │
+  │    if you see "no cronjobs yet" instead, verify  │
+  │    file is at $HOME/.openab/cronjob.toml         │
   │                                                  │
   │  ALL PASS ──► proceed to 6. CLEANUP            │
   │  ANY FAIL ──► proceed to 5. ROLLBACK             │
