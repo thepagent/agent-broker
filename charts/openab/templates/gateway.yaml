@@ -194,9 +194,9 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if ($cfg.gateway).extraVolumes }}
+      {{- with ($cfg.gateway).extraVolumes }}
       volumes:
-        {{- toYaml ($cfg.gateway).extraVolumes | nindent 8 }}
+        {{- toYaml . | nindent 8 }}
       {{- end }}
 ---
 apiVersion: v1
