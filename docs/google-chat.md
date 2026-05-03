@@ -145,7 +145,8 @@ working_dir = "/home/agent"
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `GOOGLE_CHAT_ENABLED` | Yes | `false` | Set to `true` or `1` to enable the adapter |
-| `GOOGLE_CHAT_PROJECT_NUMBER` | Recommended | — | GCP project number — enables JWT verification of inbound webhooks |
+| `GOOGLE_CHAT_AUDIENCE` | Recommended | — | JWT audience for webhook verification (your webhook URL or GCP project number, depending on Authentication Audience setting) |
+| `GOOGLE_CHAT_PROJECT_NUMBER` | No | — | GCP project number — fallback for `GOOGLE_CHAT_AUDIENCE` when using "Project Number" auth mode |
 | `GOOGLE_CHAT_SA_KEY_JSON` | No | — | Service account key JSON string (enables auto-refresh) |
 | `GOOGLE_CHAT_SA_KEY_FILE` | No | — | Path to service account key JSON file (alternative to `SA_KEY_JSON`) |
 | `GOOGLE_CHAT_ACCESS_TOKEN` | No | — | Static OAuth2 access token (fallback, expires in 1 hour) |
@@ -153,23 +154,29 @@ working_dir = "/home/agent"
 
 ## Security: Webhook Verification
 
-Google Chat signs every webhook request with a JWT Bearer token. The gateway verifies this token to ensure requests actually come from Google.
+Google Chat signs every webhook request with a JWT Bearer token (issued by `https://accounts.google.com`). The gateway verifies this token to ensure requests actually come from Google.
 
 **Setup:**
 
-1. Find your GCP **Project Number** (not Project ID) in the Google Cloud Console → Dashboard.
-2. In the Google Chat API Configuration, set **Authentication Audience** to **Project Number**.
-3. Set the environment variable:
-   ```bash
-   export GOOGLE_CHAT_PROJECT_NUMBER="123456789012"
-   ```
+The JWT `aud` (audience) claim depends on your Google Chat API **Authentication Audience** setting:
+
+- **HTTP Endpoint URL** (default): `aud` = your configured webhook URL → set `GOOGLE_CHAT_AUDIENCE` to the full URL
+- **Project Number**: `aud` = your GCP project number → set `GOOGLE_CHAT_PROJECT_NUMBER`
+
+```bash
+# Option 1: HTTP Endpoint URL mode (default)
+export GOOGLE_CHAT_AUDIENCE="https://your-domain.com/webhook/googlechat"
+
+# Option 2: Project Number mode
+export GOOGLE_CHAT_PROJECT_NUMBER="123456789012"
+```
 
 The gateway will:
 - Reject requests without a valid `Authorization: Bearer <jwt>` header
 - Verify the JWT signature against Google's public keys (JWKS, cached for 1 hour)
-- Validate `iss == chat@system.gserviceaccount.com` and `aud == <your project number>`
+- Validate `iss == https://accounts.google.com` and `aud` matches the configured audience
 
-If `GOOGLE_CHAT_PROJECT_NUMBER` is not set, the gateway logs a warning and accepts all requests (insecure — for local development only).
+If neither `GOOGLE_CHAT_AUDIENCE` nor `GOOGLE_CHAT_PROJECT_NUMBER` is set, the gateway logs a warning and accepts all requests (insecure — for local development only).
 
 ## Troubleshooting
 

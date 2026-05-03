@@ -69,9 +69,8 @@ pub struct GoogleChatSpace {
 
 // --- Webhook JWT verification ---
 
-const GOOGLE_CHAT_ISSUER: &str = "chat@system.gserviceaccount.com";
-const GOOGLE_CHAT_JWKS_URL: &str =
-    "https://www.googleapis.com/service_accounts/v1/jwk/chat@system.gserviceaccount.com";
+const GOOGLE_CHAT_ISSUER: &str = "https://accounts.google.com";
+const GOOGLE_CHAT_JWKS_URL: &str = "https://www.googleapis.com/oauth2/v3/certs";
 const JWKS_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
 
 #[derive(Debug, Clone, Deserialize)]

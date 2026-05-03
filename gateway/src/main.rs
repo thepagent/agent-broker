@@ -290,11 +290,12 @@ async fn main() -> Result<()> {
                 .map_err(|e| warn!("googlechat SA key error: {e}"))
                 .ok()
         });
-    let google_chat_jwt_verifier = std::env::var("GOOGLE_CHAT_PROJECT_NUMBER")
+    let google_chat_jwt_verifier = std::env::var("GOOGLE_CHAT_AUDIENCE")
+        .or_else(|_| std::env::var("GOOGLE_CHAT_PROJECT_NUMBER"))
         .ok()
-        .map(|pn| {
-            info!("googlechat webhook JWT verification enabled (project_number={pn})");
-            adapters::googlechat::GoogleChatJwtVerifier::new(pn)
+        .map(|aud| {
+            info!("googlechat webhook JWT verification enabled (audience={aud})");
+            adapters::googlechat::GoogleChatJwtVerifier::new(aud)
         });
     let google_chat_enabled = std::env::var("GOOGLE_CHAT_ENABLED")
         .map(|v| v == "true" || v == "1")

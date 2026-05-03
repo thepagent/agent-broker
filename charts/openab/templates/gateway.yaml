@@ -161,6 +161,10 @@ spec:
             {{- if $hasGoogleChat }}
             - name: GOOGLE_CHAT_ENABLED
               value: "true"
+            {{- if (($cfg.gateway).googleChat).audience }}
+            - name: GOOGLE_CHAT_AUDIENCE
+              value: {{ ($cfg.gateway).googleChat.audience | quote }}
+            {{- end }}
             {{- if (($cfg.gateway).googleChat).projectNumber }}
             - name: GOOGLE_CHAT_PROJECT_NUMBER
               value: {{ ($cfg.gateway).googleChat.projectNumber | quote }}
