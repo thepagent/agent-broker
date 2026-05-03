@@ -87,6 +87,10 @@ pub struct SenderContext {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_id: Option<String>,
     pub is_bot: bool,
+    /// Platform message creation time (ISO 8601 UTC).
+    /// Discord/Slack: platform timestamp. Gateway: broker receive time (best-effort).
+    /// Additive field — schema stays openab.sender.v1.
+    pub timestamp: String,
 }
 
 // --- ChatAdapter trait ---
@@ -160,6 +164,32 @@ impl AdapterRouter {
         &self.pool
     }
 
+    /// Access the reactions config (used by dispatch.rs).
+    pub fn reactions_config(&self) -> &ReactionsConfig {
+        &self.reactions_config
+    }
+
+    /// Pack one arrival event into ContentBlocks using the uniform per-arrival template:
+    ///   Text { "<sender_context>\n{json}\n</sender_context>\n\n{prompt}" }
+    ///   [extra_blocks in arrival order]
+    ///
+    /// This is the single packing code path for both per-message and batched dispatch
+    /// (ADR §3.5). For a batch of N messages, call this N times and concatenate.
+    pub fn pack_arrival_event(
+        sender_json: &str,
+        prompt: &str,
+        extra_blocks: Vec<ContentBlock>,
+    ) -> Vec<ContentBlock> {
+        let header = format!(
+            "<sender_context>\n{}\n</sender_context>\n\n{}",
+            sender_json, prompt
+        );
+        let mut blocks = Vec::with_capacity(1 + extra_blocks.len());
+        blocks.push(ContentBlock::Text { text: header });
+        blocks.extend(extra_blocks);
+        blocks
+    }
+
     /// Handle an incoming user message. The adapter is responsible for
     /// filtering, resolving the thread, and building the SenderContext.
     /// This method handles sender context injection, session management, and streaming.
@@ -176,28 +206,7 @@ impl AdapterRouter {
     ) -> Result<()> {
         tracing::debug!(platform = adapter.platform(), "processing message");
 
-        // Build content blocks: sender context + prompt text, then extra (images, transcripts)
-        let prompt_with_sender = format!(
-            "<sender_context>\n{}\n</sender_context>\n\n{}",
-            sender_json, prompt
-        );
-
-        let mut content_blocks = Vec::with_capacity(1 + extra_blocks.len());
-        // Prepend any transcript blocks (they go before the text block)
-        for block in &extra_blocks {
-            if matches!(block, ContentBlock::Text { .. }) {
-                content_blocks.push(block.clone());
-            }
-        }
-        content_blocks.push(ContentBlock::Text {
-            text: prompt_with_sender,
-        });
-        // Append non-text blocks (images)
-        for block in extra_blocks {
-            if !matches!(block, ContentBlock::Text { .. }) {
-                content_blocks.push(block);
-            }
-        }
+        let content_blocks = Self::pack_arrival_event(sender_json, prompt, extra_blocks);
 
         let thread_key = format!(
             "{}:{}",
@@ -265,6 +274,21 @@ impl AdapterRouter {
     }
 
     async fn stream_prompt(
+        &self,
+        adapter: &Arc<dyn ChatAdapter>,
+        thread_key: &str,
+        content_blocks: Vec<ContentBlock>,
+        thread_channel: &ChannelRef,
+        reactions: Arc<StatusReactionController>,
+        other_bot_present: bool,
+    ) -> Result<()> {
+        self.stream_prompt_blocks(adapter, thread_key, content_blocks, thread_channel, reactions, other_bot_present).await
+    }
+
+    /// Drive one ACP turn with the given pre-packed ContentBlocks.
+    /// Called by both `handle_message` (per-message mode) and `dispatch::dispatch_batch`
+    /// (batched mode).
+    pub async fn stream_prompt_blocks(
         &self,
         adapter: &Arc<dyn ChatAdapter>,
         thread_key: &str,

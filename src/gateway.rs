@@ -350,6 +350,8 @@ pub async fn run_gateway_adapter(
     params: GatewayParams,
     router: Arc<AdapterRouter>,
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    dispatcher: Option<Arc<crate::dispatch::Dispatcher>>,
+    message_processing_mode: crate::config::MessageProcessingMode,
 ) -> Result<()> {
     let platform: &'static str = Box::leak(params.platform.into_boxed_str());
 
@@ -487,6 +489,12 @@ pub async fn run_gateway_adapter(
                                         channel_id: event.channel.id.clone(),
                                         thread_id: event.channel.thread_id.clone(),
                                         is_bot: event.sender.is_bot,
+                                        // Gateway: use event timestamp if available, else broker receive time
+                                        timestamp: if event.timestamp.is_empty() {
+                                            chrono_now_iso8601()
+                                        } else {
+                                            event.timestamp.clone()
+                                        },
                                     };
                                     let sender_json = serde_json::to_string(&sender_ctx)
                                         .unwrap_or_default();
@@ -499,6 +507,8 @@ pub async fn run_gateway_adapter(
                                     let adapter = adapter.clone();
                                     let router = router.clone();
                                     let prompt = event.content.text.clone();
+                                    let dispatcher = dispatcher.clone();
+                                    let mode = message_processing_mode;
 
                                     // Slash command interception for gateway platforms
                                     // (Feishu/LINE/Telegram don't have native slash commands)
@@ -541,19 +551,52 @@ pub async fn run_gateway_adapter(
                                             channel.clone()
                                         };
 
-                                        if let Err(e) = router
-                                            .handle_message(
-                                                &adapter,
-                                                &thread_channel,
-                                                &sender_json,
-                                                &prompt,
-                                                vec![],
-                                                &trigger_msg,
-                                                false,
-                                            )
-                                            .await
-                                        {
-                                            error!("gateway message handling error: {e}");
+                                        match mode {
+                                            crate::config::MessageProcessingMode::PerMessage => {
+                                                if let Err(e) = router
+                                                    .handle_message(
+                                                        &adapter,
+                                                        &thread_channel,
+                                                        &sender_json,
+                                                        &prompt,
+                                                        vec![],
+                                                        &trigger_msg,
+                                                        false,
+                                                    )
+                                                    .await
+                                                {
+                                                    error!("gateway message handling error: {e}");
+                                                }
+                                            }
+                                            crate::config::MessageProcessingMode::Batched => {
+                                                if let Some(dispatcher) = dispatcher {
+                                                    let thread_key = format!(
+                                                        "{}:{}",
+                                                        thread_channel.platform,
+                                                        thread_channel.thread_id.as_deref()
+                                                            .unwrap_or(&thread_channel.channel_id)
+                                                    );
+                                                    let estimated_tokens =
+                                                        crate::dispatch::estimate_tokens(&prompt, &[]);
+                                                    let buf_msg = crate::dispatch::BufferedMessage {
+                                                        sender_json,
+                                                        prompt,
+                                                        extra_blocks: vec![],
+                                                        trigger_msg,
+                                                        arrived_at: std::time::Instant::now(),
+                                                        estimated_tokens,
+                                                        other_bot_present: false,
+                                                    };
+                                                    if let Err(e) = dispatcher
+                                                        .submit(thread_key, thread_channel, adapter, buf_msg)
+                                                        .await
+                                                    {
+                                                        error!("gateway dispatcher submit error: {e}");
+                                                    }
+                                                } else {
+                                                    error!("gateway batched mode enabled but no dispatcher configured");
+                                                }
+                                            }
                                         }
                                     });
                                 }
@@ -591,4 +634,30 @@ pub async fn run_gateway_adapter(
         }
         backoff_secs = (backoff_secs * 2).min(MAX_BACKOFF);
     } // outer reconnect loop
+}
+
+/// Best-effort ISO 8601 UTC timestamp for the current moment (no external crate).
+fn chrono_now_iso8601() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    // Reuse the same days_to_ymd logic inline
+    let days = secs / 86400;
+    let time_secs = secs % 86400;
+    let h = time_secs / 3600;
+    let m = (time_secs % 3600) / 60;
+    let s = time_secs % 60;
+    let z = days + 719468;
+    let era = z / 146097;
+    let doe = z % 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if mo <= 2 { y + 1 } else { y };
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}.000Z")
 }

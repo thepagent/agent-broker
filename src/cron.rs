@@ -350,6 +350,7 @@ async fn fire_cronjob(
         channel_id: reply_channel.parent_id.as_deref().unwrap_or(&reply_channel.channel_id).to_string(),
         thread_id: reply_channel.thread_id.clone().or(Some(reply_channel.channel_id.clone())),
         is_bot: true,
+        timestamp: Utc::now().to_rfc3339(),
     };
     let sender_json = match serde_json::to_string(&sender) {
         Ok(j) => j,

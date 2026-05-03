@@ -4,6 +4,29 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
 
+/// Controls how incoming messages are dispatched to ACP turns.
+///
+/// - `PerMessage` (default): each message becomes its own ACP turn (v0.8.2-beta.1 behaviour).
+/// - `Batched`: messages that arrive while a turn is in flight are buffered and merged
+///   into one ACP turn at the next turn boundary (see ADR: turn-boundary-batching-adr.md).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MessageProcessingMode {
+    #[default]
+    PerMessage,
+    Batched,
+}
+
+impl<'de> Deserialize<'de> for MessageProcessingMode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        match s.to_lowercase().replace('-', "_").as_str() {
+            "per_message" | "per-message" => Ok(Self::PerMessage),
+            "batched" => Ok(Self::Batched),
+            other => Err(serde::de::Error::unknown_variant(other, &["per-message", "batched"])),
+        }
+    }
+}
+
 /// Controls whether the bot processes messages from other Discord bots.
 ///
 /// Inspired by Hermes Agent's `DISCORD_ALLOW_BOTS` 3-value design:
@@ -120,9 +143,20 @@ pub struct DiscordConfig {
     /// Default: false (opt-in). `allowed_users` still applies in DMs.
     #[serde(default)]
     pub allow_dm: bool,
+    /// Message dispatch mode. Default: per-message (v0.8.2-beta.1 behaviour).
+    #[serde(default)]
+    pub message_processing_mode: MessageProcessingMode,
+    /// Batched mode only: per-thread channel capacity. Default: 10.
+    #[serde(default = "default_max_buffered_messages")]
+    pub max_buffered_messages: usize,
+    /// Batched mode only: soft token cap for greedy drain. Default: 24000.
+    #[serde(default = "default_max_batch_tokens")]
+    pub max_batch_tokens: usize,
 }
 
 fn default_max_bot_turns() -> u32 { 20 }
+fn default_max_buffered_messages() -> usize { 10 }
+fn default_max_batch_tokens() -> usize { 24_000 }
 
 /// Controls whether the bot responds to user messages in threads without @mention.
 ///
@@ -179,6 +213,15 @@ pub struct SlackConfig {
     /// Human message resets the counter. Default: 20.
     #[serde(default = "default_max_bot_turns")]
     pub max_bot_turns: u32,
+    /// Message dispatch mode. Default: per-message.
+    #[serde(default)]
+    pub message_processing_mode: MessageProcessingMode,
+    /// Batched mode only: per-thread channel capacity. Default: 10.
+    #[serde(default = "default_max_buffered_messages")]
+    pub max_buffered_messages: usize,
+    /// Batched mode only: soft token cap for greedy drain. Default: 24000.
+    #[serde(default = "default_max_batch_tokens")]
+    pub max_batch_tokens: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -205,6 +248,15 @@ pub struct GatewayConfig {
     /// Enable streaming (typewriter) mode — requires gateway platform to support message editing.
     #[serde(default)]
     pub streaming: bool,
+    /// Message dispatch mode. Default: per-message.
+    #[serde(default)]
+    pub message_processing_mode: MessageProcessingMode,
+    /// Batched mode only: per-thread channel capacity. Default: 10.
+    #[serde(default = "default_max_buffered_messages")]
+    pub max_buffered_messages: usize,
+    /// Batched mode only: soft token cap for greedy drain. Default: 24000.
+    #[serde(default = "default_max_batch_tokens")]
+    pub max_batch_tokens: usize,
 }
 
 fn default_gateway_platform() -> String {
@@ -285,7 +337,7 @@ impl<'de> Deserialize<'de> for ToolDisplay {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ReactionsConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,

@@ -4,6 +4,7 @@ mod bot_turns;
 mod config;
 mod cron;
 mod discord;
+mod dispatch;
 mod error_display;
 mod format;
 mod markdown;
@@ -142,6 +143,9 @@ async fn main() -> anyhow::Result<()> {
     // Shutdown signal for Slack adapter
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
+    // Dispatcher handles tracked here so SIGTERM cleanup can call shutdown() on each (ADR §6.8).
+    let mut dispatchers: Vec<Arc<dispatch::Dispatcher>> = Vec::new();
+
     // Spawn cleanup task
     let cleanup_pool = pool.clone();
     let cleanup_handle = tokio::spawn(async move {
@@ -188,6 +192,18 @@ async fn main() -> anyhow::Result<()> {
         let max_bot_turns = slack_cfg.max_bot_turns;
         let slack_shutdown_rx = shutdown_rx.clone();
         let adapter = shared_slack_adapter.clone().expect("shared_slack_adapter must exist when slack config is present");
+        let slack_mode = slack_cfg.message_processing_mode;
+        let slack_dispatcher = if slack_mode == config::MessageProcessingMode::Batched {
+            let d = Arc::new(dispatch::Dispatcher::new(
+                router.clone(),
+                slack_cfg.max_buffered_messages,
+                slack_cfg.max_batch_tokens,
+            ));
+            dispatchers.push(d.clone());
+            Some(d)
+        } else {
+            None
+        };
         Some(tokio::spawn(async move {
             if let Err(e) = slack::run_slack_adapter(
                 adapter,
@@ -203,6 +219,8 @@ async fn main() -> anyhow::Result<()> {
                 stt,
                 router,
                 slack_shutdown_rx,
+                slack_dispatcher,
+                slack_mode,
             )
             .await
             {
@@ -218,6 +236,18 @@ async fn main() -> anyhow::Result<()> {
         let router = router.clone();
         let shutdown_rx = shutdown_rx.clone();
         info!(url = %gw_cfg.url, "starting gateway adapter");
+        let gw_mode = gw_cfg.message_processing_mode;
+        let gw_dispatcher = if gw_mode == config::MessageProcessingMode::Batched {
+            let d = Arc::new(dispatch::Dispatcher::new(
+                router.clone(),
+                gw_cfg.max_buffered_messages,
+                gw_cfg.max_batch_tokens,
+            ));
+            dispatchers.push(d.clone());
+            Some(d)
+        } else {
+            None
+        };
         let params = gateway::GatewayParams {
             url: gw_cfg.url,
             platform: gw_cfg.platform,
@@ -230,7 +260,7 @@ async fn main() -> anyhow::Result<()> {
             streaming: gw_cfg.streaming,
         };
         Some(tokio::spawn(async move {
-            if let Err(e) = gateway::run_gateway_adapter(params, router, shutdown_rx).await {
+            if let Err(e) = gateway::run_gateway_adapter(params, router, shutdown_rx, gw_dispatcher, gw_mode).await {
                 error!("gateway adapter error: {e}");
             }
         }))
@@ -301,6 +331,19 @@ async fn main() -> anyhow::Result<()> {
             "starting discord adapter"
         );
 
+        let discord_mode = discord_cfg.message_processing_mode;
+        let discord_dispatcher = if discord_mode == config::MessageProcessingMode::Batched {
+            let d = Arc::new(dispatch::Dispatcher::new(
+                router.clone(),
+                discord_cfg.max_buffered_messages,
+                discord_cfg.max_batch_tokens,
+            ));
+            dispatchers.push(d.clone());
+            Some(d)
+        } else {
+            None
+        };
+
         let handler = discord::Handler {
             router,
             allow_all_channels,
@@ -318,6 +361,8 @@ async fn main() -> anyhow::Result<()> {
             max_bot_turns: discord_cfg.max_bot_turns,
             bot_turns: tokio::sync::Mutex::new(bot_turns::BotTurnTracker::new(discord_cfg.max_bot_turns)),
             allow_dm: discord_cfg.allow_dm,
+            dispatcher: discord_dispatcher,
+            message_processing_mode: discord_mode,
         };
 
         let intents = GatewayIntents::GUILD_MESSAGES
@@ -377,6 +422,10 @@ async fn main() -> anyhow::Result<()> {
     if let Some(handle) = cron_handle {
         // cron.rs drains in-flight tasks for up to 30s, so wait slightly longer
         let _ = tokio::time::timeout(std::time::Duration::from_secs(35), handle).await;
+    }
+    // Drain per-thread dispatchers and log buffered_lost counts before pool shutdown (ADR §6.8).
+    for d in &dispatchers {
+        d.shutdown();
     }
     let shutdown_pool = pool;
     shutdown_pool.shutdown().await;

@@ -428,50 +428,6 @@ impl ChatAdapter for SlackAdapter {
     }
 }
 
-// --- Per-thread async queue (inspired by OpenClaw's KeyedAsyncQueue) ---
-
-/// Serialize async work per key while allowing unrelated keys to run concurrently.
-/// Same-key tasks execute in FIFO order; different keys run in parallel.
-/// Idle keys are cleaned up automatically after the last task settles.
-struct KeyedAsyncQueue {
-    tails: tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Semaphore>>>,
-}
-
-impl KeyedAsyncQueue {
-    fn new() -> Self {
-        Self {
-            tails: tokio::sync::Mutex::new(HashMap::new()),
-        }
-    }
-
-    /// Acquire a per-key permit. The returned guard must be held for the
-    /// duration of the async work. Dropping it allows the next queued task
-    /// for the same key to proceed.
-    ///
-    /// Performs lazy cleanup of idle semaphores to prevent unbounded growth
-    /// in long-running deployments.
-    async fn acquire(&self, key: &str) -> Option<tokio::sync::OwnedSemaphorePermit> {
-        let sem = {
-            let mut tails = self.tails.lock().await;
-            // Lazy cleanup: evict idle entries (available_permits == 1 means no one is holding or waiting)
-            if tails.len() > 100 {
-                tails.retain(|_, sem| Arc::strong_count(sem) > 1 || sem.available_permits() < 1);
-            }
-            tails
-                .entry(key.to_string())
-                .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(1)))
-                .clone()
-        };
-        match sem.acquire_owned().await {
-            Ok(permit) => Some(permit),
-            Err(e) => {
-                warn!(key, error = %e, "semaphore closed, skipping message");
-                None
-            }
-        }
-    }
-}
-
 // --- Socket Mode event loop ---
 
 /// Hard cap on consecutive bot messages in a thread. Prevents runaway loops.
@@ -494,8 +450,9 @@ pub async fn run_slack_adapter(
     stt_config: SttConfig,
     router: Arc<AdapterRouter>,
     mut shutdown_rx: watch::Receiver<bool>,
+    dispatcher: Option<Arc<crate::dispatch::Dispatcher>>,
+    message_processing_mode: crate::config::MessageProcessingMode,
 ) -> Result<()> {
-    let queue = Arc::new(KeyedAsyncQueue::new());
     let bot_token = adapter.bot_token().to_string();
     let bot_turns = Arc::new(tokio::sync::Mutex::new(BotTurnTracker::new(max_bot_turns)));
 
@@ -590,18 +547,9 @@ pub async fn run_slack_adapter(
                                                 let allowed_users = allowed_users.clone();
                                                 let stt_config = stt_config.clone();
                                                 let router = router.clone();
-                                                let queue = queue.clone();
-                                                // Queue key: thread_ts if already in a thread, otherwise ts.
-                                                // app_mention always has a channel context, so ts alone
-                                                // is unique enough (unlike message events in DMs where
-                                                // we prefix with channel_id to avoid ts collisions).
-                                                let queue_key = event["thread_ts"]
-                                                    .as_str()
-                                                    .or_else(|| event["ts"].as_str())
-                                                    .unwrap_or("")
-                                                    .to_string();
+                                                let dispatcher = dispatcher.clone();
+                                                let mode = message_processing_mode;
                                                 tokio::spawn(async move {
-                                                    let Some(_permit) = queue.acquire(&queue_key).await else { return };
                                                     handle_message(
                                                         &event,
                                                         &adapter,
@@ -612,6 +560,8 @@ pub async fn run_slack_adapter(
                                                         &allowed_users,
                                                         &stt_config,
                                                         &router,
+                                                        dispatcher.as_ref(),
+                                                        mode,
                                                     )
                                                     .await;
                                                 });
@@ -665,8 +615,7 @@ pub async fn run_slack_adapter(
                                                 // --- Bot turn tracking ---
                                                 // Runs before self-check so ALL bot messages (including own)
                                                 // count toward the per-thread limit. Matches Discord #483.
-                                                // Keyed on thread_ts when in a thread, else channel:ts (the
-                                                // same key shape used for per-thread queueing below).
+                                                // Keyed on thread_ts when in a thread, else channel:ts.
                                                 // Non-thread messages get a unique key per message, so the
                                                 // counter never accumulates — intentional, because bot-to-bot
                                                 // loops only happen inside threads.
@@ -821,7 +770,9 @@ pub async fn run_slack_adapter(
                                                     }
                                                 }
 
-                                                // Dispatch to handle_message (serialized per thread)
+                                                // Dispatch to handle_message (per-thread serialization comes
+                                                // from Dispatcher consumer task in batched mode and from
+                                                // pool.with_connection in per-message mode).
                                                 let event = event.clone();
                                                 let adapter = adapter.clone();
                                                 let bot_token = bot_token.clone();
@@ -829,19 +780,9 @@ pub async fn run_slack_adapter(
                                                 let allowed_users = allowed_users.clone();
                                                 let stt_config = stt_config.clone();
                                                 let router = router.clone();
-                                                let queue = queue.clone();
-                                                // Queue key: thread_ts if in a thread, otherwise channel:ts.
-                                                // Prefixed with channel_id for non-thread messages because
-                                                // DMs and channels can have overlapping ts values — the
-                                                // prefix ensures keys are globally unique.
-                                                let queue_key = event["thread_ts"]
-                                                    .as_str()
-                                                    .map(|s| s.to_string())
-                                                    .unwrap_or_else(|| {
-                                                        format!("{}:{}", channel_id, event["ts"].as_str().unwrap_or(""))
-                                                    });
+                                                let dispatcher = dispatcher.clone();
+                                                let mode = message_processing_mode;
                                                 tokio::spawn(async move {
-                                                    let Some(_permit) = queue.acquire(&queue_key).await else { return };
                                                     handle_message(
                                                         &event,
                                                         &adapter,
@@ -852,6 +793,8 @@ pub async fn run_slack_adapter(
                                                         &allowed_users,
                                                         &stt_config,
                                                         &router,
+                                                        dispatcher.as_ref(),
+                                                        mode,
                                                     )
                                                     .await;
                                                 });
@@ -923,6 +866,8 @@ async fn handle_message(
     allowed_users: &HashSet<String>,
     stt_config: &SttConfig,
     router: &Arc<AdapterRouter>,
+    dispatcher: Option<&Arc<crate::dispatch::Dispatcher>>,
+    message_processing_mode: crate::config::MessageProcessingMode,
 ) {
     let channel_id = match event["channel"].as_str() {
         Some(ch) => ch.to_string(),
@@ -1093,6 +1038,7 @@ async fn handle_message(
         channel_id: channel_id.clone(),
         thread_id: thread_ts.clone(),
         is_bot: is_bot_msg,
+        timestamp: slack_ts_to_iso8601(&ts),
     };
 
     let trigger_msg = MessageRef {
@@ -1133,11 +1079,41 @@ async fn handle_message(
         thread_channel.thread_id.as_deref()
             .is_some_and(|ts| cache.get(ts).is_some_and(|inst| inst.elapsed() < adapter.session_ttl))
     };
-    if let Err(e) = router
-        .handle_message(&adapter_dyn, &thread_channel, &sender_json, &prompt, extra_blocks, &trigger_msg, other_bot_present)
-        .await
-    {
-        error!("Slack handle_message error: {e}");
+    match message_processing_mode {
+        crate::config::MessageProcessingMode::PerMessage => {
+            if let Err(e) = router
+                .handle_message(&adapter_dyn, &thread_channel, &sender_json, &prompt, extra_blocks, &trigger_msg, other_bot_present)
+                .await
+            {
+                error!("Slack handle_message error: {e}");
+            }
+        }
+        crate::config::MessageProcessingMode::Batched => {
+            if let Some(dispatcher) = dispatcher {
+                let thread_key = format!(
+                    "slack:{}",
+                    thread_channel.thread_id.as_deref().unwrap_or(&thread_channel.channel_id)
+                );
+                let estimated_tokens = crate::dispatch::estimate_tokens(&prompt, &extra_blocks);
+                let buf_msg = crate::dispatch::BufferedMessage {
+                    sender_json,
+                    prompt,
+                    extra_blocks,
+                    trigger_msg,
+                    arrived_at: std::time::Instant::now(),
+                    estimated_tokens,
+                    other_bot_present,
+                };
+                if let Err(e) = dispatcher
+                    .submit(thread_key, thread_channel, adapter_dyn, buf_msg)
+                    .await
+                {
+                    error!("Slack dispatcher submit error: {e}");
+                }
+            } else {
+                error!("Slack batched mode enabled but no dispatcher configured");
+            }
+        }
     }
 }
 
@@ -1160,6 +1136,45 @@ fn slack_file_download_url(file: &serde_json::Value) -> &str {
         .as_str()
         .or_else(|| file["url_private"].as_str())
         .unwrap_or("")
+}
+
+/// Convert a Slack epoch-seconds timestamp (e.g. "1714204397.123456") to ISO 8601 UTC.
+/// Returns a best-effort string; falls back to the raw ts on parse failure.
+fn slack_ts_to_iso8601(ts: &str) -> String {
+    // Slack ts format: "<unix_seconds>.<microseconds>"
+    let mut parts = ts.splitn(2, '.');
+    let secs = parts.next().unwrap_or("0").parse::<u64>().unwrap_or(0);
+    // Take first 3 digits of fractional part as milliseconds
+    let frac = parts.next().unwrap_or("000");
+    let ms: u64 = frac.chars().take(3).collect::<String>().parse().unwrap_or(0);
+
+    // Manual ISO 8601 from unix timestamp (no external crate needed)
+    // Days since epoch → year/month/day
+    let total_secs = secs;
+    let days = total_secs / 86400;
+    let time_secs = total_secs % 86400;
+    let h = time_secs / 3600;
+    let m = (time_secs % 3600) / 60;
+    let s = time_secs % 60;
+
+    // Gregorian calendar calculation
+    let (year, month, day) = days_to_ymd(days);
+    format!("{year:04}-{month:02}-{day:02}T{h:02}:{m:02}:{s:02}.{ms:03}Z")
+}
+
+fn days_to_ymd(days: u64) -> (u64, u64, u64) {
+    // Algorithm from https://howardhinnant.github.io/date_algorithms.html
+    let z = days + 719468;
+    let era = z / 146097;
+    let doe = z % 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
 }
 
 /// Strip MIME parameters like `; charset=utf-8` so type-detection helpers see
