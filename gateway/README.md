@@ -61,6 +61,9 @@ url = "ws://gateway:8080/ws"
 | `FEISHU_REQUIRE_MENTION` | `true` | Require @mention in groups |
 | `FEISHU_DEDUPE_TTL_SECS` | `300` | Event deduplication cache TTL (seconds) |
 | `FEISHU_MESSAGE_LIMIT` | `4000` | Max message length before auto-splitting (bytes) |
+| `FEISHU_ALLOW_BOTS` | `off` | Bot message handling: `off` / `mentions` / `all` |
+| `FEISHU_TRUSTED_BOT_IDS` | (optional) | Comma-separated open_id list of known bots |
+| `FEISHU_MAX_BOT_TURNS` | `20` | Max consecutive bot replies per channel |
 
 ### Endpoints
 
