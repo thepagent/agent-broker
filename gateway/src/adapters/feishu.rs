@@ -831,14 +831,14 @@ async fn resolve_user_name(
 // ---------------------------------------------------------------------------
 
 /// Send a text message to a feishu chat_id.
-/// Returns true on success.
+/// Returns the sent message_id on success (for self-echo dedupe), None on failure.
 pub async fn send_text_message(
     client: &reqwest::Client,
     api_base: &str,
     token: &str,
     chat_id: &str,
     text: &str,
-) -> bool {
+) -> Option<String> {
     let url = format!(
         "{}/open-apis/im/v1/messages?receive_id_type=chat_id",
         api_base
@@ -860,18 +860,23 @@ pub async fn send_text_message(
     {
         Ok(resp) => {
             if resp.status().is_success() {
-                info!(chat_id = %chat_id, "feishu message sent");
-                true
+                let resp_body: serde_json::Value = resp.json().await.unwrap_or_default();
+                let msg_id = resp_body
+                    .pointer("/data/message_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                info!(chat_id = %chat_id, message_id = ?msg_id, "feishu message sent");
+                msg_id
             } else {
                 let status = resp.status();
                 let text = resp.text().await.unwrap_or_default();
                 tracing::error!(status = %status, body = %text, "feishu send message failed");
-                false
+                None
             }
         }
         Err(e) => {
             tracing::error!(err = %e, "feishu send message request failed");
-            false
+            None
         }
     }
 }
@@ -1002,12 +1007,17 @@ pub async fn handle_reply(
     let text = &reply.content.text;
     let limit = adapter.config.message_limit;
 
-    // Split long messages
+    // Split long messages; store sent message_ids in dedupe to prevent
+    // self-echo (Feishu pushes bot's own messages back via WebSocket)
     if text.len() <= limit {
-        send_text_message(&adapter.client, &api_base, &token, &reply.channel.id, text).await;
+        if let Some(msg_id) = send_text_message(&adapter.client, &api_base, &token, &reply.channel.id, text).await {
+            adapter.dedupe.is_duplicate(&msg_id);
+        }
     } else {
         for chunk in split_text(text, limit) {
-            send_text_message(&adapter.client, &api_base, &token, &reply.channel.id, chunk).await;
+            if let Some(msg_id) = send_text_message(&adapter.client, &api_base, &token, &reply.channel.id, chunk).await {
+                adapter.dedupe.is_duplicate(&msg_id);
+            }
         }
     }
 }
@@ -1400,14 +1410,15 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "code": 0,
                 "msg": "success",
+                "data": {"message_id": "om_test123"}
             })))
             .expect(1)
             .mount(&server)
             .await;
 
         let client = reqwest::Client::new();
-        let ok = send_text_message(&client, &server.uri(), "t-tok", "oc_chat1", "hello").await;
-        assert!(ok);
+        let msg_id = send_text_message(&client, &server.uri(), "t-tok", "oc_chat1", "hello").await;
+        assert_eq!(msg_id.as_deref(), Some("om_test123"));
     }
 
     #[tokio::test]
@@ -1421,8 +1432,8 @@ mod tests {
             .await;
 
         let client = reqwest::Client::new();
-        let ok = send_text_message(&client, &server.uri(), "t-tok", "oc_chat1", "hello").await;
-        assert!(!ok);
+        let msg_id = send_text_message(&client, &server.uri(), "t-tok", "oc_chat1", "hello").await;
+        assert!(msg_id.is_none());
     }
 
     // --- Split text tests ---
