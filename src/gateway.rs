@@ -93,16 +93,15 @@ struct GatewayResponse {
 // --- GatewayAdapter: ChatAdapter over WebSocket ---
 
 type PendingRequests = Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<GatewayResponse>>>>;
+type SharedWsTx = Arc<Mutex<futures_util::stream::SplitSink<
+    tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    Message,
+>>>;
 
 pub struct GatewayAdapter {
-    ws_tx: Mutex<
-        futures_util::stream::SplitSink<
-            tokio_tungstenite::WebSocketStream<
-                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-            >,
-            Message,
-        >,
-    >,
+    ws_tx: SharedWsTx,
     pending: PendingRequests,
     platform_name: &'static str,
     streaming: bool,
@@ -110,23 +109,45 @@ pub struct GatewayAdapter {
 
 impl GatewayAdapter {
     fn new(
-        ws_tx: futures_util::stream::SplitSink<
-            tokio_tungstenite::WebSocketStream<
-                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-            >,
-            Message,
-        >,
+        ws_tx: SharedWsTx,
         pending: PendingRequests,
         platform_name: &'static str,
         streaming: bool,
     ) -> Self {
         Self {
-            ws_tx: Mutex::new(ws_tx),
+            ws_tx,
             pending,
             platform_name,
             streaming,
         }
     }
+}
+
+/// Send a fire-and-forget reply via the shared WebSocket (no request-response).
+/// Used for slash command responses where we don't need message_id back.
+async fn send_fire_and_forget(
+    ws_tx: &SharedWsTx,
+    channel: &ChannelRef,
+    content: &str,
+) -> Result<()> {
+    let reply = GatewayReply {
+        schema: "openab.gateway.reply.v1".into(),
+        reply_to: channel.origin_event_id.clone().unwrap_or_default(),
+        platform: channel.platform.clone(),
+        channel: ReplyChannel {
+            id: channel.channel_id.clone(),
+            thread_id: channel.thread_id.clone(),
+        },
+        content: ReplyContent {
+            content_type: "text".into(),
+            text: content.into(),
+        },
+        command: None,
+        request_id: None,
+    };
+    let json = serde_json::to_string(&reply)?;
+    ws_tx.lock().await.send(Message::Text(json)).await?;
+    Ok(())
 }
 
 #[async_trait]
@@ -381,9 +402,11 @@ pub async fn run_gateway_adapter(
         };
 
         let (ws_tx, mut ws_rx) = ws_stream.split();
+        let ws_tx: SharedWsTx = Arc::new(Mutex::new(ws_tx));
         let pending: PendingRequests = Arc::new(Mutex::new(HashMap::new()));
         let adapter: Arc<dyn ChatAdapter> =
-            Arc::new(GatewayAdapter::new(ws_tx, pending.clone(), platform, streaming));
+            Arc::new(GatewayAdapter::new(ws_tx.clone(), pending.clone(), platform, streaming));
+        let slash_ws_tx = ws_tx.clone(); // for fire-and-forget slash command responses
         let mut tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
 
         loop {
@@ -474,6 +497,8 @@ pub async fn run_gateway_adapter(
 
                                     // Slash command interception for gateway platforms
                                     // (Feishu/LINE/Telegram don't have native slash commands)
+                                    // Use fire-and-forget send — slash command responses don't
+                                    // need message_id for streaming edits.
                                     let trimmed = prompt.trim();
                                     if trimmed == "/reset" {
                                         let thread_key = format!("{}:{}", event.platform, event.channel.thread_id.as_deref().unwrap_or(&event.channel.id));
@@ -481,7 +506,7 @@ pub async fn run_gateway_adapter(
                                             Ok(()) => "🔄 Session reset. Start a new conversation!",
                                             Err(_) => "⚠️ No active session to reset.",
                                         };
-                                        let _ = adapter.send_message(&channel, msg).await;
+                                        let _ = send_fire_and_forget(&slash_ws_tx, &channel, msg).await;
                                         continue;
                                     }
                                     if trimmed == "/cancel" {
@@ -490,7 +515,7 @@ pub async fn run_gateway_adapter(
                                             Ok(()) => "🛑 Cancel signal sent.".to_string(),
                                             Err(e) => format!("⚠️ {e}"),
                                         };
-                                        let _ = adapter.send_message(&channel, &msg).await;
+                                        let _ = send_fire_and_forget(&slash_ws_tx, &channel, &msg).await;
                                         continue;
                                     }
 
