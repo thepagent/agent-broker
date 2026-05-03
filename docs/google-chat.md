@@ -128,7 +128,7 @@ working_dir = "/home/agent"
 
 - **DM chat** — send a direct message to the bot, get an AI agent response
 - **Space chat** — add the bot to a Google Chat Space, @mention it to start a conversation
-- **Thread replies** — in Spaces, bot replies are posted in the same thread as the user's message
+- **Thread replies** — in Spaces, bot replies are posted in the same thread as the user's message (note: @mention is required for every message in a Space, even within a thread — this is a Google Chat platform limitation)
 - **`argument_text` extraction** — strips the @mention prefix to get the clean user message
 - **Bot message filtering** — bot messages (`user_type: "BOT"`) are filtered at the gateway level
 - **Message splitting** — long replies (>4096 chars) are automatically split at newline/space boundaries
