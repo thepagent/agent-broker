@@ -627,6 +627,16 @@ impl EventHandler for Handler {
             cache.contains_key(&msg.channel_id.to_string())
         };
 
+        // Backfill thread_id: when OAB just created a new thread, the sender
+        // was built before the thread existed. Patch it so the agent sees
+        // thread_id on the very first turn.
+        let mut sender = sender;
+        if sender.thread_id.is_none() {
+            if let Some(ref _parent) = thread_channel.parent_id {
+                sender.thread_id = Some(thread_channel.channel_id.clone());
+            }
+        }
+
         let router = self.router.clone();
         tokio::spawn(async move {
             let sender_json = serde_json::to_string(&sender).unwrap();
