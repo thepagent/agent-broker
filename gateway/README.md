@@ -62,8 +62,7 @@ url = "ws://gateway:8080/ws"
 | `FEISHU_DEDUPE_TTL_SECS` | `300` | Event deduplication cache TTL (seconds) |
 | `FEISHU_MESSAGE_LIMIT` | `4000` | Max message length before auto-splitting (bytes) |
 | `GOOGLE_CHAT_ENABLED` | `false` | Set to `true` or `1` to enable the Google Chat adapter |
-| `GOOGLE_CHAT_AUDIENCE` | (optional) | JWT audience for webhook verification (webhook URL or project number) |
-| `GOOGLE_CHAT_PROJECT_NUMBER` | (optional) | GCP project number — fallback audience for JWT verification |
+| `GOOGLE_CHAT_AUDIENCE` | (optional) | JWT audience for webhook verification (full webhook URL, e.g. `https://your-domain.com/webhook/googlechat`) |
 | `GOOGLE_CHAT_SA_KEY_JSON` | (optional) | Service account key JSON string (enables token auto-refresh) |
 | `GOOGLE_CHAT_SA_KEY_FILE` | (optional) | Path to service account key JSON file (alternative to `SA_KEY_JSON`) |
 | `GOOGLE_CHAT_ACCESS_TOKEN` | (optional) | Static OAuth2 access token (fallback, expires in 1 hour) |

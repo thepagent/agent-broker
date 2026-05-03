@@ -167,11 +167,11 @@ The gateway will:
 - Reject requests without a valid `Authorization: Bearer <jwt>` header
 - Verify the JWT signature against Google's public keys (JWKS, cached for 1 hour)
 - Validate `iss == https://accounts.google.com` and `aud` matches the configured webhook URL
-- Validate `email == chat@system.gserviceaccount.com` (proves the token came from Google Chat, not another Google service)
+- Validate `email` ends with `@gcp-sa-gsuiteaddons.iam.gserviceaccount.com` (proves the token came from Google Chat, not another Google service)
 
 If `GOOGLE_CHAT_AUDIENCE` is not set, the gateway logs a warning and accepts all requests (insecure — for local development only).
 
-> **Note:** The "Project Number" Authentication Audience mode is not supported. It uses a different JWT issuer (`chat@system.gserviceaccount.com`) and JWKS endpoint that this adapter does not implement. Use the default "HTTP Endpoint URL" mode.
+> **Note:** Only the "HTTP Endpoint URL" Authentication Audience mode is supported. The "Project Number" mode uses a different JWT flow that this adapter does not implement.
 
 ## Troubleshooting
 
