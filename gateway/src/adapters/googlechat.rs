@@ -1,28 +1,37 @@
 use crate::schema::*;
 use axum::extract::State;
-use axum::Json;
 use serde::Deserialize;
 use std::sync::Arc;
 use tracing::{error, info};
 
 pub const GOOGLE_CHAT_API_BASE: &str = "https://chat.googleapis.com/v1";
 
-// --- Google Chat types ---
+// --- Google Chat types (v2 envelope format) ---
 
 #[derive(Debug, Deserialize)]
-pub struct GoogleChatEvent {
-    #[serde(rename = "type")]
-    pub event_type: String,
-    pub message: Option<GoogleChatMessage>,
+pub struct GoogleChatEnvelope {
+    pub chat: Option<ChatPayload>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatPayload {
     pub user: Option<GoogleChatUser>,
+    pub message_payload: Option<MessagePayload>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessagePayload {
+    pub message: Option<GoogleChatMessage>,
     pub space: Option<GoogleChatSpace>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GoogleChatMessage {
     pub name: String,
     pub text: Option<String>,
-    #[serde(rename = "argumentText")]
     pub argument_text: Option<String>,
     pub sender: Option<GoogleChatUser>,
     pub thread: Option<GoogleChatThread>,
@@ -30,9 +39,9 @@ pub struct GoogleChatMessage {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GoogleChatUser {
     pub name: String,
-    #[serde(rename = "displayName")]
     pub display_name: String,
     #[serde(rename = "type")]
     pub user_type: String,
@@ -44,23 +53,38 @@ pub struct GoogleChatThread {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GoogleChatSpace {
     pub name: String,
     #[serde(rename = "type")]
     pub space_type: Option<String>,
+    pub space_type_renamed: Option<String>,
 }
 
 // --- Webhook handler ---
 
 pub async fn webhook(
     State(state): State<Arc<crate::AppState>>,
-    Json(event): Json<GoogleChatEvent>,
+    body: axum::body::Bytes,
 ) -> axum::http::StatusCode {
-    if event.event_type != "MESSAGE" {
-        return axum::http::StatusCode::OK;
-    }
+    info!("googlechat webhook received ({} bytes)", body.len());
 
-    let Some(ref msg) = event.message else {
+    let envelope: GoogleChatEnvelope = match serde_json::from_slice(&body) {
+        Ok(e) => e,
+        Err(e) => {
+            let body_str = String::from_utf8_lossy(&body);
+            error!(body = %body_str, "googlechat webhook parse error: {e}");
+            return axum::http::StatusCode::BAD_REQUEST;
+        }
+    };
+
+    let Some(chat) = envelope.chat else {
+        return axum::http::StatusCode::OK;
+    };
+    let Some(payload) = chat.message_payload else {
+        return axum::http::StatusCode::OK;
+    };
+    let Some(ref msg) = payload.message else {
         return axum::http::StatusCode::OK;
     };
 
@@ -73,8 +97,8 @@ pub async fn webhook(
         return axum::http::StatusCode::OK;
     }
 
-    let sender = msg.sender.as_ref().or(event.user.as_ref());
-    let space = msg.space.as_ref().or(event.space.as_ref());
+    let sender = msg.sender.as_ref().or(chat.user.as_ref());
+    let space = msg.space.as_ref().or(payload.space.as_ref());
 
     let sender_id = sender.map(|s| s.name.clone()).unwrap_or_default();
     let display_name = sender
