@@ -1,5 +1,6 @@
 use crate::schema::*;
 use axum::extract::State;
+use axum::response::IntoResponse;
 use serde::Deserialize;
 use std::sync::Arc;
 use tracing::{error, info};
@@ -66,7 +67,7 @@ pub struct GoogleChatSpace {
 pub async fn webhook(
     State(state): State<Arc<crate::AppState>>,
     body: axum::body::Bytes,
-) -> axum::http::StatusCode {
+) -> axum::response::Response {
     info!("googlechat webhook received ({} bytes)", body.len());
 
     let envelope: GoogleChatEnvelope = match serde_json::from_slice(&body) {
@@ -74,18 +75,18 @@ pub async fn webhook(
         Err(e) => {
             let body_str = String::from_utf8_lossy(&body);
             error!(body = %body_str, "googlechat webhook parse error: {e}");
-            return axum::http::StatusCode::BAD_REQUEST;
+            return (axum::http::StatusCode::BAD_REQUEST, "bad request").into_response();
         }
     };
 
     let Some(chat) = envelope.chat else {
-        return axum::http::StatusCode::OK;
+        return empty_json_response();
     };
     let Some(payload) = chat.message_payload else {
-        return axum::http::StatusCode::OK;
+        return empty_json_response();
     };
     let Some(ref msg) = payload.message else {
-        return axum::http::StatusCode::OK;
+        return empty_json_response();
     };
 
     let text = msg
@@ -94,7 +95,7 @@ pub async fn webhook(
         .or(msg.text.as_deref())
         .unwrap_or("");
     if text.trim().is_empty() {
-        return axum::http::StatusCode::OK;
+        return empty_json_response();
     }
 
     let sender = msg.sender.as_ref().or(chat.user.as_ref());
@@ -145,7 +146,16 @@ pub async fn webhook(
     let json = serde_json::to_string(&gw_event).unwrap();
     info!(space = %space_name, sender = %sender_name, "googlechat → gateway");
     let _ = state.event_tx.send(json);
-    axum::http::StatusCode::OK
+    empty_json_response()
+}
+
+fn empty_json_response() -> axum::response::Response {
+    use axum::response::IntoResponse;
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        "{}",
+    )
+        .into_response()
 }
 
 // --- Reply handler ---
