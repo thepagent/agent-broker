@@ -81,6 +81,7 @@ https://your-gateway-host/webhook/feishu
 | — | `FEISHU_TRUSTED_BOT_IDS` | — | Comma-separated open_id list of known bots |
 | — | `FEISHU_MAX_BOT_TURNS` | `20` | Max consecutive bot replies per channel before suppression |
 | `gateway.botUsername` | — | — | Set to bot's `open_id` for @mention gating |
+| `gateway.streaming` | — | `false` | Enable streaming (typewriter) mode |
 
 ## @mention Gating
 
@@ -108,12 +109,8 @@ The gateway intercepts slash commands before they reach the agent:
 |---------|--------|
 | `/reset` | Clears the conversation session. |
 | `/cancel` | Sends a cancel signal to the running agent. |
-| `/models` | Lists available models with current selection marked ✅. |
-| `/models <name>` | Switches to a model matching `<name>` (case-insensitive substring match). |
-| `/agents` | Lists available agents with current selection marked ✅. |
-| `/agents <name>` | Switches to an agent matching `<name>`. |
 
-`/models` and `/agents` require an active session — send a message first to start one.
+These work in both DMs and group chats, across all gateway platforms.
 
 ## Rich Text (Post) Messages
 
@@ -129,9 +126,16 @@ Inline Markdown formatting (`**bold**`, `*italic*`, `` `code` ``, `~~strike~~`) 
 
 Agent replies stream incrementally — a placeholder message appears immediately, then updates every ~1.5 seconds as the agent generates content. This matches Discord's streaming behavior.
 
-Streaming is enabled by default for Feishu. No configuration needed.
+To enable streaming, set `streaming = true` in the gateway config:
 
-How it works: the gateway sends a placeholder "…" message, receives the real `message_id` from Feishu, then updates the message in-place via `PUT /open-apis/im/v1/messages/{id}` as new content arrives.
+```toml
+[gateway]
+url = "ws://127.0.0.1:8080/ws"
+platform = "feishu"
+streaming = true
+```
+
+The gateway platform must support message editing (Feishu/Lark do). Platforms that don't support editing should leave `streaming = false` (default).
 
 ## Bot-to-Bot Collaboration
 

@@ -202,6 +202,9 @@ pub struct GatewayConfig {
     pub allowed_channels: Vec<String>,
     #[serde(default)]
     pub allowed_users: Vec<String>,
+    /// Enable streaming (typewriter) mode — requires gateway platform to support message editing.
+    #[serde(default)]
+    pub streaming: bool,
 }
 
 fn default_gateway_platform() -> String {

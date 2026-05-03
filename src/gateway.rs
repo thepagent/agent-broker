@@ -105,6 +105,7 @@ pub struct GatewayAdapter {
     >,
     pending: PendingRequests,
     platform_name: &'static str,
+    streaming: bool,
 }
 
 impl GatewayAdapter {
@@ -117,11 +118,13 @@ impl GatewayAdapter {
         >,
         pending: PendingRequests,
         platform_name: &'static str,
+        streaming: bool,
     ) -> Self {
         Self {
             ws_tx: Mutex::new(ws_tx),
             pending,
             platform_name,
+            streaming,
         }
     }
 }
@@ -137,20 +140,9 @@ impl ChatAdapter for GatewayAdapter {
     }
 
     async fn send_message(&self, channel: &ChannelRef, content: &str) -> Result<MessageRef> {
-        let needs_msg_id = self.supports_streaming();
-        let req_id = if needs_msg_id {
-            Some(format!("req_{}", uuid::Uuid::new_v4()))
-        } else {
-            None
-        };
-
-        let pending_rx = if let Some(ref id) = req_id {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            self.pending.lock().await.insert(id.clone(), tx);
-            Some(rx)
-        } else {
-            None
-        };
+        let req_id = format!("req_{}", uuid::Uuid::new_v4());
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.pending.lock().await.insert(req_id.clone(), tx);
 
         let reply = GatewayReply {
             schema: "openab.gateway.reply.v1".into(),
@@ -165,21 +157,20 @@ impl ChatAdapter for GatewayAdapter {
                 text: content.into(),
             },
             command: None,
-            request_id: req_id.clone(),
+            request_id: Some(req_id.clone()),
         };
         let json = serde_json::to_string(&reply)?;
         self.ws_tx.lock().await.send(Message::Text(json)).await?;
 
-        let msg_id = if let (Some(rx), Some(ref id)) = (pending_rx, &req_id) {
-            match tokio::time::timeout(std::time::Duration::from_secs(5), rx).await {
-                Ok(Ok(resp)) if resp.success => resp.message_id.unwrap_or_else(|| "gw_sent".into()),
-                _ => {
-                    self.pending.lock().await.remove(id);
-                    "gw_sent".into()
-                }
+        // All platforms use request-response with timeout fallback.
+        // Platforms that return message_id enable streaming edit;
+        // others timeout gracefully and fall back to "gw_sent".
+        let msg_id = match tokio::time::timeout(std::time::Duration::from_secs(5), rx).await {
+            Ok(Ok(resp)) if resp.success => resp.message_id.unwrap_or_else(|| "gw_sent".into()),
+            _ => {
+                self.pending.lock().await.remove(&req_id);
+                "gw_sent".into()
             }
-        } else {
-            "gw_sent".into()
         };
 
         Ok(MessageRef {
@@ -302,16 +293,7 @@ impl ChatAdapter for GatewayAdapter {
     }
 
     fn use_streaming(&self, _other_bot_present: bool) -> bool {
-        self.supports_streaming()
-    }
-}
-
-impl GatewayAdapter {
-    /// Whether this gateway platform supports message editing (for streaming).
-    /// Platforms that support edit get request-response send_message (real message_id)
-    /// and streaming edit loop. Others use fire-and-forget.
-    fn supports_streaming(&self) -> bool {
-        matches!(self.platform_name, "feishu" | "lark")
+        self.streaming
     }
 }
 
@@ -327,6 +309,7 @@ pub struct GatewayParams {
     pub allowed_channels: Vec<String>,
     pub allow_all_users: bool,
     pub allowed_users: Vec<String>,
+    pub streaming: bool,
 }
 
 pub async fn run_gateway_adapter(
@@ -343,6 +326,7 @@ pub async fn run_gateway_adapter(
     let allowed_channels = params.allowed_channels;
     let allow_all_users = params.allow_all_users;
     let allowed_users = params.allowed_users;
+    let streaming = params.streaming;
 
     let connect_url = match &params.token {
         Some(token) => {
@@ -386,7 +370,7 @@ pub async fn run_gateway_adapter(
         let (ws_tx, mut ws_rx) = ws_stream.split();
         let pending: PendingRequests = Arc::new(Mutex::new(HashMap::new()));
         let adapter: Arc<dyn ChatAdapter> =
-            Arc::new(GatewayAdapter::new(ws_tx, pending.clone(), platform));
+            Arc::new(GatewayAdapter::new(ws_tx, pending.clone(), platform, streaming));
         let mut tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
 
         loop {
