@@ -564,6 +564,7 @@ pub async fn run_gateway_adapter(
                                             trigger_msg,
                                             arrived_at: std::time::Instant::now(),
                                             estimated_tokens,
+                                            // TODO: implement gateway multibot detection
                                             other_bot_present: false,
                                         };
                                         if let Err(e) = dispatcher

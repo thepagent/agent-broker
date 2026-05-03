@@ -504,6 +504,18 @@ fn parse_config(raw: &str, source: &str) -> anyhow::Result<Config> {
     let expanded = expand_env_vars(raw);
     let config: Config = toml::from_str(&expanded)
         .map_err(|e| anyhow::anyhow!("failed to parse config from {source}: {e}"))?;
+
+    // Validate max_buffered_messages > 0 (tokio::sync::mpsc::channel panics on 0).
+    if let Some(ref d) = config.discord {
+        anyhow::ensure!(d.max_buffered_messages > 0, "discord.max_buffered_messages must be > 0");
+    }
+    if let Some(ref s) = config.slack {
+        anyhow::ensure!(s.max_buffered_messages > 0, "slack.max_buffered_messages must be > 0");
+    }
+    if let Some(ref g) = config.gateway {
+        anyhow::ensure!(g.max_buffered_messages > 0, "gateway.max_buffered_messages must be > 0");
+    }
+
     Ok(config)
 }
 

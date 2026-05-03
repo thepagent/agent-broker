@@ -11,10 +11,10 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use tracing::{error, info, info_span, warn};
+use tracing::{debug, error, info, info_span, warn};
 
 use crate::adapter::{AdapterRouter, ChannelRef, ChatAdapter, MessageRef};
 use crate::acp::ContentBlock;
@@ -255,6 +255,12 @@ impl Dispatcher {
 // consumer_loop
 // ---------------------------------------------------------------------------
 
+/// Idle timeout for per-thread consumer tasks. When no message arrives within
+/// this window the consumer exits, allowing `per_thread` map cleanup on the
+/// next `submit` (via `SendError` → `try_evict_locked`). Prevents unbounded
+/// task/memory growth from one-shot thread keys (e.g. Slack non-thread messages).
+const CONSUMER_IDLE_TIMEOUT: Duration = Duration::from_secs(300); // 5 min
+
 #[allow(clippy::too_many_arguments)]
 async fn consumer_loop(
     thread_key: String,
@@ -271,13 +277,26 @@ async fn consumer_loop(
 
     loop {
         // I1: block until at least one message arrives (zero latency for first message).
+        // Idle timeout: if no message arrives within CONSUMER_IDLE_TIMEOUT the
+        // consumer exits, freeing the task and mpsc. The next `submit` for this
+        // thread_key will observe `SendError`, evict the stale entry, and lazily
+        // spawn a fresh consumer (§2.5 generation check prevents mis-eviction).
         let first = match pending.take() {
             Some(msg) => msg,
-            None => match rx.recv().await {
-                Some(msg) => msg,
-                // All senders dropped → either shutdown() cleared the map, or
-                // cancel_buffered() removed our entry. Exit the loop.
-                None => break,
+            None => match tokio::time::timeout(CONSUMER_IDLE_TIMEOUT, rx.recv()).await {
+                Ok(Some(msg)) => msg,
+                Ok(None) => {
+                    // All senders dropped → shutdown() or cancel_buffered().
+                    break;
+                }
+                Err(_elapsed) => {
+                    debug!(
+                        thread_key = %thread_key,
+                        channel = %thread_channel.channel_id,
+                        "consumer idle timeout, exiting"
+                    );
+                    break;
+                }
             },
         };
 
@@ -340,19 +359,23 @@ async fn dispatch_batch(
     )
     .await;
 
-    // Collect per-event observability data.
+    // Collect per-event observability data (before consuming the batch).
     let tokens_per_event: Vec<usize> = batch.iter().map(|m| m.estimated_tokens).collect();
     let wait_ms: Vec<u128> = batch
         .iter()
         .map(|m| m.arrived_at.elapsed().as_millis())
         .collect();
-    let senders: Vec<&str> = batch.iter().map(|m| m.sender_name.as_str()).collect();
+    let senders: Vec<String> = batch.iter().map(|m| m.sender_name.clone()).collect();
+
+    // Anchor reactions on the last message in the batch (before consuming).
+    let trigger_msg = batch.last().unwrap().trigger_msg.clone();
 
     // Pack all arrival events into one Vec<ContentBlock> (§3.3).
+    // Uses into_iter() to avoid deep-copying extra_blocks (may contain base64 image data).
     let mut content_blocks: Vec<ContentBlock> = Vec::new();
-    for msg in &batch {
+    for msg in batch {
         let mut event_blocks =
-            AdapterRouter::pack_arrival_event(&msg.sender_json, &msg.prompt, msg.extra_blocks.clone());
+            AdapterRouter::pack_arrival_event(&msg.sender_json, &msg.prompt, msg.extra_blocks);
         content_blocks.append(&mut event_blocks);
     }
     let packed_block_count = content_blocks.len();
@@ -367,8 +390,6 @@ async fn dispatch_batch(
         return;
     }
 
-    // Anchor reactions on the last message in the batch.
-    let trigger_msg = batch.last().unwrap().trigger_msg.clone();
     let reactions_config = router.reactions_config().clone();
     let reactions = Arc::new(StatusReactionController::new(
         reactions_config.enabled,

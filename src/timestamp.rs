@@ -42,13 +42,12 @@ pub fn slack_ts_to_iso8601(ts: &str) -> String {
     unix_to_iso8601(secs, ms)
 }
 
-/// Current wall-clock instant as ISO 8601 UTC (millisecond precision, always `.000Z`).
+/// Current wall-clock instant as ISO 8601 UTC with millisecond precision.
 pub fn now_iso8601() -> String {
-    let secs = SystemTime::now()
+    let dur = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    unix_to_iso8601(secs, 0)
+        .unwrap_or_default();
+    unix_to_iso8601(dur.as_secs(), (dur.subsec_millis()) as u64)
 }
 
 #[cfg(test)]
@@ -79,10 +78,11 @@ mod tests {
     #[test]
     fn now_iso8601_has_expected_shape() {
         let s = now_iso8601();
-        // YYYY-MM-DDTHH:MM:SS.000Z = 24 chars
+        // YYYY-MM-DDTHH:MM:SS.mmmZ = 24 chars
         assert_eq!(s.len(), 24);
-        assert!(s.ends_with(".000Z"));
+        assert!(s.ends_with('Z'));
         assert_eq!(&s[4..5], "-");
         assert_eq!(&s[10..11], "T");
+        assert_eq!(&s[19..20], ".");
     }
 }
