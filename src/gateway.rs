@@ -493,7 +493,7 @@ pub async fn run_gateway_adapter(
                                         } else {
                                             ("agent", "agent")
                                         };
-                                        let arg = trimmed.splitn(2, ' ').nth(1).unwrap_or("").trim();
+                                        let arg = trimmed.split_once(' ').map(|x| x.1.trim()).unwrap_or("");
                                         let thread_key = format!("{}:{}", event.platform, event.channel.thread_id.as_deref().unwrap_or(&event.channel.id));
                                         let options = router.pool().get_config_options(&thread_key).await;
                                         let filtered: Vec<_> = options.iter()
