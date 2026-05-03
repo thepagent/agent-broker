@@ -187,6 +187,55 @@ Example user prompt after creating such a skill:
 Use $discord-imagegen-deliver to generate a warm hand-painted sky with birds and send it back to this Discord thread.
 ```
 
+## Approval Policy & Auto-review
+
+Codex offers three approval modes that control what happens when the agent
+tries to act outside the sandbox (network calls, running scripts, etc.):
+
+| Mode | Behaviour | Best for |
+|------|-----------|----------|
+| **Manual** (`approval_policy = "on-request"`) | Every out-of-sandbox action waits for a human to approve | Interactive, attended sessions |
+| **Auto-review** (`approval_policy = "auto-review"`) | A separate reviewer agent (GPT-5.4 Thinking) approves or denies automatically | **OpenAB / unattended agents** |
+| **Full Access** (`approval_policy = "full-access"`) | No sandbox enforcement at all | Trusted, isolated environments only |
+
+For OpenAB deployments, **Auto-review is the recommended mode**. OpenAB agents
+run as long-lived background processes with no human watching the terminal, so
+manual approval is impractical and Full Access removes all guardrails.
+
+Enable Auto-review in `/home/node/.codex/config.toml`:
+
+```toml
+[sandbox]
+approval_policy = "auto-review"
+```
+
+Or pass it at install time via Helm:
+
+```bash
+helm install openab openab/openab \
+  --set agents.codex.discord.enabled=true \
+  # ... other flags ...
+  --set-json 'agents.codex.extraConfig={"sandbox":{"approval_policy":"auto-review"}}'
+```
+
+### What Auto-review does
+
+- Approves ~99% of legitimate out-of-sandbox actions automatically.
+- Blocks actions that could exfiltrate data, expose secrets, delete data, or
+  weaken security settings.
+- When it rejects an action, it gives the agent a rationale so Codex can find a
+  safer alternative (succeeds >50% of the time without human input).
+- Stops the trajectory after repeated denials to prevent gaming.
+
+### Limitations
+
+Auto-review is **not** a security guarantee. It can be misled by adversarial
+inputs and cannot detect a model that hides malicious intent within the sandbox.
+Treat it as a strong default, not a replacement for network-level controls and
+secret management.
+
+For more details, see the [OpenAI Alignment Blog post on Auto-review](https://alignment.openai.com/auto-review).
+
 ## Troubleshooting
 
 ### `bwrap: No permissions to create a new namespace`
