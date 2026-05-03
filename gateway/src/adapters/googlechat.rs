@@ -390,3 +390,269 @@ fn split_text(text: &str, limit: usize) -> Vec<&str> {
     }
     chunks
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- Webhook parsing tests ---
+
+    fn make_envelope(
+        text: &str,
+        argument_text: Option<&str>,
+        sender_type: &str,
+        space_type: &str,
+        thread_name: Option<&str>,
+    ) -> String {
+        let arg_field = argument_text
+            .map(|a| format!(r#""argumentText": "{a}","#))
+            .unwrap_or_default();
+        let thread_field = thread_name
+            .map(|t| format!(r#","thread": {{"name": "{t}"}}"#))
+            .unwrap_or_default();
+        format!(
+            r#"{{
+                "chat": {{
+                    "user": {{
+                        "name": "users/111",
+                        "displayName": "Test",
+                        "type": "{sender_type}"
+                    }},
+                    "messagePayload": {{
+                        "message": {{
+                            "name": "spaces/SP/messages/msg1",
+                            "text": "{text}",
+                            {arg_field}
+                            "sender": {{
+                                "name": "users/111",
+                                "displayName": "Test",
+                                "type": "{sender_type}"
+                            }},
+                            "space": {{
+                                "name": "spaces/SP",
+                                "type": "{space_type}"
+                            }}
+                            {thread_field}
+                        }},
+                        "space": {{
+                            "name": "spaces/SP",
+                            "type": "{space_type}"
+                        }}
+                    }}
+                }}
+            }}"#
+        )
+    }
+
+    #[test]
+    fn parse_dm_message() {
+        let json = make_envelope("hello", None, "HUMAN", "DM", None);
+        let envelope: GoogleChatEnvelope = serde_json::from_str(&json).unwrap();
+        let chat = envelope.chat.unwrap();
+        let msg = chat.message_payload.unwrap().message.unwrap();
+        assert_eq!(msg.text.as_deref(), Some("hello"));
+        assert_eq!(msg.sender.unwrap().user_type, "HUMAN");
+    }
+
+    #[test]
+    fn parse_space_message_with_thread() {
+        let json = make_envelope(
+            "@Bot hi",
+            Some("hi"),
+            "HUMAN",
+            "ROOM",
+            Some("spaces/SP/threads/t1"),
+        );
+        let envelope: GoogleChatEnvelope = serde_json::from_str(&json).unwrap();
+        let chat = envelope.chat.unwrap();
+        let payload = chat.message_payload.unwrap();
+        let msg = payload.message.as_ref().unwrap();
+        assert_eq!(msg.argument_text.as_deref(), Some("hi"));
+        assert_eq!(msg.thread.as_ref().unwrap().name, "spaces/SP/threads/t1");
+        assert_eq!(payload.space.as_ref().unwrap().space_type.as_deref(), Some("ROOM"));
+    }
+
+    #[test]
+    fn parse_bot_message_detected() {
+        let json = make_envelope("bot says hi", None, "BOT", "DM", None);
+        let envelope: GoogleChatEnvelope = serde_json::from_str(&json).unwrap();
+        let chat = envelope.chat.unwrap();
+        let user = chat.user.unwrap();
+        assert_eq!(user.user_type, "BOT");
+    }
+
+    #[test]
+    fn parse_missing_chat_field() {
+        let json = r#"{"type": "ADDED_TO_SPACE"}"#;
+        let envelope: GoogleChatEnvelope = serde_json::from_str(json).unwrap();
+        assert!(envelope.chat.is_none());
+    }
+
+    #[test]
+    fn parse_missing_message_payload() {
+        let json = r#"{"chat": {"user": {"name": "u/1", "displayName": "X", "type": "HUMAN"}}}"#;
+        let envelope: GoogleChatEnvelope = serde_json::from_str(json).unwrap();
+        assert!(envelope.chat.unwrap().message_payload.is_none());
+    }
+
+    #[test]
+    fn parse_invalid_json() {
+        let result: Result<GoogleChatEnvelope, _> = serde_json::from_str("not json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn argument_text_preferred_over_text() {
+        let json = make_envelope("@Bot explain", Some("explain"), "HUMAN", "ROOM", None);
+        let envelope: GoogleChatEnvelope = serde_json::from_str(&json).unwrap();
+        let msg = envelope
+            .chat
+            .unwrap()
+            .message_payload
+            .unwrap()
+            .message
+            .unwrap();
+        let text = msg
+            .argument_text
+            .as_deref()
+            .or(msg.text.as_deref())
+            .unwrap();
+        assert_eq!(text, "explain");
+    }
+
+    #[test]
+    fn sender_name_strips_users_prefix() {
+        let sender_id = "users/123456";
+        let name = sender_id.strip_prefix("users/").unwrap_or(sender_id);
+        assert_eq!(name, "123456");
+    }
+
+    #[test]
+    fn message_id_extracts_last_segment() {
+        let msg_name = "spaces/SP/messages/abc123";
+        let id = msg_name.rsplit('/').next().unwrap_or(msg_name);
+        assert_eq!(id, "abc123");
+    }
+
+    // --- split_text tests ---
+
+    #[test]
+    fn split_text_short() {
+        let chunks = split_text("hello", 100);
+        assert_eq!(chunks, vec!["hello"]);
+    }
+
+    #[test]
+    fn split_text_exact_limit() {
+        let text = "a".repeat(100);
+        let chunks = split_text(&text, 100);
+        assert_eq!(chunks.len(), 1);
+    }
+
+    #[test]
+    fn split_text_over_limit() {
+        let text = "a".repeat(150);
+        let chunks = split_text(&text, 100);
+        assert_eq!(chunks.len(), 2);
+        let reassembled: String = chunks.concat();
+        assert_eq!(reassembled, text);
+    }
+
+    #[test]
+    fn split_text_breaks_at_newline() {
+        let text = format!("{}\n{}", "a".repeat(50), "b".repeat(50));
+        let chunks = split_text(&text, 60);
+        assert_eq!(chunks.len(), 2);
+        assert!(chunks[0].ends_with('\n'));
+    }
+
+    #[test]
+    fn split_text_breaks_at_space() {
+        let text = format!("{} {}", "a".repeat(50), "b".repeat(50));
+        let chunks = split_text(&text, 60);
+        assert_eq!(chunks.len(), 2);
+    }
+
+    #[test]
+    fn split_text_chinese_utf8_safe() {
+        let text = "你好世界測試谷歌聊天中文消息分割安全驗證完成";
+        let chunks = split_text(text, 10);
+        assert!(chunks.len() > 1);
+        let reassembled: String = chunks.concat();
+        assert_eq!(reassembled, text);
+    }
+
+    #[test]
+    fn split_text_search_start_char_boundary() {
+        let text: String = "谷歌".repeat(150); // 300 chars, 900 bytes
+        let chunks = split_text(&text, 500);
+        assert!(chunks.len() >= 2);
+        let reassembled: String = chunks.concat();
+        assert_eq!(reassembled, text);
+    }
+
+    #[test]
+    fn split_text_empty() {
+        let chunks = split_text("", 100);
+        assert!(chunks.is_empty());
+    }
+
+    // --- Token cache tests ---
+
+    #[test]
+    fn token_cache_rejects_invalid_json() {
+        let result = GoogleChatTokenCache::new("not json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn token_cache_rejects_missing_fields() {
+        match GoogleChatTokenCache::new(r#"{"type": "service_account"}"#) {
+            Err(e) => assert!(e.contains("client_email"), "unexpected error: {e}"),
+            Ok(_) => panic!("expected error for missing client_email"),
+        }
+    }
+
+    #[test]
+    fn token_cache_accepts_valid_sa_key() {
+        let key = r#"{
+            "type": "service_account",
+            "client_email": "test@test.iam.gserviceaccount.com",
+            "private_key": "-----BEGIN RSA PRIVATE KEY-----\nMIIBogIBAAJBALvRE+oCMiEhtfO5ufaVc9wGPUMgPGxmVFiMPC/NMxmCSiMGNO9h\nCOyByeF78QHp4gOW/lgVU8MJkv33hVMbOr0CAwEAAQJAD2k/cFR5MIkw1PFcm98K\n9MqYKGpJCmGBjFY0ek0FHoC14d/hpAGaoWMjNaAyjU/IbGv1fj8C5MfFRal0fV/L\nAQIhAP0T6FPJMm3O4bM18kMHnOP2+Y5kxMpVxCCjkVNH7D09AiEAvXEQJYwR+PFs\njDDhEm4VPmk+lKJoQlopj8TN5gQV8DECIBcXbU+LPWx4H+qRElhCB1B5a9mYmpY\nV6LFPnvSfHqNAiEAiNj5+A6E7WJ50il+5NG5yn7gXh8vNxdCYIw5qx6C2bECIBmW\nVGVRhSmNsmDMJFsGIdKJsnEXpizIVHtfpXsS4j9X\n-----END RSA PRIVATE KEY-----\n"
+        }"#;
+        let result = GoogleChatTokenCache::new(key);
+        assert!(result.is_ok());
+    }
+
+    // --- Bot filtering logic test ---
+
+    #[test]
+    fn bot_user_type_detected() {
+        let json = make_envelope("hello", None, "BOT", "DM", None);
+        let envelope: GoogleChatEnvelope = serde_json::from_str(&json).unwrap();
+        let chat = envelope.chat.unwrap();
+        let sender = chat
+            .message_payload
+            .as_ref()
+            .and_then(|p| p.message.as_ref())
+            .and_then(|m| m.sender.as_ref())
+            .or(chat.user.as_ref());
+        let is_bot = sender.map(|s| s.user_type == "BOT").unwrap_or(false);
+        assert!(is_bot);
+    }
+
+    #[test]
+    fn human_user_type_not_filtered() {
+        let json = make_envelope("hello", None, "HUMAN", "DM", None);
+        let envelope: GoogleChatEnvelope = serde_json::from_str(&json).unwrap();
+        let chat = envelope.chat.unwrap();
+        let sender = chat
+            .message_payload
+            .as_ref()
+            .and_then(|p| p.message.as_ref())
+            .and_then(|m| m.sender.as_ref())
+            .or(chat.user.as_ref());
+        let is_bot = sender.map(|s| s.user_type == "BOT").unwrap_or(false);
+        assert!(!is_bot);
+    }
+}

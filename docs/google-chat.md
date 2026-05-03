@@ -39,49 +39,51 @@ Google Chat uses a service account to authenticate outbound API calls (bot repli
 3. After creation, click the service account → **Keys** → **Add Key** → **Create New Key** → JSON.
 4. Save the downloaded JSON file securely.
 
-## 3. Generate an Access Token
+## 3. Configure the Gateway
 
-The gateway needs an OAuth2 access token to send replies. Generate one from the service account key:
+The gateway supports two authentication methods for sending replies:
+
+### Option A: Service Account Key (recommended — auto-refresh)
+
+Pass the service account JSON key directly. The gateway handles JWT signing and token refresh automatically.
 
 ```bash
-# Using Node.js
-node -e "
-const crypto = require('crypto');
-const https = require('https');
-const sa = require('./service-account-key.json');
-const header = Buffer.from(JSON.stringify({alg:'RS256',typ:'JWT'})).toString('base64url');
-const now = Math.floor(Date.now()/1000);
-const claims = Buffer.from(JSON.stringify({
-  iss: sa.client_email,
-  scope: 'https://www.googleapis.com/auth/chat.bot',
-  aud: 'https://oauth2.googleapis.com/token',
-  iat: now, exp: now + 3600
-})).toString('base64url');
-const sig = crypto.sign('sha256', Buffer.from(header+'.'+claims), sa.private_key).toString('base64url');
-const body = 'grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion='+header+'.'+claims+'.'+sig;
-const req = https.request('https://oauth2.googleapis.com/token', {method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'}}, res => {
-  let d=''; res.on('data',c=>d+=c); res.on('end',()=>console.log(JSON.parse(d).access_token));
-});
-req.write(body); req.end();
-"
+# Via JSON string
+docker run -d --name openab-gateway \
+  -e GOOGLE_CHAT_ENABLED=true \
+  -e GOOGLE_CHAT_SA_KEY_JSON='{"type":"service_account","client_email":"...","private_key":"..."}' \
+  -e GATEWAY_WS_TOKEN="your-ws-auth-token" \
+  -p 8080:8080 \
+  ghcr.io/openabdev/openab-gateway:latest
+
+# Via file path
+docker run -d --name openab-gateway \
+  -e GOOGLE_CHAT_ENABLED=true \
+  -e GOOGLE_CHAT_SA_KEY_FILE="/secrets/service-account.json" \
+  -v /path/to/service-account.json:/secrets/service-account.json:ro \
+  -e GATEWAY_WS_TOKEN="your-ws-auth-token" \
+  -p 8080:8080 \
+  ghcr.io/openabdev/openab-gateway:latest
 ```
 
-> **Note:** Access tokens expire after 1 hour. For production, implement automatic token refresh. Phase 2 of this adapter will add built-in service account JWT token refresh.
+### Option B: Static Access Token (for quick testing)
 
-## 4. Configure the Gateway
+Generate a token manually. It expires after 1 hour.
 
 ```bash
-# Docker
 docker run -d --name openab-gateway \
   -e GOOGLE_CHAT_ENABLED=true \
   -e GOOGLE_CHAT_ACCESS_TOKEN="ya29.c..." \
   -e GATEWAY_WS_TOKEN="your-ws-auth-token" \
   -p 8080:8080 \
   ghcr.io/openabdev/openab-gateway:latest
+```
 
-# Local development
+### Local development
+
+```bash
 export GOOGLE_CHAT_ENABLED=true
-export GOOGLE_CHAT_ACCESS_TOKEN="ya29.c..."
+export GOOGLE_CHAT_SA_KEY_FILE="/path/to/service-account.json"
 cargo run --release
 ```
 
@@ -128,20 +130,24 @@ working_dir = "/home/agent"
 - **Space chat** — add the bot to a Google Chat Space, @mention it to start a conversation
 - **Thread replies** — in Spaces, bot replies are posted in the same thread as the user's message
 - **`argument_text` extraction** — strips the @mention prefix to get the clean user message
+- **Bot message filtering** — bot messages (`user_type: "BOT"`) are filtered at the gateway level
+- **Message splitting** — long replies (>4096 chars) are automatically split at newline/space boundaries
+- **Token auto-refresh** — service account JWT tokens are refreshed automatically before expiry
 
 ### Not Supported
 
 - **Reactions** — Google Chat API does not support message reactions on behalf of bots
 - **Markdown rendering** — replies are sent as plain text (Google Chat uses its own card markup)
 - **File/image attachments** — not yet implemented
-- **Auto token refresh** — access tokens must be refreshed manually (1-hour TTL); built-in refresh is planned
 
 ## Environment Variables (Gateway)
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `GOOGLE_CHAT_ENABLED` | Yes | `false` | Set to `true` or `1` to enable the adapter |
-| `GOOGLE_CHAT_ACCESS_TOKEN` | No | — | OAuth2 access token for Chat API replies |
+| `GOOGLE_CHAT_SA_KEY_JSON` | No | — | Service account key JSON string (enables auto-refresh) |
+| `GOOGLE_CHAT_SA_KEY_FILE` | No | — | Path to service account key JSON file (alternative to `SA_KEY_JSON`) |
+| `GOOGLE_CHAT_ACCESS_TOKEN` | No | — | Static OAuth2 access token (fallback, expires in 1 hour) |
 | `GOOGLE_CHAT_WEBHOOK_PATH` | No | `/webhook/googlechat` | Webhook endpoint path |
 
 ## Troubleshooting
@@ -150,7 +156,7 @@ working_dir = "/home/agent"
 |---|---|
 | Bot doesn't respond | Check `GOOGLE_CHAT_ENABLED=true` is set. Check gateway logs for parse errors. |
 | "not responding" in Google Chat | Ensure the gateway returns a `200` with `{}` body. Check gateway is reachable via the webhook URL. |
-| Replies not sent | Check `GOOGLE_CHAT_ACCESS_TOKEN` is set and not expired (1-hour TTL). Regenerate from service account. |
+| Replies not sent | Use `GOOGLE_CHAT_SA_KEY_JSON` or `GOOGLE_CHAT_SA_KEY_FILE` for auto-refresh. If using static token, check it hasn't expired (1-hour TTL). |
 | Replies not in thread | Verify the thread name is passed correctly. The gateway appends `?messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD` automatically. |
 | Bot responds to its own messages | Bot messages have `user_type: "BOT"` and are filtered out automatically. |
 | Webhook returns 400 | Check the Google Chat API configuration uses **App URL** (not Dialogflow or Cloud Pub/Sub). The webhook expects the v2 envelope format with a `chat` wrapper. |
