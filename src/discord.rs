@@ -701,6 +701,8 @@ impl EventHandler for Handler {
                 .description("Select the agent mode for this session"),
             CreateCommand::new("cancel")
                 .description("Cancel the current operation"),
+            CreateCommand::new("cancel-all")
+                .description("Cancel current operation and drop all buffered messages"),
             CreateCommand::new("reset")
                 .description("Reset the conversation session"),
         ];
@@ -736,6 +738,9 @@ impl EventHandler for Handler {
             }
             Interaction::Command(cmd) if cmd.data.name == "cancel" => {
                 self.handle_cancel_command(&ctx, &cmd).await;
+            }
+            Interaction::Command(cmd) if cmd.data.name == "cancel-all" => {
+                self.handle_cancel_all_command(&ctx, &cmd).await;
             }
             Interaction::Command(cmd) if cmd.data.name == "reset" => {
                 self.handle_reset_command(&ctx, &cmd).await;
@@ -899,6 +904,36 @@ impl Handler {
         }
     }
 
+    async fn handle_cancel_all_command(
+        &self,
+        ctx: &Context,
+        cmd: &serenity::model::application::CommandInteraction,
+    ) {
+        let thread_key = format!("discord:{}", cmd.channel_id.get());
+
+        let dropped = self
+            .dispatcher
+            .as_ref()
+            .map(|d| d.cancel_buffered(&thread_key))
+            .unwrap_or(0);
+
+        let cancel_result = self.router.pool().cancel_session(&thread_key).await;
+
+        let msg = match (cancel_result, dropped) {
+            (Ok(()), 0) => "🛑 Cancel signal sent.".to_string(),
+            (Ok(()), n) => format!("🛑 Cancel signal sent. Dropped {n} buffered message(s)."),
+            (Err(_), 0) => "⚠️ Nothing to cancel — no active session and no buffered messages.".to_string(),
+            (Err(_), n) => format!("🛑 Dropped {n} buffered message(s). No active session to cancel."),
+        };
+
+        let response = CreateInteractionResponse::Message(
+            CreateInteractionResponseMessage::new().content(msg).ephemeral(true),
+        );
+        if let Err(e) = cmd.create_response(&ctx.http, response).await {
+            tracing::error!(error = %e, "failed to respond to /cancel-all command");
+        }
+    }
+
     async fn handle_reset_command(
         &self,
         ctx: &Context,
@@ -906,8 +941,7 @@ impl Handler {
     ) {
         let thread_key = format!("discord:{}", cmd.channel_id.get());
 
-        // Drop any messages buffered for this thread before resetting the session.
-        // /reset semantics include /cancel-all: discard buffered work, then reset.
+        // /reset is a superset of /cancel-all: drop buffered work, then tear down the session.
         let dropped = self
             .dispatcher
             .as_ref()
