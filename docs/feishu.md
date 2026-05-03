@@ -137,13 +137,15 @@ streaming = true
 
 The gateway platform must support message editing (Feishu/Lark do). Platforms that don't support editing should leave `streaming = false` (default).
 
-## Bot-to-Bot Collaboration
+## Bot-to-Bot Collaboration (Gateway-Side Only)
 
-Multi-bot support allows the gateway to process messages from other bots, matching Discord's `allow_bot_messages` feature.
+The gateway adapter includes bot identification and filtering scaffolding (`AllowBots` enum, `FEISHU_TRUSTED_BOT_IDS`, `FEISHU_MAX_BOT_TURNS` with human-reset safety valve), matching Discord's `allow_bot_messages` design.
 
 Bot identification requires explicit configuration via `FEISHU_TRUSTED_BOT_IDS` because Feishu marks other bots as `sender_type="user"` — they cannot be identified from the event alone.
 
-> **Feishu platform limitation:** Feishu does not deliver bot-sent messages to other bots' WebSocket connections. Bot-to-bot automatic collaboration is not currently possible. The gateway logic is ready if Feishu lifts this restriction in the future.
+> **Not yet functional.** Two blockers remain:
+> 1. **Feishu platform limitation:** Feishu does not deliver bot-sent messages to other bots' WebSocket connections.
+> 2. **OAB core limitation:** `src/gateway.rs` unconditionally drops `is_bot` events before they reach the router. When blocker 1 is lifted, the core guard must become adapter-aware to let gateway-filtered bot events through.
 
 ## Troubleshooting
 
