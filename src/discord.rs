@@ -631,10 +631,8 @@ impl EventHandler for Handler {
         // was built before the thread existed. Patch it so the agent sees
         // thread_id on the very first turn.
         let mut sender = sender;
-        if sender.thread_id.is_none() {
-            if let Some(ref _parent) = thread_channel.parent_id {
-                sender.thread_id = Some(thread_channel.channel_id.clone());
-            }
+        if sender.thread_id.is_none() && thread_channel.parent_id.is_some() {
+            sender.thread_id = Some(thread_channel.channel_id.clone());
         }
 
         let router = self.router.clone();
