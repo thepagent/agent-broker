@@ -1068,14 +1068,45 @@ fn parse_inline(line: &str) -> Vec<serde_json::Value> {
             }
             continue;
         }
-        // Strip ** (bold), * (italic), ~~ (strikethrough) markers
+        // Strip paired markdown markers: **bold**, *italic*, ~~strike~~
+        // Unpaired markers are kept as literal text (e.g. ~/.ssh, *.rs, 3 * 4)
         if chars[i] == '*' || chars[i] == '~' {
             let ch = chars[i];
             let mut run = 0;
             while i + run < len && chars[i + run] == ch {
                 run += 1;
             }
-            i += run;
+            // Look ahead for a matching closing run of same length
+            let after = i + run;
+            let mut scan = after;
+            let mut found_close = false;
+            while scan < len {
+                if chars[scan] == ch {
+                    let mut close_run = 0;
+                    while scan + close_run < len && chars[scan + close_run] == ch {
+                        close_run += 1;
+                    }
+                    if close_run == run {
+                        // Found matching close — strip both, keep inner text
+                        for j in after..scan {
+                            buf.push(chars[j]);
+                        }
+                        i = scan + close_run;
+                        found_close = true;
+                        break;
+                    }
+                    scan += close_run;
+                } else {
+                    scan += 1;
+                }
+            }
+            if !found_close {
+                // No matching close — keep markers as literal
+                for _ in 0..run {
+                    buf.push(ch);
+                }
+                i += run;
+            }
             continue;
         }
         buf.push(chars[i]);
@@ -1374,20 +1405,38 @@ pub async fn handle_reply(
     // self-echo (Feishu pushes bot's own messages back via WebSocket)
     // Use post (rich text) format for markdown rendering.
     if text.len() <= limit {
-        if let Some(msg_id) = send_post_message(&adapter.client, &api_base, &token, &reply.channel.id, text).await {
-            adapter.dedupe.is_duplicate(&msg_id);
-            // Send response with message_id back to OAB core (for streaming edit)
-            if let Some(ref req_id) = reply.request_id {
-                let resp = crate::schema::GatewayResponse {
-                    schema: "openab.gateway.response.v1".into(),
-                    request_id: req_id.clone(),
-                    success: true,
-                    thread_id: None,
-                    message_id: Some(msg_id),
-                    error: None,
-                };
-                if let Ok(json) = serde_json::to_string(&resp) {
-                    let _ = event_tx.send(json);
+        match send_post_message(&adapter.client, &api_base, &token, &reply.channel.id, text).await {
+            Some(msg_id) => {
+                adapter.dedupe.is_duplicate(&msg_id);
+                // Send response with message_id back to OAB core (for streaming edit)
+                if let Some(ref req_id) = reply.request_id {
+                    let resp = crate::schema::GatewayResponse {
+                        schema: "openab.gateway.response.v1".into(),
+                        request_id: req_id.clone(),
+                        success: true,
+                        thread_id: None,
+                        message_id: Some(msg_id),
+                        error: None,
+                    };
+                    if let Ok(json) = serde_json::to_string(&resp) {
+                        let _ = event_tx.send(json);
+                    }
+                }
+            }
+            None => {
+                // Send failure response so core doesn't wait 5s for timeout
+                if let Some(ref req_id) = reply.request_id {
+                    let resp = crate::schema::GatewayResponse {
+                        schema: "openab.gateway.response.v1".into(),
+                        request_id: req_id.clone(),
+                        success: false,
+                        thread_id: None,
+                        message_id: None,
+                        error: Some("send_post_message failed".into()),
+                    };
+                    if let Ok(json) = serde_json::to_string(&resp) {
+                        let _ = event_tx.send(json);
+                    }
                 }
             }
         }
