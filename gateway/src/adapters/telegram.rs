@@ -163,6 +163,7 @@ pub async fn handle_reply(
                         request_id: req_id,
                         success: true,
                         thread_id: tid,
+                        message_id: None,
                         error: None,
                     }
                 } else {
@@ -176,6 +177,7 @@ pub async fn handle_reply(
                         request_id: req_id,
                         success: false,
                         thread_id: None,
+                        message_id: None,
                         error: Some(err),
                     }
                 }
@@ -185,6 +187,7 @@ pub async fn handle_reply(
                 request_id: req_id,
                 success: false,
                 thread_id: None,
+                message_id: None,
                 error: Some(e.to_string()),
             },
         };

@@ -157,7 +157,7 @@ async fn handle_oab_connection(state: Arc<AppState>, socket: axum::extract::ws::
                             }
                             "feishu" => {
                                 if let Some(ref feishu) = state_for_recv.feishu {
-                                    adapters::feishu::handle_reply(&reply, feishu).await;
+                                    adapters::feishu::handle_reply(&reply, feishu, &state_for_recv.event_tx).await;
                                 } else {
                                     warn!("reply for feishu but adapter not configured");
                                 }

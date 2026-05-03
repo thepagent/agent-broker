@@ -67,6 +67,7 @@ pub struct GatewayResponse {
     pub request_id: String,
     pub success: bool,
     pub thread_id: Option<String>,
+    pub message_id: Option<String>,
     pub error: Option<String>,
 }
 

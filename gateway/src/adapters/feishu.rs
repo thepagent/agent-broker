@@ -924,6 +924,40 @@ async fn resolve_user_name(
 
 // ---------------------------------------------------------------------------
 // Send message
+/// Edit (update) an existing feishu message in-place for streaming.
+async fn edit_feishu_message(adapter: &FeishuAdapter, message_id: &str, text: &str) {
+    let token = match adapter.token_cache.get_token(&adapter.client).await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!(err = %e, "feishu: cannot get token for edit");
+            return;
+        }
+    };
+    let api_base = adapter.config.api_base();
+    let url = format!("{}/open-apis/im/v1/messages/{}", api_base, message_id);
+    let post_content = markdown_to_post(text);
+    let body = serde_json::json!({
+        "msg_type": "post",
+        "content": post_content.to_string(),
+    });
+    match adapter.client.put(&url).bearer_auth(&token)
+        .header("Content-Type", "application/json; charset=utf-8")
+        .json(&body).send().await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            tracing::trace!(message_id = %message_id, "feishu message edited");
+        }
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            tracing::error!(status = %status, body = %body, "feishu edit message failed");
+        }
+        Err(e) => {
+            tracing::error!(err = %e, "feishu edit message request failed");
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Markdown → Feishu post conversion
 // ---------------------------------------------------------------------------
@@ -1260,6 +1294,7 @@ async fn remove_reaction(adapter: &FeishuAdapter, message_id: &str, emoji: &str)
 pub async fn handle_reply(
     reply: &GatewayReply,
     adapter: &FeishuAdapter,
+    event_tx: &tokio::sync::broadcast::Sender<String>,
 ) {
     // Handle reactions — add/remove emoji on the original message
     if let Some(ref cmd) = reply.command {
@@ -1270,6 +1305,10 @@ pub async fn handle_reply(
             }
             "remove_reaction" => {
                 remove_reaction(adapter, &reply.reply_to, &reply.content.text).await;
+                return;
+            }
+            "edit_message" => {
+                edit_feishu_message(adapter, &reply.reply_to, &reply.content.text).await;
                 return;
             }
             "create_topic" | "set_reaction" => {
@@ -1298,6 +1337,20 @@ pub async fn handle_reply(
     if text.len() <= limit {
         if let Some(msg_id) = send_post_message(&adapter.client, &api_base, &token, &reply.channel.id, text).await {
             adapter.dedupe.is_duplicate(&msg_id);
+            // Send response with message_id back to OAB core (for streaming edit)
+            if let Some(ref req_id) = reply.request_id {
+                let resp = crate::schema::GatewayResponse {
+                    schema: "openab.gateway.response.v1".into(),
+                    request_id: req_id.clone(),
+                    success: true,
+                    thread_id: None,
+                    message_id: Some(msg_id),
+                    error: None,
+                };
+                if let Ok(json) = serde_json::to_string(&resp) {
+                    let _ = event_tx.send(json);
+                }
+            }
         }
     } else {
         for chunk in split_text(text, limit) {

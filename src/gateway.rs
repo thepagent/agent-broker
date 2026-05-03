@@ -86,6 +86,7 @@ struct GatewayResponse {
     request_id: String,
     success: bool,
     thread_id: Option<String>,
+    message_id: Option<String>,
     error: Option<String>,
 }
 
@@ -136,6 +137,21 @@ impl ChatAdapter for GatewayAdapter {
     }
 
     async fn send_message(&self, channel: &ChannelRef, content: &str) -> Result<MessageRef> {
+        let needs_msg_id = channel.platform == "feishu";
+        let req_id = if needs_msg_id {
+            Some(format!("req_{}", uuid::Uuid::new_v4()))
+        } else {
+            None
+        };
+
+        let pending_rx = if let Some(ref id) = req_id {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            self.pending.lock().await.insert(id.clone(), tx);
+            Some(rx)
+        } else {
+            None
+        };
+
         let reply = GatewayReply {
             schema: "openab.gateway.reply.v1".into(),
             reply_to: channel.origin_event_id.clone().unwrap_or_default(),
@@ -149,13 +165,26 @@ impl ChatAdapter for GatewayAdapter {
                 text: content.into(),
             },
             command: None,
-            request_id: None,
+            request_id: req_id.clone(),
         };
         let json = serde_json::to_string(&reply)?;
         self.ws_tx.lock().await.send(Message::Text(json)).await?;
+
+        let msg_id = if let (Some(rx), Some(ref id)) = (pending_rx, &req_id) {
+            match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
+                Ok(Ok(resp)) if resp.success => resp.message_id.unwrap_or_else(|| "gw_sent".into()),
+                _ => {
+                    self.pending.lock().await.remove(id);
+                    "gw_sent".into()
+                }
+            }
+        } else {
+            "gw_sent".into()
+        };
+
         Ok(MessageRef {
             channel: channel.clone(),
-            message_id: "gw_sent".into(),
+            message_id: msg_id,
         })
     }
 
@@ -251,8 +280,29 @@ impl ChatAdapter for GatewayAdapter {
         Ok(())
     }
 
+    async fn edit_message(&self, msg: &MessageRef, content: &str) -> Result<()> {
+        let reply = GatewayReply {
+            schema: "openab.gateway.reply.v1".into(),
+            reply_to: msg.message_id.clone(),
+            platform: msg.channel.platform.clone(),
+            channel: ReplyChannel {
+                id: msg.channel.channel_id.clone(),
+                thread_id: msg.channel.thread_id.clone(),
+            },
+            content: ReplyContent {
+                content_type: "text".into(),
+                text: content.into(),
+            },
+            command: Some("edit_message".into()),
+            request_id: None,
+        };
+        let json = serde_json::to_string(&reply)?;
+        self.ws_tx.lock().await.send(Message::Text(json)).await?;
+        Ok(())
+    }
+
     fn use_streaming(&self, _other_bot_present: bool) -> bool {
-        false // send-once for Telegram
+        self.platform_name == "feishu"
     }
 }
 
