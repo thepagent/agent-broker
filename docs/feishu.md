@@ -102,14 +102,18 @@ To disable mention gating: `feishu.requireMention: false`.
 
 ## Slash Commands
 
-The gateway intercepts `/reset` and `/cancel` messages before they reach the agent:
+The gateway intercepts slash commands before they reach the agent:
 
 | Command | Action |
 |---------|--------|
-| `/reset` | Clears the conversation session. Equivalent to Discord's `/reset`. |
-| `/cancel` | Sends a cancel signal to the running agent. Equivalent to Discord's `/cancel`. |
+| `/reset` | Clears the conversation session. |
+| `/cancel` | Sends a cancel signal to the running agent. |
+| `/models` | Lists available models with current selection marked ✅. |
+| `/models <name>` | Switches to a model matching `<name>` (case-insensitive substring match). |
+| `/agents` | Lists available agents with current selection marked ✅. |
+| `/agents <name>` | Switches to an agent matching `<name>`. |
 
-These work in both DMs and group chats, across all gateway platforms (Feishu, LINE, Telegram).
+`/models` and `/agents` require an active session — send a message first to start one.
 
 ## Rich Text (Post) Messages
 

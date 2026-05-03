@@ -171,7 +171,7 @@ impl ChatAdapter for GatewayAdapter {
         self.ws_tx.lock().await.send(Message::Text(json)).await?;
 
         let msg_id = if let (Some(rx), Some(ref id)) = (pending_rx, &req_id) {
-            match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
+            match tokio::time::timeout(std::time::Duration::from_secs(5), rx).await {
                 Ok(Ok(resp)) if resp.success => resp.message_id.unwrap_or_else(|| "gw_sent".into()),
                 _ => {
                     self.pending.lock().await.remove(id);
@@ -470,7 +470,7 @@ pub async fn run_gateway_adapter(
                                     // (Feishu/LINE/Telegram don't have native slash commands)
                                     let trimmed = prompt.trim();
                                     if trimmed == "/reset" {
-                                        let thread_key = format!("{}:{}", event.platform, event.channel.id);
+                                        let thread_key = format!("{}:{}", event.platform, event.channel.thread_id.as_deref().unwrap_or(&event.channel.id));
                                         let msg = match router.pool().reset_session(&thread_key).await {
                                             Ok(()) => "🔄 Session reset. Start a new conversation!",
                                             Err(_) => "⚠️ No active session to reset.",
@@ -479,12 +479,65 @@ pub async fn run_gateway_adapter(
                                         continue;
                                     }
                                     if trimmed == "/cancel" {
-                                        let thread_key = format!("{}:{}", event.platform, event.channel.id);
+                                        let thread_key = format!("{}:{}", event.platform, event.channel.thread_id.as_deref().unwrap_or(&event.channel.id));
                                         let msg = match router.pool().cancel_session(&thread_key).await {
-                                            Ok(()) => "🛑 Cancel signal sent.",
-                                            Err(e) => &format!("⚠️ {e}"),
+                                            Ok(()) => "🛑 Cancel signal sent.".to_string(),
+                                            Err(e) => format!("⚠️ {e}"),
                                         };
-                                        let _ = adapter.send_message(&channel, msg).await;
+                                        let _ = adapter.send_message(&channel, &msg).await;
+                                        continue;
+                                    }
+                                    if trimmed.starts_with("/models") || trimmed.starts_with("/agents") {
+                                        let (category, label) = if trimmed.starts_with("/models") {
+                                            ("model", "model")
+                                        } else {
+                                            ("agent", "agent")
+                                        };
+                                        let arg = trimmed.splitn(2, ' ').nth(1).unwrap_or("").trim();
+                                        let thread_key = format!("{}:{}", event.platform, event.channel.thread_id.as_deref().unwrap_or(&event.channel.id));
+                                        let options = router.pool().get_config_options(&thread_key).await;
+                                        let filtered: Vec<_> = options.iter()
+                                            .filter(|o| o.category.as_deref() == Some(category))
+                                            .collect();
+
+                                        let msg = if filtered.is_empty() {
+                                            format!("⚠️ No {label} options available. Start a conversation first.")
+                                        } else if arg.is_empty() {
+                                            // List options
+                                            let mut lines = vec![format!("🔧 Available {label}s:")];
+                                            for opt in &filtered {
+                                                for v in &opt.options {
+                                                    let marker = if v.value == opt.current_value { " ✅" } else { "" };
+                                                    lines.push(format!("  • {}{}", v.name, marker));
+                                                }
+                                            }
+                                            lines.push(format!("\nUsage: /{label}s <name>"));
+                                            lines.join("\n")
+                                        } else {
+                                            // Find matching option (case-insensitive substring)
+                                            let arg_lower = arg.to_lowercase();
+                                            let mut found = None;
+                                            for opt in &filtered {
+                                                for v in &opt.options {
+                                                    if v.value.to_lowercase().contains(&arg_lower)
+                                                        || v.name.to_lowercase().contains(&arg_lower)
+                                                    {
+                                                        found = Some((opt.id.clone(), v.value.clone(), v.name.clone()));
+                                                        break;
+                                                    }
+                                                }
+                                                if found.is_some() { break; }
+                                            }
+                                            if let Some((config_id, value, name)) = found {
+                                                match router.pool().set_config_option(&thread_key, &config_id, &value).await {
+                                                    Ok(_) => format!("✅ Switched to **{}**", name),
+                                                    Err(e) => format!("❌ Failed to switch: {e}"),
+                                                }
+                                            } else {
+                                                format!("⚠️ No {label} matching \"{arg}\". Use /{label}s to see options.")
+                                            }
+                                        };
+                                        let _ = adapter.send_message(&channel, &msg).await;
                                         continue;
                                     }
 

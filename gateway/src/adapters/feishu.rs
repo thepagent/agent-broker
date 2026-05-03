@@ -268,18 +268,24 @@ mod event_types {
         }
 
         // Check if sender is a known bot:
+        // Bot identification:
         // 1. If trusted_bot_ids is configured, check against it
-        // 2. If trusted_bot_ids is empty but allowed_users is configured,
-        //    any sender NOT in allowed_users is treated as a bot
-        //    (Feishu marks other bots as sender_type="user", so this is
-        //    the only reliable way to identify them)
+        // 2. If trusted_bot_ids is empty, we cannot reliably identify bots
+        //    (Feishu marks other bots as sender_type="user")
         let is_bot_sender = if !config.trusted_bot_ids.is_empty() {
             config.trusted_bot_ids.iter().any(|id| id == sender_open_id)
-        } else if !config.allowed_users.is_empty() {
-            !config.allowed_users.iter().any(|u| u == sender_open_id)
         } else {
             false
         };
+
+        // User allowlist: if configured, only allow listed users.
+        // Trusted bots bypass user allowlist (same as Discord behavior).
+        if !is_bot_sender
+            && !config.allowed_users.is_empty()
+            && !config.allowed_users.iter().any(|u| u == sender_open_id)
+        {
+            return None;
+        }
 
         if is_bot_sender {
             match config.allow_bots {
@@ -288,15 +294,6 @@ mod event_types {
                     // Allowed — will check mentions below for Mentions mode
                 }
             }
-        }
-
-        // User allowlist: if configured, only allow listed users
-        // Trusted bots bypass user allowlist (same as Discord behavior)
-        if !is_bot_sender
-            && !config.allowed_users.is_empty()
-            && !config.allowed_users.iter().any(|u| u == sender_open_id)
-        {
-            return None;
         }
 
         let chat_id = msg.chat_id.as_deref()?;
@@ -344,7 +341,9 @@ mod event_types {
         }
 
         // Bot-to-bot mention gating: in AllowBots::Mentions mode,
-        // bot messages must @mention this bot (like Discord "mentions" mode)
+        // bot messages must @mention this bot (like Discord "mentions" mode).
+        // Note: in DMs there is no @mention mechanism, so bot DMs are
+        // silently dropped in Mentions mode. Use AllowBots::All for DM bots.
         if is_bot_sender && config.allow_bots == AllowBots::Mentions {
             if let Some(bot_id) = bot_open_id {
                 let bot_mentioned = mention_ids.iter().any(|id| id == bot_id);
@@ -356,7 +355,7 @@ mod event_types {
 
         let thread_id = msg.root_id.clone().or_else(|| msg.parent_id.clone());
 
-        let mut event = GatewayEvent::new(
+        let event = GatewayEvent::new(
             "feishu",
             ChannelInfo {
                 id: chat_id.to_string(),
@@ -549,7 +548,7 @@ pub struct FeishuAdapter {
     pub name_cache: Arc<std::sync::Mutex<HashMap<String, String>>>,
     /// Per-channel bot turn counter. Key = chat_id, Value = (count, last_reset).
     /// Human message resets count to 0. Prevents runaway bot-to-bot loops.
-    pub bot_turns: Arc<std::sync::Mutex<HashMap<String, u32>>>,
+    pub bot_turns: Arc<std::sync::Mutex<HashMap<String, u32>>>, // TODO: add TTL eviction for long-running deploys
     pub client: reqwest::Client,
 }
 
@@ -967,10 +966,6 @@ async fn edit_feishu_message(adapter: &FeishuAdapter, message_id: &str, text: &s
 /// Unsupported inline formatting (bold, italic, etc.) is stripped to plain text.
 fn markdown_to_post(md: &str) -> serde_json::Value {
     let mut lines: Vec<Vec<serde_json::Value>> = Vec::new();
-    let mut chars = md.chars().peekable();
-    let mut i = 0;
-    let bytes = md.as_bytes();
-    let len = md.len();
 
     // We work byte-offset based for code fence detection, line-based otherwise.
     let raw_lines: Vec<&str> = md.split('\n').collect();
@@ -1121,7 +1116,13 @@ pub async fn send_post_message(
     {
         Ok(resp) => {
             if resp.status().is_success() {
-                let resp_body: serde_json::Value = resp.json().await.unwrap_or_default();
+                let resp_body: serde_json::Value = match resp.json().await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::warn!(err = %e, "feishu post: failed to parse response body");
+                        serde_json::Value::default()
+                    }
+                };
                 let msg_id = resp_body
                     .pointer("/data/message_id")
                     .and_then(|v| v.as_str())
@@ -1146,6 +1147,8 @@ pub async fn send_post_message(
 
 /// Send a text message to a feishu chat_id.
 /// Returns the sent message_id on success (for self-echo dedupe), None on failure.
+/// Kept for webhook fallback and tests; normal reply path uses send_post_message.
+#[allow(dead_code)]
 pub async fn send_text_message(
     client: &reqwest::Client,
     api_base: &str,
