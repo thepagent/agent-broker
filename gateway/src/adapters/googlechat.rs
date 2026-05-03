@@ -1,11 +1,13 @@
 use crate::schema::*;
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::response::IntoResponse;
+use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 pub const GOOGLE_CHAT_API_BASE: &str = "https://chat.googleapis.com/v1";
 const GOOGLE_CHAT_MESSAGE_LIMIT: usize = 4096;
@@ -65,13 +67,132 @@ pub struct GoogleChatSpace {
     pub space_type_renamed: Option<String>,
 }
 
+// --- Webhook JWT verification ---
+
+const GOOGLE_CHAT_ISSUER: &str = "chat@system.gserviceaccount.com";
+const GOOGLE_CHAT_JWKS_URL: &str =
+    "https://www.googleapis.com/service_accounts/v1/jwk/chat@system.gserviceaccount.com";
+const JWKS_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
+
+#[derive(Debug, Clone, Deserialize)]
+struct JwkKey {
+    kid: Option<String>,
+    n: String,
+    e: String,
+    kty: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct JwksResponse {
+    keys: Vec<JwkKey>,
+}
+
+pub struct GoogleChatJwtVerifier {
+    audience: String,
+    client: reqwest::Client,
+    jwks_cache: RwLock<Option<(Vec<JwkKey>, Instant)>>,
+}
+
+impl GoogleChatJwtVerifier {
+    pub fn new(audience: String) -> Self {
+        Self {
+            audience,
+            client: reqwest::Client::new(),
+            jwks_cache: RwLock::new(None),
+        }
+    }
+
+    async fn get_jwks(&self) -> Result<Vec<JwkKey>, String> {
+        {
+            let cache = self.jwks_cache.read().await;
+            if let Some((ref keys, fetched_at)) = *cache {
+                if fetched_at.elapsed() < JWKS_CACHE_TTL {
+                    return Ok(keys.clone());
+                }
+            }
+        }
+        let jwks: JwksResponse = self
+            .client
+            .get(GOOGLE_CHAT_JWKS_URL)
+            .send()
+            .await
+            .map_err(|e| format!("JWKS fetch error: {e}"))?
+            .json()
+            .await
+            .map_err(|e| format!("JWKS parse error: {e}"))?;
+
+        let keys = jwks.keys;
+        *self.jwks_cache.write().await = Some((keys.clone(), Instant::now()));
+        Ok(keys)
+    }
+
+    pub async fn verify(&self, auth_header: &str) -> Result<(), String> {
+        let token = auth_header
+            .strip_prefix("Bearer ")
+            .ok_or("missing Bearer prefix")?;
+
+        let header =
+            jsonwebtoken::decode_header(token).map_err(|e| format!("invalid JWT header: {e}"))?;
+        let kid = header.kid.ok_or("no kid in JWT header")?;
+
+        let keys = self.get_jwks().await?;
+        let key = match keys.iter().find(|k| k.kid.as_deref() == Some(&kid)) {
+            Some(k) => k.clone(),
+            None => {
+                // Key rotation: invalidate cache and retry
+                *self.jwks_cache.write().await = None;
+                let refreshed = self.get_jwks().await?;
+                refreshed
+                    .into_iter()
+                    .find(|k| k.kid.as_deref() == Some(&kid))
+                    .ok_or_else(|| format!("no matching JWK for kid={kid}"))?
+            }
+        };
+
+        if key.kty != "RSA" {
+            return Err(format!("unsupported key type: {}", key.kty));
+        }
+
+        let decoding_key = DecodingKey::from_rsa_components(&key.n, &key.e)
+            .map_err(|e| format!("RSA key decode error: {e}"))?;
+
+        let mut validation = Validation::new(Algorithm::RS256);
+        validation.set_audience(&[&self.audience]);
+        validation.set_issuer(&[GOOGLE_CHAT_ISSUER]);
+        validation.validate_exp = true;
+
+        decode::<serde_json::Value>(token, &decoding_key, &validation)
+            .map_err(|e| format!("JWT validation failed: {e}"))?;
+
+        Ok(())
+    }
+}
+
 // --- Webhook handler ---
 
 pub async fn webhook(
     State(state): State<Arc<crate::AppState>>,
+    headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> axum::response::Response {
     info!("googlechat webhook received ({} bytes)", body.len());
+
+    if let Some(ref verifier) = state.google_chat_jwt_verifier {
+        let auth_header = match headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+        {
+            Some(h) => h,
+            None => {
+                warn!("googlechat webhook: missing authorization header");
+                return (axum::http::StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+            }
+        };
+        if let Err(e) = verifier.verify(auth_header).await {
+            warn!(error = %e, "googlechat webhook JWT verification failed");
+            return (axum::http::StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+        }
+    }
 
     let envelope: GoogleChatEnvelope = match serde_json::from_slice(&body) {
         Ok(e) => e,
@@ -639,6 +760,30 @@ mod tests {
             .or(chat.user.as_ref());
         let is_bot = sender.map(|s| s.user_type == "BOT").unwrap_or(false);
         assert!(is_bot);
+    }
+
+    // --- JWT verifier tests ---
+
+    #[tokio::test]
+    async fn jwt_rejects_missing_bearer_prefix() {
+        let verifier = GoogleChatJwtVerifier::new("123456".into());
+        let result = verifier.verify("NotBearer xyz").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Bearer"));
+    }
+
+    #[tokio::test]
+    async fn jwt_rejects_invalid_token() {
+        let verifier = GoogleChatJwtVerifier::new("123456".into());
+        let result = verifier.verify("Bearer not.a.valid.jwt").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn jwt_rejects_empty_bearer() {
+        let verifier = GoogleChatJwtVerifier::new("123456".into());
+        let result = verifier.verify("Bearer ").await;
+        assert!(result.is_err());
     }
 
     #[test]

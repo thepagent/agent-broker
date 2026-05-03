@@ -52,6 +52,8 @@ pub struct AppState {
     pub google_chat_token_cache: Option<adapters::googlechat::GoogleChatTokenCache>,
     /// Google Chat static access token (fallback if no SA key)
     pub google_chat_access_token: Option<String>,
+    /// Google Chat webhook JWT verifier (validates inbound requests from Google)
+    pub google_chat_jwt_verifier: Option<adapters::googlechat::GoogleChatJwtVerifier>,
     /// WebSocket authentication token
     pub ws_token: Option<String>,
     /// Broadcast channel: gateway → OAB (events from all platforms)
@@ -288,6 +290,12 @@ async fn main() -> Result<()> {
                 .map_err(|e| warn!("googlechat SA key error: {e}"))
                 .ok()
         });
+    let google_chat_jwt_verifier = std::env::var("GOOGLE_CHAT_PROJECT_NUMBER")
+        .ok()
+        .map(|pn| {
+            info!("googlechat webhook JWT verification enabled (project_number={pn})");
+            adapters::googlechat::GoogleChatJwtVerifier::new(pn)
+        });
     let google_chat_enabled = std::env::var("GOOGLE_CHAT_ENABLED")
         .map(|v| v == "true" || v == "1")
         .unwrap_or(false);
@@ -302,6 +310,9 @@ async fn main() -> Result<()> {
             warn!("googlechat using static access token — will expire in ~1 hour");
         } else {
             warn!("GOOGLE_CHAT_ACCESS_TOKEN / GOOGLE_CHAT_SA_KEY_JSON not set — replies will be logged but not sent");
+        }
+        if google_chat_jwt_verifier.is_none() {
+            warn!("GOOGLE_CHAT_PROJECT_NUMBER not set — webhook requests are NOT authenticated (insecure)");
         }
     }
 
@@ -324,6 +335,7 @@ async fn main() -> Result<()> {
         feishu,
         google_chat_token_cache,
         google_chat_access_token,
+        google_chat_jwt_verifier,
         ws_token,
         event_tx,
         reply_token_cache,

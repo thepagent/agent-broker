@@ -145,10 +145,31 @@ working_dir = "/home/agent"
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `GOOGLE_CHAT_ENABLED` | Yes | `false` | Set to `true` or `1` to enable the adapter |
+| `GOOGLE_CHAT_PROJECT_NUMBER` | Recommended | — | GCP project number — enables JWT verification of inbound webhooks |
 | `GOOGLE_CHAT_SA_KEY_JSON` | No | — | Service account key JSON string (enables auto-refresh) |
 | `GOOGLE_CHAT_SA_KEY_FILE` | No | — | Path to service account key JSON file (alternative to `SA_KEY_JSON`) |
 | `GOOGLE_CHAT_ACCESS_TOKEN` | No | — | Static OAuth2 access token (fallback, expires in 1 hour) |
 | `GOOGLE_CHAT_WEBHOOK_PATH` | No | `/webhook/googlechat` | Webhook endpoint path |
+
+## Security: Webhook Verification
+
+Google Chat signs every webhook request with a JWT Bearer token. The gateway verifies this token to ensure requests actually come from Google.
+
+**Setup:**
+
+1. Find your GCP **Project Number** (not Project ID) in the Google Cloud Console → Dashboard.
+2. In the Google Chat API Configuration, set **Authentication Audience** to **Project Number**.
+3. Set the environment variable:
+   ```bash
+   export GOOGLE_CHAT_PROJECT_NUMBER="123456789012"
+   ```
+
+The gateway will:
+- Reject requests without a valid `Authorization: Bearer <jwt>` header
+- Verify the JWT signature against Google's public keys (JWKS, cached for 1 hour)
+- Validate `iss == chat@system.gserviceaccount.com` and `aud == <your project number>`
+
+If `GOOGLE_CHAT_PROJECT_NUMBER` is not set, the gateway logs a warning and accepts all requests (insecure — for local development only).
 
 ## Troubleshooting
 
