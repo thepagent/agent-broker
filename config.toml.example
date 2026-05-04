@@ -60,13 +60,39 @@ working_dir = "/home/agent"
 # Note: env vars here can override baseline vars (HOME, PATH, USER) if needed.
 # env = { ANTHROPIC_API_KEY = "${ANTHROPIC_API_KEY}" }
 #
-# By default, the agent subprocess only inherits these baseline vars:
-#   Linux/macOS: HOME, PATH, USER
-#   Windows:     USERPROFILE, USERNAME, PATH, SystemRoot, SystemDrive
+# Env inheritance from the OAB process is controlled by the [agent.clear_env]
+# table. The default is secure: the subprocess starts with env_clear() and
+# only receives the baseline (HOME/PATH/USER on Linux/macOS,
+# USERPROFILE/USERNAME/PATH/SystemRoot/SystemDrive on Windows) plus
+# everything in [agent].env above.
 #
-# To pass additional env vars from the OAB process (e.g. vars injected via K8s envFrom),
-# list them in inherit_env. Keys in [agent].env take precedence over inherited ones.
-# inherit_env = ["API_BASE_URL", "MODEL_NAME"]
+# Decision tree (when [agent.clear_env] is set):
+#   if enabled (default true):
+#     if allow_list non-empty   → only those keys pass through from process env
+#     elif deny_list non-empty  → all process env passes through EXCEPT deny_list
+#     else                       → nothing inherited (pure secure default)
+#   else (enabled = false):
+#     full process env inherited; both lists ignored (pure escape hatch)
+#
+# allow_list takes priority over deny_list when both are set under enabled=true.
+# [agent].env always wins on key conflict (highest precedence).
+#
+# Example: allow-list mode — explicitly pass a small set of keys.
+# [agent.clear_env]
+# allow_list = ["API_BASE_URL", "MODEL_NAME"]
+#
+# Example: deny-list mode for AWS-IRSA / web-identity workloads. K8s auto-
+# injects many AWS_* env vars (AWS_ROLE_ARN, AWS_WEB_IDENTITY_TOKEN_FILE, ...);
+# listing every benign one in allow_list is brittle. Inherit everything and
+# strip known secrets:
+# [agent.clear_env]
+# deny_list = ["DISCORD_BOT_TOKEN", "SLACK_BOT_TOKEN", "ANTHROPIC_API_KEY"]
+#
+# Example: pure escape hatch — disable filtering entirely (NOT recommended,
+# every secret in the OAB env is exposed to the agent and exfil-able via
+# prompt injection).
+# [agent.clear_env]
+# enabled = false
 
 # [agent]
 # command = "codex"

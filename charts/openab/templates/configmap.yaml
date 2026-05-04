@@ -106,8 +106,23 @@ data:
     {{- if $cfg.env }}
     env = { {{ $first := true }}{{ range $k, $v := $cfg.env }}{{ if not $first }}, {{ end }}{{ $k }} = {{ $v | toJson }}{{ $first = false }}{{ end }} }
     {{- end }}
-    {{- if $cfg.inheritEnv }}
-    inherit_env = {{ $cfg.inheritEnv | toJson }}
+    {{- if hasKey $cfg "inheritEnv" }}
+    {{- fail (printf "agents.%s.inheritEnv was removed -- use agents.%s.clearEnv.allowList instead (BREAKING in beta; see CHANGELOG)" $name $name) }}
+    {{- end }}
+    {{- $clearEnv := $cfg.clearEnv | default dict }}
+    {{- $clearEnvDisabled := and (hasKey $clearEnv "enabled") (not $clearEnv.enabled) }}
+    {{- if or $clearEnvDisabled $clearEnv.allowList $clearEnv.denyList }}
+
+    [agent.clear_env]
+    {{- if $clearEnvDisabled }}
+    enabled = false
+    {{- end }}
+    {{- if $clearEnv.allowList }}
+    allow_list = {{ $clearEnv.allowList | toJson }}
+    {{- end }}
+    {{- if $clearEnv.denyList }}
+    deny_list = {{ $clearEnv.denyList | toJson }}
+    {{- end }}
     {{- end }}
 
     [pool]

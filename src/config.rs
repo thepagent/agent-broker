@@ -221,7 +221,56 @@ pub struct AgentConfig {
     #[serde(default)]
     pub env: HashMap<String, String>,
     #[serde(default)]
-    pub inherit_env: Vec<String>,
+    pub clear_env: ClearEnvConfig,
+}
+
+/// Controls how the agent subprocess inherits environment variables from the
+/// OAB process. The default is secure (`enabled = true`, both lists empty):
+/// the subprocess starts with `env_clear()` and only receives baseline vars
+/// (HOME/PATH/USER/SystemRoot) plus `[agent].env`.
+///
+/// Decision tree (always after `env_clear()` + baseline + `[agent].env`):
+///
+/// ```text
+/// if enabled:
+///     if allow_list non-empty:    pass only these keys from process env
+///     elif deny_list non-empty:   pass all process env EXCEPT deny_list
+///     else:                       pass nothing (pure secure default)
+/// else:
+///     pass all process env (both lists ignored — escape hatch)
+/// ```
+///
+/// `allow_list` takes priority over `deny_list` when both are set under
+/// `enabled = true` (the deny_list branch is only reached when allow_list is
+/// empty). `[agent].env` always wins on key conflict.
+#[derive(Debug, Deserialize)]
+pub struct ClearEnvConfig {
+    /// When true (default), env_clear() runs and inheritance is governed by
+    /// `allow_list` / `deny_list` per the decision tree. When false, the
+    /// subprocess inherits the FULL OAB process env and both lists are
+    /// ignored.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Allow-list mode: when non-empty under `enabled = true`, only these
+    /// keys pass through from the OAB process env (deny_list is ignored).
+    /// No effect under `enabled = false`.
+    #[serde(default)]
+    pub allow_list: Vec<String>,
+    /// Deny-list mode: when non-empty under `enabled = true` AND `allow_list`
+    /// is empty, all process env passes through EXCEPT these keys. No effect
+    /// under `enabled = false` or when `allow_list` is non-empty.
+    #[serde(default)]
+    pub deny_list: Vec<String>,
+}
+
+impl Default for ClearEnvConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            allow_list: Vec::new(),
+            deny_list: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

@@ -122,25 +122,66 @@ pub struct AcpConnection {
     _reader_handle: JoinHandle<()>,
 }
 
-/// Build the final set of env vars for the agent subprocess.
-/// `explicit` ([agent].env) takes precedence over `inherit` ([agent].inherit_env).
+/// Build the inherited portion of env vars for the agent subprocess.
+///
+/// Decision tree:
+/// ```text
+/// if enabled:
+///     if allow_list non-empty:        # allow-list mode: only those keys
+///         pass allow_list keys from process env
+///     elif deny_list non-empty:       # deny-list mode: all except those
+///         pass all process env minus deny_list
+///     else:                           # pure clear: nothing inherited
+///         pass nothing
+/// else:                               # escape hatch: full inherit
+///     pass all process env, ignoring both lists
+/// ```
+///
+/// `explicit` ([agent].env) always wins via highest precedence.
 /// Returns (merged env map, list of keys that were inherited from the process).
 fn build_agent_env(
     explicit: &std::collections::HashMap<String, String>,
-    inherit_keys: &[String],
+    clear_env: &crate::config::ClearEnvConfig,
 ) -> (std::collections::HashMap<String, String>, Vec<String>) {
     let mut result: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut inherited: Vec<String> = Vec::new();
 
+    // 1. Explicit [agent].env always wins.
     for (k, v) in explicit {
         result.insert(k.clone(), expand_env(v));
     }
 
-    for key in inherit_keys {
-        if !result.contains_key(key) {
-            if let Ok(v) = std::env::var(key) {
-                result.insert(key.clone(), v);
-                inherited.push(key.clone());
+    // 2. Inherit from process env per the decision tree above.
+    if clear_env.enabled {
+        if !clear_env.allow_list.is_empty() {
+            for key in &clear_env.allow_list {
+                if !result.contains_key(key) {
+                    if let Ok(v) = std::env::var(key) {
+                        result.insert(key.clone(), v);
+                        inherited.push(key.clone());
+                    }
+                }
+            }
+        } else if !clear_env.deny_list.is_empty() {
+            let deny: std::collections::HashSet<&str> =
+                clear_env.deny_list.iter().map(String::as_str).collect();
+            for (k, v) in std::env::vars() {
+                if deny.contains(k.as_str()) {
+                    continue;
+                }
+                if !result.contains_key(&k) {
+                    result.insert(k.clone(), v);
+                    inherited.push(k);
+                }
+            }
+        }
+        // else: pure clear — nothing inherited beyond explicit + baseline.
+    } else {
+        // Escape hatch: full inherit, both lists ignored.
+        for (k, v) in std::env::vars() {
+            if !result.contains_key(&k) {
+                result.insert(k.clone(), v);
+                inherited.push(k);
             }
         }
     }
@@ -154,7 +195,7 @@ impl AcpConnection {
         args: &[String],
         working_dir: &str,
         env: &std::collections::HashMap<String, String>,
-        inherit_env: &[String],
+        clear_env: &crate::config::ClearEnvConfig,
     ) -> Result<Self> {
         info!(cmd = command, ?args, cwd = working_dir, "spawning agent");
 
@@ -181,12 +222,13 @@ impl AcpConnection {
         {
             cmd.creation_flags(0x00000200); // CREATE_NEW_PROCESS_GROUP
         }
-        // Clear inherited env to prevent credential leakage (e.g. DISCORD_BOT_TOKEN).
-        // Only [agent].env values + essential baseline vars are passed through.
+        // Always env_clear() for determinism; build_agent_env returns the
+        // exact set of vars to add back per the configured policy.
         cmd.env_clear();
-        // Preserve the real HOME so agents can find OAuth/auth files (~/.codex,
-        // ~/.claude, ~/.config/gh, etc.). working_dir is already set via
-        // current_dir() above and is not necessarily the user's home directory.
+        // Baseline: preserve real HOME so agents can find OAuth/auth files
+        // (~/.codex, ~/.claude, ~/.config/gh, etc.). working_dir is already
+        // set via current_dir() above and is not necessarily the user's home
+        // directory. PATH is required for the agent binary to find tools.
         cmd.env("HOME", std::env::var("HOME").unwrap_or_else(|_| working_dir.into()));
         cmd.env("PATH", std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".into()));
         #[cfg(unix)]
@@ -202,22 +244,22 @@ impl AcpConnection {
             if let Ok(v) = std::env::var("SystemRoot") { cmd.env("SystemRoot", v); }
             if let Ok(v) = std::env::var("SystemDrive") { cmd.env("SystemDrive", v); }
         }
-        for (k, v) in env {
-            cmd.env(k, expand_env(v));
-        }
-        // Inherit selected env vars from the OAB process (e.g. vars injected
-        // via Kubernetes envFrom).  Keys already in [agent].env are skipped —
-        // explicit values take precedence.
-        let (agent_env, inherited_keys) = build_agent_env(env, inherit_env);
+        // Build inherited set per [agent.clear_env] policy.
+        let (agent_env, inherited_keys) = build_agent_env(env, clear_env);
         for (k, v) in &agent_env {
             cmd.env(k, v);
         }
-        if !agent_env.is_empty() {
+        if !clear_env.enabled {
+            tracing::warn!(
+                inherited_count = inherited_keys.len(),
+                "[agent].clear_env.enabled = false -- the agent subprocess inherits the FULL OAB process environment. All inherited values are accessible to the agent and could be exfiltrated via prompt injection. Prefer enabled = true with allow_list or deny_list when possible."
+            );
+        } else if !agent_env.is_empty() {
             let explicit_keys: Vec<&String> = env.keys().collect();
             tracing::warn!(
                 ?explicit_keys,
-                ?inherited_keys,
-                "[agent].env/inherit_env is set -- these values are accessible to the agent and could be exfiltrated via prompt injection"
+                inherited_count = inherited_keys.len(),
+                "[agent].env / clear_env is set -- these values are accessible to the agent and could be exfiltrated via prompt injection"
             );
         }
         let mut proc = cmd
@@ -688,15 +730,23 @@ mod tests {
         );
     }
 
+    fn make_clear_env(enabled: bool, allow: Vec<&str>, deny: Vec<&str>) -> crate::config::ClearEnvConfig {
+        crate::config::ClearEnvConfig {
+            enabled,
+            allow_list: allow.into_iter().map(String::from).collect(),
+            deny_list: deny.into_iter().map(String::from).collect(),
+        }
+    }
+
     #[test]
-    fn explicit_env_takes_precedence_over_inherit_env() {
+    fn explicit_env_takes_precedence_over_allow_list() {
         let key = "OAB_TEST_PRECEDENCE";
         std::env::set_var(key, "from_process");
         let mut explicit = std::collections::HashMap::new();
         explicit.insert(key.to_string(), "from_config".to_string());
-        let inherit = vec![key.to_string()];
+        let clear_env = make_clear_env(true, vec![key], vec![]);
 
-        let (result, inherited) = build_agent_env(&explicit, &inherit);
+        let (result, inherited) = build_agent_env(&explicit, &clear_env);
 
         assert_eq!(result.get(key).unwrap(), "from_config");
         assert!(!inherited.contains(&key.to_string()));
@@ -704,13 +754,13 @@ mod tests {
     }
 
     #[test]
-    fn inherit_env_copies_from_process() {
+    fn allow_list_copies_from_process() {
         let key = "OAB_TEST_INHERIT";
         std::env::set_var(key, "process_value");
         let explicit = std::collections::HashMap::new();
-        let inherit = vec![key.to_string()];
+        let clear_env = make_clear_env(true, vec![key], vec![]);
 
-        let (result, inherited) = build_agent_env(&explicit, &inherit);
+        let (result, inherited) = build_agent_env(&explicit, &clear_env);
 
         assert_eq!(result.get(key).unwrap(), "process_value");
         assert!(inherited.contains(&key.to_string()));
@@ -718,13 +768,94 @@ mod tests {
     }
 
     #[test]
-    fn inherit_env_skips_missing_vars() {
+    fn allow_list_skips_missing_vars() {
         let explicit = std::collections::HashMap::new();
-        let inherit = vec!["OAB_TEST_NONEXISTENT_VAR_12345".to_string()];
+        let clear_env = make_clear_env(true, vec!["OAB_TEST_NONEXISTENT_VAR_12345"], vec![]);
 
-        let (result, inherited) = build_agent_env(&explicit, &inherit);
+        let (result, inherited) = build_agent_env(&explicit, &clear_env);
 
         assert!(!result.contains_key("OAB_TEST_NONEXISTENT_VAR_12345"));
         assert!(inherited.is_empty());
+    }
+
+    #[test]
+    fn enabled_true_with_empty_lists_inherits_nothing() {
+        // Pure clear mode: enabled=true with both lists empty inherits nothing.
+        let key = "OAB_TEST_PURE_CLEAR";
+        std::env::set_var(key, "should_not_appear");
+        let explicit = std::collections::HashMap::new();
+        let clear_env = make_clear_env(true, vec![], vec![]);
+
+        let (result, _inherited) = build_agent_env(&explicit, &clear_env);
+
+        assert!(!result.contains_key(key));
+        std::env::remove_var(key);
+    }
+
+    #[test]
+    fn enabled_false_inherits_full_env_ignoring_lists() {
+        // Escape hatch: full inherit, both lists ignored.
+        let inherited_key = "OAB_TEST_FULL_INHERIT";
+        let allow_only_key = "OAB_TEST_ALLOW_IGNORED";
+        let deny_target_key = "OAB_TEST_DENY_IGNORED";
+        std::env::set_var(inherited_key, "process_value");
+        std::env::set_var(allow_only_key, "value_a");
+        std::env::set_var(deny_target_key, "value_d");
+        let explicit = std::collections::HashMap::new();
+        let clear_env = make_clear_env(false, vec![allow_only_key], vec![deny_target_key]);
+
+        let (result, inherited) = build_agent_env(&explicit, &clear_env);
+
+        // All three are inherited because lists are ignored under enabled=false.
+        assert_eq!(result.get(inherited_key).unwrap(), "process_value");
+        assert_eq!(result.get(allow_only_key).unwrap(), "value_a");
+        assert_eq!(result.get(deny_target_key).unwrap(), "value_d");
+        assert!(inherited.contains(&inherited_key.to_string()));
+        std::env::remove_var(inherited_key);
+        std::env::remove_var(allow_only_key);
+        std::env::remove_var(deny_target_key);
+    }
+
+    #[test]
+    fn deny_list_strips_keys_when_enabled() {
+        // deny_list mode: enabled=true, allow_list empty, deny_list non-empty
+        // → inherit all process env minus deny_list keys.
+        let kept = "OAB_TEST_KEPT";
+        let stripped = "OAB_TEST_STRIPPED";
+        std::env::set_var(kept, "kept_value");
+        std::env::set_var(stripped, "should_be_stripped");
+        let explicit = std::collections::HashMap::new();
+        let clear_env = make_clear_env(true, vec![], vec![stripped]);
+
+        let (result, _inherited) = build_agent_env(&explicit, &clear_env);
+
+        assert_eq!(result.get(kept).unwrap(), "kept_value");
+        assert!(!result.contains_key(stripped));
+        std::env::remove_var(kept);
+        std::env::remove_var(stripped);
+    }
+
+    #[test]
+    fn allow_list_takes_priority_over_deny_list_when_both_set() {
+        // When allow_list is non-empty under enabled=true, deny_list is
+        // ignored entirely (allow-list-only mode).
+        let allowed = "OAB_TEST_ALLOWED";
+        let other = "OAB_TEST_NOT_ALLOWED";
+        let listed_in_deny = "OAB_TEST_LISTED_IN_DENY";
+        std::env::set_var(allowed, "allowed_value");
+        std::env::set_var(other, "other_value");
+        std::env::set_var(listed_in_deny, "deny_value");
+        let explicit = std::collections::HashMap::new();
+        let clear_env = make_clear_env(true, vec![allowed], vec![listed_in_deny]);
+
+        let (result, _inherited) = build_agent_env(&explicit, &clear_env);
+
+        // Only the allow_list key passes; deny_list and other keys are absent.
+        assert_eq!(result.get(allowed).unwrap(), "allowed_value");
+        assert!(!result.contains_key(other));
+        assert!(!result.contains_key(listed_in_deny));
+        std::env::remove_var(allowed);
+        std::env::remove_var(other);
+        std::env::remove_var(listed_in_deny);
     }
 }

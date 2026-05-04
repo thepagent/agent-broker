@@ -143,18 +143,45 @@ tests:
           path: data["config.toml"]
           pattern: 'max_bot_turns = 30'
 
-  - it: renders inherit_env as TOML array
+  - it: renders clear_env.allow_list as TOML array
     set:
-      agents.kiro.inheritEnv:
+      agents.kiro.clearEnv.allowList:
         - "API_BASE_URL"
         - "MODEL_NAME"
     asserts:
       - matchRegex:
           path: data["config.toml"]
-          pattern: 'inherit_env = \["API_BASE_URL","MODEL_NAME"\]'
+          pattern: '\[agent\.clear_env\]'
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: 'allow_list = \["API_BASE_URL","MODEL_NAME"\]'
 
-  - it: does not render inherit_env when unset
+  - it: renders clear_env.enabled = false when disabled
+    set:
+      agents.kiro.clearEnv.enabled: false
+      agents.kiro.clearEnv.denyList:
+        - "DISCORD_BOT_TOKEN"
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '\[agent\.clear_env\]'
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: 'enabled = false'
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: 'deny_list = \["DISCORD_BOT_TOKEN"\]'
+
+  - it: does not render clear_env section when unset
     asserts:
       - notMatchRegex:
           path: data["config.toml"]
-          pattern: 'inherit_env'
+          pattern: '\[agent\.clear_env\]'
+
+  - it: fails with helpful message when legacy inheritEnv is used
+    set:
+      agents.kiro.inheritEnv:
+        - "API_BASE_URL"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'inheritEnv was removed'
