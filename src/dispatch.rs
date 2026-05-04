@@ -959,4 +959,74 @@ mod tests {
         assert!(!map.contains_key("discord:T1:userA"));
         assert!(map.contains_key("discord:T10:userA"));
     }
+
+    // Long-running consumer that parks until aborted — used by sweep_stale /
+    // shutdown tests to exercise the "still alive" path.
+    fn alive_consumer_handle() -> ThreadHandle {
+        let (tx, _rx) = tokio::sync::mpsc::channel::<BufferedMessage>(10);
+        let consumer = tokio::spawn(async {
+            std::future::pending::<()>().await;
+        });
+        ThreadHandle {
+            tx,
+            consumer,
+            generation: 0,
+            channel_id: "c".into(),
+            adapter_kind: "discord".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn sweep_stale_removes_finished_consumers() {
+        let d = make_dispatcher(BatchGrouping::Thread);
+        insert_dummy_handle(&d, "discord:T1");
+        insert_dummy_handle(&d, "discord:T2");
+        // Yield so the empty-body spawned tasks actually run to completion
+        // before is_finished() is checked.
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let swept = d.sweep_stale();
+        assert_eq!(swept, 2);
+        assert!(d.per_thread.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn sweep_stale_keeps_running_consumers() {
+        let d = make_dispatcher(BatchGrouping::Thread);
+        let abort = {
+            let h = alive_consumer_handle();
+            let a = h.consumer.abort_handle();
+            d.per_thread.lock().unwrap().insert("alive".into(), h);
+            a
+        };
+        let swept = d.sweep_stale();
+        assert_eq!(swept, 0);
+        assert!(d.per_thread.lock().unwrap().contains_key("alive"));
+        // Cleanup so the parked task doesn't linger across tests.
+        abort.abort();
+    }
+
+    #[tokio::test]
+    async fn shutdown_clears_all_handles() {
+        let d = make_dispatcher(BatchGrouping::Thread);
+        insert_dummy_handle(&d, "k1");
+        insert_dummy_handle(&d, "k2");
+        insert_dummy_handle(&d, "k3");
+        d.shutdown();
+        assert!(d.per_thread.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn shutdown_aborts_running_consumers() {
+        let d = make_dispatcher(BatchGrouping::Thread);
+        let abort = {
+            let h = alive_consumer_handle();
+            let a = h.consumer.abort_handle();
+            d.per_thread.lock().unwrap().insert("k".into(), h);
+            a
+        };
+        d.shutdown();
+        // Give the runtime a tick to process abort + map drop.
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(abort.is_finished());
+    }
 }
