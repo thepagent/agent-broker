@@ -171,7 +171,7 @@ impl SessionPool {
             &self.config.args,
             &self.config.working_dir,
             &self.config.env,
-            &self.config.inherit_env,
+            &self.config.clear_env,
         )
         .await?;
 

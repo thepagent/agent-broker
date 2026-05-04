@@ -90,9 +90,37 @@ The AI agent subprocess that OpenAB spawns to handle messages via ACP.
 | `args` | string[] | `[]` | CLI arguments passed to the agent. |
 | `working_dir` | string | `"/tmp"` | Working directory for the agent process. |
 | `env` | map | `{}` | Extra environment variables (e.g. `{ ANTHROPIC_API_KEY = "${ANTHROPIC_API_KEY}" }`). |
-| `inherit_env` | string[] | `[]` | Env var names to inherit from the OAB process (e.g. vars injected via K8s `envFrom`). Keys in `env` take precedence. |
+| `clear_env` | table | *(see below)* | Controls how the subprocess inherits env vars from the OAB process. Default is secure (env_clear + baseline + `env`). |
 
-> **Default inherited vars:** After `env_clear()`, the agent always receives `HOME`, `PATH`, and `USER` (on Windows: `USERPROFILE`, `USERNAME`, `PATH`, `SystemRoot`, `SystemDrive`). Use `inherit_env` to pass additional vars beyond this baseline.
+#### `[agent.clear_env]` — environment inheritance policy
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | bool | `true` | When `true`, `env_clear()` runs and inheritance follows the decision tree below. When `false`, the subprocess inherits the FULL OAB process env and both lists are ignored (escape hatch). |
+| `allow_list` | string[] | `[]` | When non-empty under `enabled = true`: only these keys pass through from the OAB process env (deny_list ignored). **Baseline (`HOME`, `PATH`, `USER`, etc.) is always added separately** — `allow_list = ["FOO"]` yields `{baseline + [agent].env + FOO}`, not `{FOO}` alone. |
+| `deny_list` | string[] | `[]` | When non-empty under `enabled = true` AND `allow_list` is empty: all process env passes through EXCEPT these keys. **Baseline keys are added unconditionally and cannot be denied** — `deny_list = ["PATH"]` does NOT remove `PATH` from the subprocess. |
+
+**Decision tree** (always after `env_clear()` + baseline + `[agent].env`):
+
+```text
+if enabled:
+    if allow_list non-empty:    pass only those keys from process env
+    elif deny_list non-empty:   pass all process env EXCEPT deny_list
+    else:                       pass nothing (pure secure default)
+else:
+    pass all process env (escape hatch — both lists ignored)
+```
+
+`allow_list` takes priority over `deny_list` when both are set under `enabled = true` (the deny-list branch is only reached when allow-list is empty). `[agent].env` always wins on key conflict (highest precedence).
+
+> **Baseline always set:** Regardless of `clear_env` mode, the subprocess receives `HOME`, `PATH`, and `USER` (on Windows: `USERPROFILE`, `USERNAME`, `PATH`, `SystemRoot`, `SystemDrive`). The baseline ensures agents can locate OAuth/auth files (`~/.codex`, `~/.claude`, `~/.config/gh`).
+
+**Use case — AWS-IRSA / web-identity workloads:** Kubernetes auto-injects many `AWS_*` env vars (`AWS_ROLE_ARN`, `AWS_WEB_IDENTITY_TOKEN_FILE`, ...). Listing every benign one in `allow_list` is brittle. Use `deny_list` to inherit everything but strip known secrets:
+
+```toml
+[agent.clear_env]
+deny_list = ["DISCORD_BOT_TOKEN", "SLACK_BOT_TOKEN", "ANTHROPIC_API_KEY"]
+```
 
 ### Agent examples
 

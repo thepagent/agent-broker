@@ -42,6 +42,10 @@ agents:
     #   nameOverride: ""
     #   env: {}
     #   envFrom: []
+    #   clearEnv:
+    #     enabled: true                 # default; set false to disable filtering entirely (escape hatch)
+    #     allowList: []                 # only-these mode (deny ignored when set)
+    #     denyList: []                  # all-except-these mode (active only when allowList is empty)
     #   pool:
     #     maxSessions: 10
     #     sessionTtlHours: 24
@@ -76,6 +80,10 @@ agents:
     #   workingDir: /home/node
     #   env: {}
     #   envFrom: []
+    #   clearEnv:
+    #     enabled: true                 # default; set false to disable filtering entirely (escape hatch)
+    #     allowList: []                 # only-these mode (deny ignored when set)
+    #     denyList: []                  # all-except-these mode (active only when allowList is empty)
     #   pool:
     #     maxSessions: 10
     #     sessionTtlHours: 24
@@ -107,6 +115,10 @@ agents:
     #   workingDir: /home/agent
     #   env: {}
     #   envFrom: []
+    #   clearEnv:
+    #     enabled: true                 # default; set false to disable filtering entirely (escape hatch)
+    #     allowList: []                 # only-these mode (deny ignored when set)
+    #     denyList: []                  # all-except-these mode (active only when allowList is empty)
     #   pool:
     #     maxSessions: 10
     #     sessionTtlHours: 24
