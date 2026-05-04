@@ -187,29 +187,6 @@ enabled = true                        # enable emoji status reactions
 remove_after_reply = false            # remove reactions after reply
 ```
 
-<details>
-<summary>Full reactions config</summary>
-
-```toml
-[reactions.emojis]
-queued = "👀"
-thinking = "🤔"
-tool = "🔥"
-coding = "👨‍💻"
-web = "⚡"
-done = "🆗"
-error = "😱"
-
-[reactions.timing]
-debounce_ms = 700
-stall_soft_ms = 10000
-stall_hard_ms = 30000
-done_hold_ms = 1500
-error_hold_ms = 2500
-```
-
-</details>
-
 ## Kubernetes Deployment
 
 The Docker image bundles both `openab` and `kiro-cli` in a single container.
