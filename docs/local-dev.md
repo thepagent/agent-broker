@@ -1,6 +1,6 @@
 # Local Development
 
-> ⚠️ **Security disclaimer:** OpenAB is designed to run in Kubernetes with Pod-level isolation (NetworkPolicy, resource limits, read-only root filesystem). Running directly on a host without container isolation is **not recommended for production** — the agent subprocess inherits full host permissions, which is a meaningful attack surface for a bot accepting messages from arbitrary users.
+> ⚠️ **Security disclaimer:** OpenAB is designed to run in Kubernetes with Pod-level isolation (NetworkPolicy, resource limits, read-only root filesystem). Native binaries — including Windows builds — are provided for **temporary local development and debugging only**, not for daily use. Running directly on a host without container isolation is **not recommended for production** — the agent subprocess inherits full host permissions and is not protected by any sandbox, which is a meaningful attack surface for a bot accepting messages from arbitrary users.
 
 ```bash
 cp config.toml.example config.toml
