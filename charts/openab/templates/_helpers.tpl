@@ -36,15 +36,25 @@ app.kubernetes.io/instance: {{ .ctx.Release.Name }}
 app.kubernetes.io/component: {{ .agent }}
 {{- end }}
 
-{{/* Per-agent resource name: <fullname>-<agentKey> */}}
+{{/* Per-agent resource name: nameOverride > <fullname>-<agentKey> */}}
 {{- define "openab.agentFullname" -}}
+{{- if and .cfg (.cfg.nameOverride) (ne .cfg.nameOverride "") }}
+{{- .cfg.nameOverride | trunc 63 | trimSuffix "-" }}
+{{- else }}
 {{- printf "%s-%s" (include "openab.fullname" .ctx) .agent | trunc 63 | trimSuffix "-" }}
 {{- end }}
+{{- end }}
 
-{{/* Resolve image: agent-level string override → global default (repository:tag, tag defaults to appVersion) */}}
+{{/* Resolve image: agent-level string override → global default (repository:tag, tag defaults to appVersion).
+    Caveat: "contains :" treats registry ports (e.g. my-registry:5000/img) as tagged.
+    Not an issue for ghcr.io / Docker Hub; revisit if custom registries with ports are needed. */}}
 {{- define "openab.agentImage" -}}
 {{- if and .cfg.image (kindIs "string" .cfg.image) (ne .cfg.image "") }}
+{{- if contains ":" .cfg.image }}
 {{- .cfg.image }}
+{{- else }}
+{{- printf "%s:%s" .cfg.image (default .ctx.Chart.AppVersion .ctx.Values.image.tag) }}
+{{- end }}
 {{- else }}
 {{- $tag := default .ctx.Chart.AppVersion .ctx.Values.image.tag }}
 {{- printf "%s:%s" .ctx.Values.image.repository $tag }}
