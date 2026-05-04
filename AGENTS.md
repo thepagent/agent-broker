@@ -26,7 +26,7 @@ src/
 │   └── wizard.rs     # CLI setup flow
 └── acp/
     ├── protocol.rs   # JSON-RPC types + ACP event classification
-    ├── connection.rs # Spawn CLI, stdio JSON-RPC, env_clear whitelist
+    ├── connection.rs # Spawn CLI, stdio JSON-RPC, [agent.clear_env] policy
     └── pool.rs       # Session key → AcpConnection map + lifecycle
 ```
 
@@ -65,13 +65,24 @@ The definitive rules — do NOT reinvent this:
 
 ### 3. Security — Child Process Environment
 
-Agent subprocesses start with `env_clear()`. The baseline env passed to the child is:
+Agent subprocesses start with `env_clear()`. The baseline env always passed to the child is:
 - **All platforms:** `HOME`, `PATH`
 - **Unix only:** `USER`
 - **Windows only:** `USERPROFILE`, `USERNAME`, `SystemRoot`, `SystemDrive`
 - Plus any explicit `[agent].env` keys (logged with a prompt-injection warning)
 
-Never leak `DISCORD_BOT_TOKEN` or other OAB credentials to the agent.
+Inheritance beyond the baseline is governed by `[agent.clear_env]` (see `docs/config-reference.md`):
+
+```text
+if enabled (default true):
+    if allow_list non-empty:    pass only those keys from process env
+    elif deny_list non-empty:   pass all process env EXCEPT deny_list
+    else:                       pass nothing (pure secure default)
+else:
+    pass all process env (escape hatch — both lists ignored)
+```
+
+Never leak `DISCORD_BOT_TOKEN` or other OAB credentials to the agent. The default (`enabled = true` with empty lists) inherits nothing — when widening, prefer `allow_list` for known-safe keys; reach for `deny_list` only when the inherited set is large and dynamically injected (e.g. AWS-IRSA pods).
 
 ### 4. Dockerfile Discipline
 
