@@ -423,6 +423,7 @@ mod tests {
             content: schema::Content {
                 content_type: "text".into(),
                 text: "hello".into(),
+                attachments: Vec::new(),
             },
             command: None,
             request_id: None,

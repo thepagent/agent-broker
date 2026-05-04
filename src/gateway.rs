@@ -1,3 +1,4 @@
+use crate::acp::ContentBlock;
 use crate::adapter::{AdapterRouter, ChannelRef, ChatAdapter, MessageRef, SenderContext};
 use anyhow::Result;
 use async_trait::async_trait;
@@ -50,6 +51,19 @@ struct GwContent {
     #[serde(rename = "type")]
     content_type: String,
     text: String,
+    #[serde(default)]
+    attachments: Vec<GwAttachment>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct GwAttachment {
+    #[serde(rename = "type")]
+    attachment_type: String,
+    filename: String,
+    mime_type: String,
+    data: String,
+    #[allow(dead_code)]
+    size: u64,
 }
 
 #[derive(Serialize)]
@@ -500,6 +514,29 @@ pub async fn run_gateway_adapter(
                                     let router = router.clone();
                                     let prompt = event.content.text.clone();
 
+                                    // Convert gateway attachments to ContentBlocks
+                                    let mut extra_blocks = Vec::new();
+                                    for att in &event.content.attachments {
+                                        match att.attachment_type.as_str() {
+                                            "image" => {
+                                                extra_blocks.push(ContentBlock::Image {
+                                                    media_type: att.mime_type.clone(),
+                                                    data: att.data.clone(),
+                                                });
+                                            }
+                                            "text_file" => {
+                                                use base64::Engine;
+                                                if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&att.data) {
+                                                    let text = String::from_utf8_lossy(&bytes);
+                                                    extra_blocks.push(ContentBlock::Text {
+                                                        text: format!("```{}\n{}\n```", att.filename, text),
+                                                    });
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+
                                     // Slash command interception for gateway platforms
                                     // (Feishu/LINE/Telegram don't have native slash commands)
                                     // Use fire-and-forget send — slash command responses don't
@@ -547,7 +584,7 @@ pub async fn run_gateway_adapter(
                                                 &thread_channel,
                                                 &sender_json,
                                                 &prompt,
-                                                vec![],
+                                                extra_blocks,
                                                 &trigger_msg,
                                                 false,
                                             )
