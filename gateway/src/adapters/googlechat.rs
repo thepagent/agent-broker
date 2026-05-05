@@ -1183,4 +1183,64 @@ mod tests {
         let name = parsed.get("name").and_then(|v| v.as_str());
         assert_eq!(name, Some("spaces/SP1/messages/msg123"));
     }
+
+    #[tokio::test]
+    async fn handle_reply_sends_gateway_response_with_request_id() {
+        let (event_tx, mut event_rx) = tokio::sync::broadcast::channel::<String>(16);
+        let adapter = GoogleChatAdapter::new(None, Some("fake-token".into()), None);
+
+        let reply = GatewayReply {
+            schema: "openab.gateway.reply.v1".into(),
+            reply_to: "orig_msg".into(),
+            platform: "googlechat".into(),
+            channel: ReplyChannel {
+                id: "spaces/TEST".into(),
+                thread_id: None,
+            },
+            content: Content {
+                content_type: "text".into(),
+                text: "hello".into(),
+            },
+            command: None,
+            request_id: Some("req_123".into()),
+        };
+
+        adapter.handle_reply(&reply, &event_tx).await;
+
+        // Should have sent a GatewayResponse (even if API call failed)
+        let received = event_rx.try_recv();
+        assert!(received.is_ok(), "expected GatewayResponse on event_tx");
+        let resp: GatewayResponse = serde_json::from_str(&received.unwrap()).unwrap();
+        assert_eq!(resp.request_id, "req_123");
+        // API call will fail (fake URL) so success=false
+        assert!(!resp.success || resp.message_id.is_some());
+    }
+
+    #[tokio::test]
+    async fn handle_reply_edit_message_does_not_send_response() {
+        let (event_tx, mut event_rx) = tokio::sync::broadcast::channel::<String>(16);
+        let adapter = GoogleChatAdapter::new(None, Some("fake-token".into()), None);
+
+        let reply = GatewayReply {
+            schema: "openab.gateway.reply.v1".into(),
+            reply_to: "spaces/SP/messages/msg1".into(),
+            platform: "googlechat".into(),
+            channel: ReplyChannel {
+                id: "spaces/SP".into(),
+                thread_id: None,
+            },
+            content: Content {
+                content_type: "text".into(),
+                text: "updated text".into(),
+            },
+            command: Some("edit_message".into()),
+            request_id: None,
+        };
+
+        adapter.handle_reply(&reply, &event_tx).await;
+
+        // edit_message should NOT produce a GatewayResponse
+        let received = event_rx.try_recv();
+        assert!(received.is_err());
+    }
 }
