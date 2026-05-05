@@ -13,23 +13,37 @@ jobs:
       - name: Send to Discord
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            TITLE="${{ github.event.pull_request.title }}"
-            URL="${{ github.event.pull_request.html_url }}"
-            AUTHOR="${{ github.event.pull_request.user.login }}"
-            NUM="${{ github.event.pull_request.number }}"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            TITLE="$PR_TITLE"
+            URL="$PR_URL"
+            AUTHOR="$PR_AUTHOR"
+            NUM="$PR_NUMBER"
             TYPE="pr_opened"
             LABEL="PR #${NUM}"
           else
-            TITLE="${{ github.event.issue.title }}"
-            URL="${{ github.event.issue.html_url }}"
-            AUTHOR="${{ github.event.issue.user.login }}"
-            NUM="${{ github.event.issue.number }}"
+            TITLE="$ISSUE_TITLE"
+            URL="$ISSUE_URL"
+            AUTHOR="$ISSUE_AUTHOR"
+            NUM="$ISSUE_NUMBER"
             TYPE="issue_opened"
             LABEL="Issue #${NUM}"
           fi
 
-          curl -s -H "Content-Type: application/json" \
-            -d "{\"content\":\"[GH-EVENT] repo:${{ github.repository }} action:${TYPE} ${LABEL}\\n**${TITLE}**\\nby ${AUTHOR}\\n${URL}\"}" \
-            "$DISCORD_WEBHOOK_URL"
+          PAYLOAD=$(jq -n \
+            --arg content "[GH-EVENT] repo:${REPO} action:${TYPE} ${LABEL}
+**${TITLE}**
+by ${AUTHOR}
+${URL}" \
+            '{"content": $content}')
+          curl -s -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_WEBHOOK_URL"
