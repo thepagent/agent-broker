@@ -169,11 +169,21 @@ impl DispatchTarget for AdapterRouter {
 // Dispatcher
 // ---------------------------------------------------------------------------
 
-/// Default idle timeout for per-thread consumer tasks. When no message arrives
-/// within this window the consumer exits, allowing `per_thread` map cleanup on
-/// the next `submit` (via `SendError` → `try_evict_locked`). Prevents unbounded
-/// task/memory growth from one-shot thread keys (e.g. Slack non-thread messages).
+/// Default idle timeout for per-thread consumer tasks in batched modes (Thread / Lane).
+/// When no message arrives within this window the consumer exits, allowing `per_thread`
+/// map cleanup on the next `submit` (via `SendError` → `try_evict_locked`). Prevents
+/// unbounded task/memory growth from one-shot thread keys (e.g. Slack non-thread messages).
+///
+/// Batched modes need a longer window so a lane that's between trigger arrivals isn't
+/// torn down and respawned on every message.
 pub const DEFAULT_CONSUMER_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Idle timeout for per-message mode (cap=1, no batching). Per-message dispatchers
+/// don't benefit from holding consumers across message gaps — there is no batch
+/// window to preserve — so a much shorter timeout reduces idle resource footprint
+/// from one-shot thread keys (Little's Law: steady-state idle count = arrival rate
+/// × idle window).
+pub const PER_MESSAGE_CONSUMER_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Per-thread message dispatcher for batched mode.
 ///
@@ -194,23 +204,9 @@ pub struct Dispatcher {
 }
 
 impl Dispatcher {
-    pub fn new(
-        target: Arc<dyn DispatchTarget>,
-        max_buffered_messages: usize,
-        max_batch_tokens: usize,
-        grouping: BatchGrouping,
-    ) -> Self {
-        Self::with_idle_timeout(
-            target,
-            max_buffered_messages,
-            max_batch_tokens,
-            grouping,
-            DEFAULT_CONSUMER_IDLE_TIMEOUT,
-        )
-    }
-
-    /// Like `new`, but with a custom consumer idle timeout. Test-only knob —
-    /// production code should use `new` (which applies `DEFAULT_CONSUMER_IDLE_TIMEOUT`).
+    /// Construct a dispatcher with an explicit consumer idle timeout. Per-mode
+    /// callers in `main.rs` pass `PER_MESSAGE_CONSUMER_IDLE_TIMEOUT` for cap=1
+    /// dispatchers and `DEFAULT_CONSUMER_IDLE_TIMEOUT` for batched modes.
     pub fn with_idle_timeout(
         target: Arc<dyn DispatchTarget>,
         max_buffered_messages: usize,
@@ -1027,7 +1023,7 @@ mod tests {
             crate::config::ReactionsConfig::default(),
             crate::markdown::TableMode::Off,
         ));
-        Dispatcher::new(router, 10, 24_000, grouping)
+        Dispatcher::with_idle_timeout(router, 10, 24_000, grouping, DEFAULT_CONSUMER_IDLE_TIMEOUT)
     }
 
     #[tokio::test]
@@ -1398,7 +1394,7 @@ mod tests {
         // whose consumer is still parked but whose rx has been dropped.
         let mock = Arc::new(MockDispatchTarget::new());
         let target: Arc<dyn DispatchTarget> = mock.clone();
-        let d = Dispatcher::new(target, 10, 24_000, BatchGrouping::Thread);
+        let d = Dispatcher::with_idle_timeout(target, 10, 24_000, BatchGrouping::Thread, DEFAULT_CONSUMER_IDLE_TIMEOUT);
         let adapter: Arc<dyn ChatAdapter> = Arc::new(MockChatAdapter);
 
         let key = "mock:T".to_string();

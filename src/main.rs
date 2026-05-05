@@ -202,19 +202,20 @@ async fn main() -> anyhow::Result<()> {
         // Dispatcher is the sole serialization path for all modes. Message = cap 1
         // (each message dispatches alone, FIFO). Thread / Lane = configured cap;
         // grouping decides whether senders share a buffer or get their own lane.
-        let (slack_cap, slack_grouping) = match slack_cfg.message_processing_mode {
+        let (slack_cap, slack_grouping, slack_idle) = match slack_cfg.message_processing_mode {
             config::MessageProcessingMode::Message =>
-                (1, dispatch::BatchGrouping::Thread),
+                (1, dispatch::BatchGrouping::Thread, dispatch::PER_MESSAGE_CONSUMER_IDLE_TIMEOUT),
             config::MessageProcessingMode::Thread =>
-                (slack_cfg.max_buffered_messages, dispatch::BatchGrouping::Thread),
+                (slack_cfg.max_buffered_messages, dispatch::BatchGrouping::Thread, dispatch::DEFAULT_CONSUMER_IDLE_TIMEOUT),
             config::MessageProcessingMode::Lane =>
-                (slack_cfg.max_buffered_messages, dispatch::BatchGrouping::Lane),
+                (slack_cfg.max_buffered_messages, dispatch::BatchGrouping::Lane, dispatch::DEFAULT_CONSUMER_IDLE_TIMEOUT),
         };
-        let slack_dispatcher = Arc::new(dispatch::Dispatcher::new(
+        let slack_dispatcher = Arc::new(dispatch::Dispatcher::with_idle_timeout(
             router.clone(),
             slack_cap,
             slack_cfg.max_batch_tokens,
             slack_grouping,
+            slack_idle,
         ));
         dispatchers.lock().unwrap().push(slack_dispatcher.clone());
         Some(tokio::spawn(async move {
@@ -247,19 +248,20 @@ async fn main() -> anyhow::Result<()> {
         let router = router.clone();
         let shutdown_rx = shutdown_rx.clone();
         info!(url = %gw_cfg.url, "starting gateway adapter");
-        let (gw_cap, gw_grouping) = match gw_cfg.message_processing_mode {
+        let (gw_cap, gw_grouping, gw_idle) = match gw_cfg.message_processing_mode {
             config::MessageProcessingMode::Message =>
-                (1, dispatch::BatchGrouping::Thread),
+                (1, dispatch::BatchGrouping::Thread, dispatch::PER_MESSAGE_CONSUMER_IDLE_TIMEOUT),
             config::MessageProcessingMode::Thread =>
-                (gw_cfg.max_buffered_messages, dispatch::BatchGrouping::Thread),
+                (gw_cfg.max_buffered_messages, dispatch::BatchGrouping::Thread, dispatch::DEFAULT_CONSUMER_IDLE_TIMEOUT),
             config::MessageProcessingMode::Lane =>
-                (gw_cfg.max_buffered_messages, dispatch::BatchGrouping::Lane),
+                (gw_cfg.max_buffered_messages, dispatch::BatchGrouping::Lane, dispatch::DEFAULT_CONSUMER_IDLE_TIMEOUT),
         };
-        let gw_dispatcher = Arc::new(dispatch::Dispatcher::new(
+        let gw_dispatcher = Arc::new(dispatch::Dispatcher::with_idle_timeout(
             router.clone(),
             gw_cap,
             gw_cfg.max_batch_tokens,
             gw_grouping,
+            gw_idle,
         ));
         dispatchers.lock().unwrap().push(gw_dispatcher.clone());
         let params = gateway::GatewayParams {
@@ -346,19 +348,20 @@ async fn main() -> anyhow::Result<()> {
             "starting discord adapter"
         );
 
-        let (discord_cap, discord_grouping) = match discord_cfg.message_processing_mode {
+        let (discord_cap, discord_grouping, discord_idle) = match discord_cfg.message_processing_mode {
             config::MessageProcessingMode::Message =>
-                (1, dispatch::BatchGrouping::Thread),
+                (1, dispatch::BatchGrouping::Thread, dispatch::PER_MESSAGE_CONSUMER_IDLE_TIMEOUT),
             config::MessageProcessingMode::Thread =>
-                (discord_cfg.max_buffered_messages, dispatch::BatchGrouping::Thread),
+                (discord_cfg.max_buffered_messages, dispatch::BatchGrouping::Thread, dispatch::DEFAULT_CONSUMER_IDLE_TIMEOUT),
             config::MessageProcessingMode::Lane =>
-                (discord_cfg.max_buffered_messages, dispatch::BatchGrouping::Lane),
+                (discord_cfg.max_buffered_messages, dispatch::BatchGrouping::Lane, dispatch::DEFAULT_CONSUMER_IDLE_TIMEOUT),
         };
-        let discord_dispatcher = Arc::new(dispatch::Dispatcher::new(
+        let discord_dispatcher = Arc::new(dispatch::Dispatcher::with_idle_timeout(
             router.clone(),
             discord_cap,
             discord_cfg.max_batch_tokens,
             discord_grouping,
+            discord_idle,
         ));
         dispatchers.lock().unwrap().push(discord_dispatcher.clone());
 
