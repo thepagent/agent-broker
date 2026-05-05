@@ -87,6 +87,8 @@ pub struct FeishuConfig {
     pub message_limit: usize,
     /// TTL for participated-thread cache entries (seconds). Threads older than
     /// this are forgotten and require a fresh @mention to re-engage.
+    /// Set to 0 (via FEISHU_SESSION_TTL_HOURS=0) to disable participation
+    /// tracking entirely — all messages will require @mention.
     pub session_ttl_secs: u64,
 }
 
@@ -642,7 +644,7 @@ pub struct FeishuAdapter {
     pub name_cache: Arc<std::sync::Mutex<HashMap<String, String>>>,
     /// Per-channel bot turn counter. Key = chat_id, Value = (count, last_reset).
     /// Human message resets count to 0. Prevents runaway bot-to-bot loops.
-    pub bot_turns: Arc<std::sync::Mutex<HashMap<String, u32>>>, // TODO: add TTL eviction for long-running deploys
+    pub bot_turns: Arc<std::sync::Mutex<HashMap<String, u32>>>, // eviction: human msg resets; follow-up can add TTL like participated_threads
     /// Positive-only cache: thread_id (root_id) → last_replied_at.
     /// When bot has replied in a thread, subsequent messages in that thread
     /// bypass @mention gating (like Discord's "involved" mode).
