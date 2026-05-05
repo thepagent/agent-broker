@@ -284,6 +284,7 @@ impl Dispatcher {
         let next_g = self.next_generation.fetch_add(1, Ordering::Relaxed);
 
         let (tx, my_generation) = {
+            // SAFETY: no .await while this guard is held — guard drops at end of block.
             let mut map = self.per_thread.lock().unwrap();
 
             // Proactive stale-entry cleanup: if the consumer has exited (idle
@@ -328,6 +329,7 @@ impl Dispatcher {
             // deadlock against the await point. The same property holds for the
             // retry acquisition below.
             {
+                // SAFETY: no .await while this guard is held.
                 let mut map = self.per_thread.lock().unwrap();
                 Self::try_evict_locked(&mut map, &thread_key, my_generation);
             }
@@ -337,6 +339,7 @@ impl Dispatcher {
             // surface the error to the user.
             let retry_g = self.next_generation.fetch_add(1, Ordering::Relaxed);
             let (retry_tx, retry_gen) = {
+                // SAFETY: no .await while this guard is held — guard drops at end of block.
                 let mut map = self.per_thread.lock().unwrap();
                 let entry = map.entry(thread_key.clone()).or_insert_with(|| {
                     let (tx, rx) = tokio::sync::mpsc::channel(cap);
@@ -364,6 +367,7 @@ impl Dispatcher {
             if let Err(e2) = retry_tx.send(failed_msg).await {
                 // Retry also failed — truly unexpected. Surface error.
                 {
+                    // SAFETY: no .await while this guard is held.
                     let mut map = self.per_thread.lock().unwrap();
                     Self::try_evict_locked(&mut map, &thread_key, retry_gen);
                 }
@@ -400,6 +404,7 @@ impl Dispatcher {
     pub fn cancel_buffered_thread(&self, platform: &str, thread_id: &str) -> usize {
         let prefix = format!("{platform}:{thread_id}");
         let lane_prefix = format!("{prefix}:");
+        // SAFETY: no .await while this guard is held — function is sync.
         let mut map = self.per_thread.lock().unwrap();
         let keys: Vec<String> = map
             .keys()
@@ -440,6 +445,7 @@ impl Dispatcher {
     /// to prevent unbounded map growth from one-shot thread keys that never
     /// receive a second `submit()`. Returns the number of entries swept.
     pub fn sweep_stale(&self) -> usize {
+        // SAFETY: no .await while this guard is held — function is sync.
         let mut map = self.per_thread.lock().unwrap();
         let before = map.len();
         map.retain(|_, handle| !handle.consumer.is_finished());
@@ -448,6 +454,7 @@ impl Dispatcher {
 
     /// Log buffered-message counts and drop all handles (called on SIGTERM).
     pub fn shutdown(&self) {
+        // SAFETY: no .await while this guard is held — function is sync.
         let mut map = self.per_thread.lock().unwrap();
         for (thread_id, handle) in map.iter() {
             let pending = handle.pending_count();
