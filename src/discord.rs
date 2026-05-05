@@ -904,11 +904,13 @@ impl Handler {
 
         let cancel_result = self.router.pool().cancel_session(&session_key).await;
 
+        // Buffer count is approximate (sweep races with new arrivals) so we surface
+        // a binary "cleared / nothing" signal rather than a misleading exact number.
         let msg = match (cancel_result, dropped) {
             (Ok(()), 0) => "🛑 Cancel signal sent.".to_string(),
-            (Ok(()), n) => format!("🛑 Cancel signal sent. Dropped {n} buffered message(s)."),
+            (Ok(()), _) => "🛑 Cancel signal sent. Buffered messages cleared.".to_string(),
             (Err(_), 0) => "⚠️ Nothing to cancel — no active session and no buffered messages.".to_string(),
-            (Err(_), n) => format!("🛑 Dropped {n} buffered message(s). No active session to cancel."),
+            (Err(_), _) => "🛑 Buffered messages cleared. No active session to cancel.".to_string(),
         };
 
         let response = CreateInteractionResponse::Message(
