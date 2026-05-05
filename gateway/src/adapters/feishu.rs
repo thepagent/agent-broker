@@ -939,18 +939,9 @@ async fn handle_ws_message(
     let bot_id_ref = bot_id.as_deref();
 
     // Check if the message is in a thread where bot has previously replied
-    let is_thread_participated = envelope
-        .event
-        .as_ref()
-        .and_then(|e| e.message.as_ref())
-        .and_then(|m| m.root_id.as_deref().or(m.parent_id.as_deref()))
-        .map(|tid| {
-            let cache = participated_threads.lock().unwrap_or_else(|e| e.into_inner());
-            cache
-                .get(tid)
-                .is_some_and(|ts| ts.elapsed().as_secs() < config.session_ttl_secs)
-        })
-        .unwrap_or(false);
+    let is_thread_participated = check_thread_participated(
+        &envelope, participated_threads, config.session_ttl_secs,
+    );
 
     if let Some((mut gateway_event, media_refs)) = parse_message_event(&envelope, bot_id_ref, config, is_thread_participated) {
         // Also dedupe by message_id
@@ -1677,6 +1668,28 @@ async fn remove_reaction(adapter: &FeishuAdapter, message_id: &str, emoji: &str)
 // Reply handler
 // ---------------------------------------------------------------------------
 
+/// Check if the bot has participated in the thread referenced by this envelope.
+/// Returns `true` if the message is in a thread and that thread has a valid
+/// (non-expired) participation entry in the cache.
+fn check_thread_participated(
+    envelope: &FeishuEventEnvelope,
+    cache: &Arc<std::sync::Mutex<HashMap<String, Instant>>>,
+    session_ttl_secs: u64,
+) -> bool {
+    envelope
+        .event
+        .as_ref()
+        .and_then(|e| e.message.as_ref())
+        .and_then(|m| m.root_id.as_deref().or(m.parent_id.as_deref()))
+        .map(|tid| {
+            // Intentionally recover from poisoned mutex — cache data loss is acceptable
+            // and preferable to panicking the gateway.
+            let c = cache.lock().unwrap_or_else(|e| e.into_inner());
+            c.get(tid).is_some_and(|ts| ts.elapsed().as_secs() < session_ttl_secs)
+        })
+        .unwrap_or(false)
+}
+
 /// Max entries in the participated_threads cache before eviction.
 const PARTICIPATION_CACHE_MAX: usize = 1000;
 
@@ -1685,16 +1698,22 @@ const PARTICIPATION_CACHE_MAX: usize = 1000;
 fn record_participation(
     cache: &Arc<std::sync::Mutex<HashMap<String, Instant>>>,
     thread_id: &str,
+    session_ttl_secs: u64,
 ) {
+    // Intentionally recover from poisoned mutex — cache data loss is acceptable
+    // and preferable to panicking the gateway.
     let mut map = cache.lock().unwrap_or_else(|e| e.into_inner());
     map.insert(thread_id.to_string(), Instant::now());
-    // Evict if over capacity: remove oldest half
+    // Evict if over capacity: first drop expired entries, then oldest half if still over
     if map.len() > PARTICIPATION_CACHE_MAX {
-        let mut entries: Vec<_> = map.iter().map(|(k, v)| (k.clone(), *v)).collect();
-        entries.sort_by_key(|(_, ts)| *ts);
-        let evict_count = entries.len() / 2;
-        for (k, _) in entries.into_iter().take(evict_count) {
-            map.remove(&k);
+        map.retain(|_, ts| ts.elapsed().as_secs() < session_ttl_secs);
+        if map.len() > PARTICIPATION_CACHE_MAX {
+            let mut entries: Vec<_> = map.iter().map(|(k, v)| (k.clone(), *v)).collect();
+            entries.sort_by_key(|(_, ts)| *ts);
+            let evict_count = entries.len() / 2;
+            for (k, _) in entries.into_iter().take(evict_count) {
+                map.remove(&k);
+            }
         }
     }
 }
@@ -1763,7 +1782,7 @@ pub async fn handle_reply(
                 adapter.dedupe.is_duplicate(&msg_id);
                 // Record thread participation for mention bypass
                 if let Some(tid) = thread_id {
-                    record_participation(&adapter.participated_threads, tid);
+                    record_participation(&adapter.participated_threads, tid, adapter.config.session_ttl_secs);
                 }
                 // Send response with message_id back to OAB core (for streaming edit)
                 if let Some(ref req_id) = reply.request_id {
@@ -1807,7 +1826,7 @@ pub async fn handle_reply(
         }
         if sent_any {
             if let Some(tid) = thread_id {
-                record_participation(&adapter.participated_threads, tid);
+                record_participation(&adapter.participated_threads, tid, adapter.config.session_ttl_secs);
             }
         }
     }
@@ -2084,18 +2103,9 @@ pub async fn webhook(
     let bot_id_ref = bot_id.as_deref();
 
     // Check participated threads for mention bypass
-    let is_thread_participated = envelope
-        .event
-        .as_ref()
-        .and_then(|e| e.message.as_ref())
-        .and_then(|m| m.root_id.as_deref().or(m.parent_id.as_deref()))
-        .map(|tid| {
-            let cache = feishu.participated_threads.lock().unwrap_or_else(|e| e.into_inner());
-            cache
-                .get(tid)
-                .is_some_and(|ts| ts.elapsed().as_secs() < feishu.config.session_ttl_secs)
-        })
-        .unwrap_or(false);
+    let is_thread_participated = check_thread_participated(
+        &envelope, &feishu.participated_threads, feishu.config.session_ttl_secs,
+    );
 
     if let Some((mut gateway_event, media_refs)) = parse_message_event(&envelope, bot_id_ref, &feishu.config, is_thread_participated) {
         if !feishu.dedupe.is_duplicate(&gateway_event.message_id) {
@@ -2753,11 +2763,11 @@ mod tests {
     fn record_participation_and_eviction() {
         let cache = Arc::new(std::sync::Mutex::new(HashMap::new()));
         // Record a thread
-        record_participation(&cache, "thread_1");
+        record_participation(&cache, "thread_1", 86400);
         assert_eq!(cache.lock().unwrap().len(), 1);
         // Fill beyond PARTICIPATION_CACHE_MAX
         for i in 0..PARTICIPATION_CACHE_MAX + 10 {
-            record_participation(&cache, &format!("thread_{i}"));
+            record_participation(&cache, &format!("thread_{i}"), 86400);
         }
         // After eviction, should be roughly half
         assert!(cache.lock().unwrap().len() <= PARTICIPATION_CACHE_MAX);
