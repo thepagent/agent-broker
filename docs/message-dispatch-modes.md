@@ -77,14 +77,121 @@ agents:
 
 The same fields are available under `slack:` and `gateway:` sections.
 
-## How Batching Works
+## How It Works — ASCII Diagrams
 
-1. **First message after idle** — dispatched immediately (zero added latency).
-2. **Subsequent messages while agent is processing** — buffered in an mpsc channel.
-3. **Turn boundary** (agent finishes responding) — consumer drains all buffered messages up to `max_buffered_messages` or `max_batch_tokens`, packs them into one ACP turn.
-4. **Token cap overflow** — if the next message would exceed `max_batch_tokens`, it becomes the first message of the next batch (FIFO preserved).
+### per-message (default)
 
-Each message in a batch retains its own `<sender_context>` delimiter so the agent can identify arrival boundaries and respond to each sender appropriately.
+```
+Time ──────────────────────────────────────────────────────►
+
+Alice: "hi"          Alice: "also this"       Bob: "hey"
+   │                      │                      │
+   ▼                      ▼                      ▼
+┌──────────┐         ┌──────────┐          ┌──────────┐
+│ ACP Turn │         │ ACP Turn │          │ ACP Turn │
+│ (1 msg)  │         │ (1 msg)  │          │ (1 msg)  │
+└────┬─────┘         └────┬─────┘          └────┬─────┘
+     ▼                    ▼                      ▼
+  Response 1           Response 2             Response 3
+
+Each message = its own turn. Simple. 3 messages → 3 responses.
+```
+
+### per-thread
+
+```
+Time ──────────────────────────────────────────────────────►
+
+Alice: "hi"     Bob: "hey"   Alice: "also this"
+   │               │              │
+   ▼               │              │
+┌──────────┐       │              │
+│ ACP Turn │  (agent busy...)     │
+│ (1 msg)  │       │              │
+└────┬─────┘       ▼              ▼
+     │         ┌────────────────────────┐
+     ▼         │ Buffer (shared thread) │
+  Response 1   │  → Bob: "hey"         │
+               │  → Alice: "also this" │
+               └───────────┬────────────┘
+                           ▼  (turn boundary)
+                    ┌──────────────┐
+                    │  ACP Turn    │
+                    │  (2 msgs     │
+                    │   batched)   │
+                    └──────┬───────┘
+                           ▼
+                      Response 2
+                   (addresses both)
+
+All senders share one buffer → one batched turn → one response.
+```
+
+### per-lane
+
+```
+Time ──────────────────────────────────────────────────────►
+
+Alice: "hi"     Bob: "hey"   Alice: "also this"
+   │               │              │
+   ▼               │              │
+┌──────────┐       │              │
+│ ACP Turn │  (agent busy...)     │
+│ (Alice)  │       │              │
+└────┬─────┘       ▼              ▼
+     │      ┌─────────────┐  ┌──────────────────┐
+     ▼      │ Bob's lane  │  │ Alice's lane     │
+Response 1  │ → "hey"     │  │ → "also this"    │
+            └──────┬──────┘  └────────┬─────────┘
+                   ▼                  │
+            ┌──────────────┐          │  (waits for Bob's turn)
+            │  ACP Turn    │          │
+            │  (Bob, 1msg) │          │
+            └──────┬───────┘          │
+                   ▼                  ▼
+              Response 2       ┌──────────────┐
+              (for Bob)        │  ACP Turn    │
+                               │  (Alice,1msg)│
+                               └──────┬───────┘
+                                      ▼
+                                 Response 3
+                                 (for Alice)
+
+Each sender gets their own lane → own turn → own response. No silent drop.
+```
+
+### Batching internals (consumer loop)
+
+```
+                    ┌─────────────────────────────────────┐
+                    │         Dispatcher (per thread)      │
+                    │                                     │
+  submit(msg) ─────►  mpsc channel (cap = max_buffered)  │
+                    │         │                           │
+                    │         ▼                           │
+                    │  ┌─────────────────────────┐       │
+                    │  │    consumer_loop         │       │
+                    │  │                         │       │
+                    │  │  1. Block on first msg  │       │  ← I1: zero latency
+                    │  │     (or idle timeout)   │       │
+                    │  │                         │       │
+                    │  │  2. Greedy drain:       │       │
+                    │  │     while try_recv()    │       │
+                    │  │       && count < cap    │       │
+                    │  │       && tokens < max   │       │
+                    │  │                         │       │
+                    │  │  3. Pack batch:         │       │
+                    │  │     [sender_ctx + msg]  │       │
+                    │  │     [sender_ctx + msg]  │       │
+                    │  │     ...                 │       │
+                    │  │                         │       │
+                    │  │  4. stream_prompt_blocks│       │  ← I2: one turn at a time
+                    │  │     (shared session)    │       │
+                    │  │                         │       │
+                    │  │  5. Loop back to 1      │       │
+                    │  └─────────────────────────┘       │
+                    └─────────────────────────────────────┘
+```
 
 ## Defaults
 
