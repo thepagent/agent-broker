@@ -14,6 +14,7 @@ jobs:
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
@@ -31,14 +32,14 @@ jobs:
             URL="$PR_URL"
             AUTHOR="$PR_AUTHOR"
             NUM="$PR_NUMBER"
-            TYPE="pr_opened"
+            TYPE="pr_${EVENT_ACTION}"
             LABEL="PR #${NUM}"
           else
             TITLE="$ISSUE_TITLE"
             URL="$ISSUE_URL"
             AUTHOR="$ISSUE_AUTHOR"
             NUM="$ISSUE_NUMBER"
-            TYPE="issue_opened"
+            TYPE="issue_${EVENT_ACTION}"
             LABEL="Issue #${NUM}"
           fi
 
