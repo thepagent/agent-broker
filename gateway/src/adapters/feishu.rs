@@ -1328,7 +1328,17 @@ pub async fn download_feishu_image(
         tracing::warn!(image_key, status = %resp.status(), "feishu image download failed");
         return None;
     }
+    // Early gate: reject oversized downloads before buffering the full body
+    if let Some(cl) = resp.headers().get(reqwest::header::CONTENT_LENGTH) {
+        if let Ok(size) = cl.to_str().unwrap_or("0").parse::<u64>() {
+            if size > IMAGE_MAX_DOWNLOAD {
+                tracing::warn!(image_key, size, "feishu image Content-Length exceeds 10MB limit, skipping download");
+                return None;
+            }
+        }
+    }
     let bytes = resp.bytes().await.ok()?;
+    // Fallback check (Content-Length may be absent or misreported)
     if bytes.len() as u64 > IMAGE_MAX_DOWNLOAD {
         tracing::warn!(image_key, size = bytes.len(), "feishu image exceeds 10MB limit");
         return None;
@@ -1386,7 +1396,17 @@ pub async fn download_feishu_file(
         tracing::warn!(file_name, status = %resp.status(), "feishu file download failed");
         return None;
     }
+    // Early gate: reject oversized downloads before buffering the full body
+    if let Some(cl) = resp.headers().get(reqwest::header::CONTENT_LENGTH) {
+        if let Ok(size) = cl.to_str().unwrap_or("0").parse::<u64>() {
+            if size > FILE_MAX_DOWNLOAD {
+                tracing::warn!(file_name, size, "feishu file Content-Length exceeds 512KB limit, skipping download");
+                return None;
+            }
+        }
+    }
     let bytes = resp.bytes().await.ok()?;
+    // Fallback check (Content-Length may be absent or misreported)
     if bytes.len() as u64 > FILE_MAX_DOWNLOAD {
         tracing::warn!(file_name, size = bytes.len(), "feishu file exceeds 512KB limit");
         return None;
