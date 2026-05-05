@@ -75,3 +75,13 @@ app.kubernetes.io/component: {{ .agent }}
 {{- define "openab.persistenceEnabled" -}}
 {{- if and . .persistence (eq (.persistence.enabled | toString) "false") }}false{{ else }}true{{ end }}
 {{- end }}
+
+{{/* Validate secretEnv entries: each must have name, secretName, and secretKey.
+     Call with: dict "secretEnv" $cfg.secretEnv "agentName" $name */}}
+{{- define "openab.validateSecretEnv" -}}
+{{- range .secretEnv }}
+{{- if not (and .name .secretName .secretKey) }}
+{{- fail (printf "agents.%s.secretEnv entries require name, secretName, and secretKey" $.agentName) }}
+{{- end }}
+{{- end }}
+{{- end }}

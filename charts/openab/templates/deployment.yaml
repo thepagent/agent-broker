@@ -83,6 +83,14 @@ spec:
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
+            {{- include "openab.validateSecretEnv" (dict "secretEnv" $cfg.secretEnv "agentName" $name) }}
+            {{- range $cfg.secretEnv }}
+            - name: {{ .name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secretName }}
+                  key: {{ .secretKey }}
+            {{- end }}
           {{- with $cfg.envFrom }}
           envFrom:
             {{- toYaml . | nindent 12 }}

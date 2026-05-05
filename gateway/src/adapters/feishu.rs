@@ -240,18 +240,20 @@ mod event_types {
     }
 
     /// Parse a feishu im.message.receive_v1 event into a GatewayEvent.
-    /// Returns None if the event should be skipped (non-text, bot message, etc).
+    /// Returns None if the event should be skipped (unsupported type, bot message, etc).
+    /// The Vec<MediaRef> contains references to media that need async download.
     pub fn parse_message_event(
         envelope: &FeishuEventEnvelope,
         bot_open_id: Option<&str>,
         config: &FeishuConfig,
-    ) -> Option<GatewayEvent> {
+    ) -> Option<(GatewayEvent, Vec<MediaRef>)> {
         let _header = envelope.header.as_ref()?;
         let event = envelope.event.as_ref()?;
         let msg = event.message.as_ref()?;
         let sender = event.sender.as_ref()?;
 
-        if msg.message_type.as_deref() != Some("text") {
+        let msg_type = msg.message_type.as_deref().unwrap_or("text");
+        if !matches!(msg_type, "text" | "image" | "file" | "post") {
             return None;
         }
         // Skip bot messages with explicit sender_type
@@ -297,7 +299,6 @@ mod event_types {
         }
 
         let chat_id = msg.chat_id.as_deref()?;
-        let message_id = msg.message_id.as_deref()?;
         // Group allowlist: if configured, only allow listed groups
         let is_group = msg.chat_type.as_deref() != Some("p2p");
         if is_group
@@ -309,19 +310,98 @@ mod event_types {
 
         let content_json: serde_json::Value = msg.content.as_deref()
             .and_then(|s| serde_json::from_str(s).ok())?;
-        let raw_text = content_json.get("text")?.as_str()?;
-        if raw_text.trim().is_empty() {
-            return None;
-        }
 
-        let (clean_text, mention_ids) = extract_mentions(
-            raw_text,
-            msg.mentions.as_deref().unwrap_or(&[]),
-            bot_open_id,
-        );
-        if clean_text.trim().is_empty() {
-            return None;
-        }
+        let message_id = msg.message_id.as_deref()?;
+
+        // Parse content based on message type
+        let (clean_text, mention_ids, media_refs) = match msg_type {
+            "image" => {
+                let image_key = content_json.get("image_key")?.as_str()?;
+                let mentions = extract_mentions(
+                    "", msg.mentions.as_deref().unwrap_or(&[]), bot_open_id,
+                );
+                let refs = vec![MediaRef::Image {
+                    message_id: message_id.to_string(),
+                    image_key: image_key.to_string(),
+                }];
+                (String::new(), mentions.1, refs)
+            }
+            "file" => {
+                let file_key = content_json.get("file_key")?.as_str()?;
+                let file_name = content_json.get("file_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let mentions = extract_mentions(
+                    "", msg.mentions.as_deref().unwrap_or(&[]), bot_open_id,
+                );
+                let refs = vec![MediaRef::File {
+                    message_id: message_id.to_string(),
+                    file_key: file_key.to_string(),
+                    file_name: file_name.to_string(),
+                }];
+                (String::new(), mentions.1, refs)
+            }
+            "post" => {
+                // Rich text: content is {"title":"...","content":[[{tag,text,...},{tag,image_key,...}]]}
+                let mut texts = Vec::new();
+                let mut refs = Vec::new();
+                if let Some(rows) = content_json.get("content").and_then(|v| v.as_array()) {
+                    for row in rows {
+                        if let Some(elements) = row.as_array() {
+                            for el in elements {
+                                match el.get("tag").and_then(|v| v.as_str()) {
+                                    Some("text") => {
+                                        if let Some(t) = el.get("text").and_then(|v| v.as_str()) {
+                                            texts.push(t.to_string());
+                                        }
+                                    }
+                                    Some("img") => {
+                                        if let Some(key) = el.get("image_key").and_then(|v| v.as_str()) {
+                                            refs.push(MediaRef::Image {
+                                                message_id: message_id.to_string(),
+                                                image_key: key.to_string(),
+                                            });
+                                        }
+                                    }
+                                    Some("a") => {
+                                        if let Some(t) = el.get("text").and_then(|v| v.as_str()) {
+                                            texts.push(t.to_string());
+                                        }
+                                    }
+                                    Some("at") => {
+                                        // Mentions handled via msg.mentions at envelope level
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+                let raw_text = texts.join("");
+                let (clean, ids) = extract_mentions(
+                    &raw_text,
+                    msg.mentions.as_deref().unwrap_or(&[]),
+                    bot_open_id,
+                );
+                (clean, ids, refs)
+            }
+            _ => {
+                // text
+                let raw_text = content_json.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                if raw_text.trim().is_empty() {
+                    return None;
+                }
+                let (clean, ids) = extract_mentions(
+                    raw_text,
+                    msg.mentions.as_deref().unwrap_or(&[]),
+                    bot_open_id,
+                );
+                if clean.trim().is_empty() {
+                    return None;
+                }
+                (clean, ids, Vec::new())
+            }
+        };
 
         let channel_type = match msg.chat_type.as_deref() {
             Some("p2p") => "direct",
@@ -371,7 +451,7 @@ mod event_types {
             message_id,
             mention_ids,
         );
-        Some(event)
+        Some((event, media_refs))
     }
 
     fn extract_mentions(
@@ -834,7 +914,7 @@ async fn handle_ws_message(
     let bot_id = bot_open_id_store.read().await;
     let bot_id_ref = bot_id.as_deref();
 
-    if let Some(mut gateway_event) = parse_message_event(&envelope, bot_id_ref, config) {
+    if let Some((mut gateway_event, media_refs)) = parse_message_event(&envelope, bot_id_ref, config) {
         // Also dedupe by message_id
         if dedupe.is_duplicate(&gateway_event.message_id) {
             return;
@@ -868,6 +948,32 @@ async fn handle_ws_message(
         ).await;
         gateway_event.sender.name = name.clone();
         gateway_event.sender.display_name = name;
+
+        // Download media attachments (images, text files)
+        if !media_refs.is_empty() {
+            if let Ok(token) = token_cache.get_token(client).await {
+                let api_base = config.api_base();
+                for media_ref in &media_refs {
+                    let attachment = match media_ref {
+                        MediaRef::Image { message_id, image_key } => {
+                            download_feishu_image(client, &api_base, &token, message_id, image_key).await
+                        }
+                        MediaRef::File { message_id, file_key, file_name } => {
+                            download_feishu_file(client, &api_base, &token, message_id, file_key, file_name).await
+                        }
+                    };
+                    if let Some(att) = attachment {
+                        gateway_event.content.attachments.push(att);
+                    }
+                }
+            }
+        }
+
+        // Skip if no text and no attachments (e.g. unsupported file type)
+        if gateway_event.content.text.trim().is_empty() && gateway_event.content.attachments.is_empty() {
+            return;
+        }
+
         let json = serde_json::to_string(&gateway_event).unwrap();
         info!(
             channel = %gateway_event.channel.id,
@@ -1150,6 +1256,168 @@ fn try_parse_link(chars: &[char], start: usize) -> Option<(String, String, usize
     }
     i += 1; // skip )
     Some((text, url, i))
+}
+
+// ---------------------------------------------------------------------------
+// Media helpers
+// ---------------------------------------------------------------------------
+
+/// Reference to a media resource that needs async download after parse_message_event.
+pub enum MediaRef {
+    Image { message_id: String, image_key: String },
+    File { message_id: String, file_key: String, file_name: String },
+}
+
+const IMAGE_MAX_DIMENSION_PX: u32 = 1200;
+const IMAGE_JPEG_QUALITY: u8 = 75;
+const IMAGE_MAX_DOWNLOAD: u64 = 10 * 1024 * 1024; // 10 MB
+const FILE_MAX_DOWNLOAD: u64 = 512 * 1024; // 512 KB
+
+/// Resize image so longest side <= 1200px, then encode as JPEG.
+/// GIFs are passed through unchanged to preserve animation.
+fn resize_and_compress(raw: &[u8]) -> Result<(Vec<u8>, String), image::ImageError> {
+    use image::ImageReader;
+    use std::io::Cursor;
+
+    let reader = ImageReader::new(Cursor::new(raw)).with_guessed_format()?;
+    let format = reader.format();
+    if format == Some(image::ImageFormat::Gif) {
+        return Ok((raw.to_vec(), "image/gif".to_string()));
+    }
+    let img = reader.decode()?;
+    let (w, h) = (img.width(), img.height());
+    let img = if w > IMAGE_MAX_DIMENSION_PX || h > IMAGE_MAX_DIMENSION_PX {
+        let max_side = std::cmp::max(w, h);
+        let ratio = f64::from(IMAGE_MAX_DIMENSION_PX) / f64::from(max_side);
+        let new_w = (f64::from(w) * ratio) as u32;
+        let new_h = (f64::from(h) * ratio) as u32;
+        img.resize(new_w, new_h, image::imageops::FilterType::Lanczos3)
+    } else {
+        img
+    };
+    let mut buf = Cursor::new(Vec::new());
+    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, IMAGE_JPEG_QUALITY);
+    img.write_with_encoder(encoder)?;
+    Ok((buf.into_inner(), "image/jpeg".to_string()))
+}
+
+/// Download a Feishu image by message_id + image_key → resize/compress → base64 Attachment.
+pub async fn download_feishu_image(
+    client: &reqwest::Client,
+    api_base: &str,
+    token: &str,
+    message_id: &str,
+    image_key: &str,
+) -> Option<crate::schema::Attachment> {
+    let url = format!(
+        "{}/open-apis/im/v1/messages/{}/resources/{}?type=image",
+        api_base, message_id, image_key
+    );
+    let resp = match client.get(&url).bearer_auth(token).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(image_key, error = %e, "feishu image download failed");
+            return None;
+        }
+    };
+    if !resp.status().is_success() {
+        tracing::warn!(image_key, status = %resp.status(), "feishu image download failed");
+        return None;
+    }
+    // Early gate: reject oversized downloads before buffering the full body
+    if let Some(cl) = resp.headers().get(reqwest::header::CONTENT_LENGTH) {
+        if let Ok(size) = cl.to_str().unwrap_or("0").parse::<u64>() {
+            if size > IMAGE_MAX_DOWNLOAD {
+                tracing::warn!(image_key, size, "feishu image Content-Length exceeds 10MB limit, skipping download");
+                return None;
+            }
+        }
+    }
+    let bytes = resp.bytes().await.ok()?;
+    // Fallback check (Content-Length may be absent or misreported)
+    if bytes.len() as u64 > IMAGE_MAX_DOWNLOAD {
+        tracing::warn!(image_key, size = bytes.len(), "feishu image exceeds 10MB limit");
+        return None;
+    }
+    let (compressed, mime) = match resize_and_compress(&bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(image_key, error = %e, "feishu image resize failed");
+            return None;
+        }
+    };
+    use base64::Engine;
+    let data = base64::engine::general_purpose::STANDARD.encode(&compressed);
+    let ext = if mime == "image/gif" { "gif" } else { "jpg" };
+    Some(crate::schema::Attachment {
+        attachment_type: "image".into(),
+        filename: format!("{}.{}", image_key, ext),
+        mime_type: mime,
+        data,
+        size: compressed.len() as u64,
+    })
+}
+
+/// Download a Feishu file by message_id + file_key → base64 Attachment (text files only).
+pub async fn download_feishu_file(
+    client: &reqwest::Client,
+    api_base: &str,
+    token: &str,
+    message_id: &str,
+    file_key: &str,
+    file_name: &str,
+) -> Option<crate::schema::Attachment> {
+    // Only download text-like files
+    let ext = file_name.rsplit('.').next().unwrap_or("").to_lowercase();
+    const TEXT_EXTS: &[&str] = &[
+        "txt", "csv", "log", "md", "json", "jsonl", "yaml", "yml", "toml", "xml",
+        "rs", "py", "js", "ts", "jsx", "tsx", "go", "java", "c", "cpp", "h", "hpp",
+        "rb", "sh", "bash", "sql", "html", "css", "ini", "cfg", "conf", "env",
+    ];
+    if !TEXT_EXTS.contains(&ext.as_str()) {
+        tracing::debug!(file_name, "skipping non-text file attachment");
+        return None;
+    }
+    let url = format!(
+        "{}/open-apis/im/v1/messages/{}/resources/{}?type=file",
+        api_base, message_id, file_key
+    );
+    let resp = match client.get(&url).bearer_auth(token).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(file_name, error = %e, "feishu file download failed");
+            return None;
+        }
+    };
+    if !resp.status().is_success() {
+        tracing::warn!(file_name, status = %resp.status(), "feishu file download failed");
+        return None;
+    }
+    // Early gate: reject oversized downloads before buffering the full body
+    if let Some(cl) = resp.headers().get(reqwest::header::CONTENT_LENGTH) {
+        if let Ok(size) = cl.to_str().unwrap_or("0").parse::<u64>() {
+            if size > FILE_MAX_DOWNLOAD {
+                tracing::warn!(file_name, size, "feishu file Content-Length exceeds 512KB limit, skipping download");
+                return None;
+            }
+        }
+    }
+    let bytes = resp.bytes().await.ok()?;
+    // Fallback check (Content-Length may be absent or misreported)
+    if bytes.len() as u64 > FILE_MAX_DOWNLOAD {
+        tracing::warn!(file_name, size = bytes.len(), "feishu file exceeds 512KB limit");
+        return None;
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    use base64::Engine;
+    let data = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+    Some(crate::schema::Attachment {
+        attachment_type: "text_file".into(),
+        filename: file_name.to_string(),
+        mime_type: "text/plain".into(),
+        data,
+        size: bytes.len() as u64,
+    })
 }
 
 /// Send a post (rich text) message to a feishu chat_id.
@@ -1744,7 +2012,7 @@ pub async fn webhook(
     let bot_id = feishu.bot_open_id.read().await;
     let bot_id_ref = bot_id.as_deref();
 
-    if let Some(mut gateway_event) = parse_message_event(&envelope, bot_id_ref, &feishu.config) {
+    if let Some((mut gateway_event, media_refs)) = parse_message_event(&envelope, bot_id_ref, &feishu.config) {
         if !feishu.dedupe.is_duplicate(&gateway_event.message_id) {
             let name = resolve_user_name(
                 &gateway_event.sender.id, &feishu.name_cache, &feishu.token_cache,
@@ -1752,6 +2020,32 @@ pub async fn webhook(
             ).await;
             gateway_event.sender.name = name.clone();
             gateway_event.sender.display_name = name;
+
+            // Download media attachments
+            if !media_refs.is_empty() {
+                if let Ok(token) = feishu.token_cache.get_token(&feishu.client).await {
+                    let api_base = feishu.config.api_base();
+                    for media_ref in &media_refs {
+                        let attachment = match media_ref {
+                            MediaRef::Image { message_id, image_key } => {
+                                download_feishu_image(&feishu.client, &api_base, &token, message_id, image_key).await
+                            }
+                            MediaRef::File { message_id, file_key, file_name } => {
+                                download_feishu_file(&feishu.client, &api_base, &token, message_id, file_key, file_name).await
+                            }
+                        };
+                        if let Some(att) = attachment {
+                            gateway_event.content.attachments.push(att);
+                        }
+                    }
+                }
+            }
+
+            // Skip if no text and no attachments (e.g. unsupported file type)
+            if gateway_event.content.text.trim().is_empty() && gateway_event.content.attachments.is_empty() {
+                return axum::http::StatusCode::OK.into_response();
+            }
+
             let json = serde_json::to_string(&gateway_event).unwrap();
             info!(
                 channel = %gateway_event.channel.id,
@@ -2010,7 +2304,7 @@ mod tests {
     fn parse_dm_text() {
         let env = make_envelope("p2p", "hello", "ou_user1", None);
         let cfg = test_config();
-        let evt = parse_message_event(&env, Some("ou_bot"), &cfg).unwrap();
+        let (evt, _media) = parse_message_event(&env, Some("ou_bot"), &cfg).unwrap();
         assert_eq!(evt.platform, "feishu");
         assert_eq!(evt.channel.channel_type, "direct");
         assert_eq!(evt.channel.id, "oc_chat1");
@@ -2030,7 +2324,7 @@ mod tests {
         }];
         let env = make_envelope("group", "@_user_1 explain VPC", "ou_user1", Some(mentions));
         let cfg = test_config();
-        let evt = parse_message_event(&env, Some("ou_bot"), &cfg).unwrap();
+        let (evt, _media) = parse_message_event(&env, Some("ou_bot"), &cfg).unwrap();
         assert_eq!(evt.channel.channel_type, "group");
         assert_eq!(evt.content.text, "explain VPC");
         assert_eq!(evt.mentions, vec!["ou_bot"]);
@@ -2071,7 +2365,7 @@ mod tests {
     #[test]
     fn parse_skips_non_text_message() {
         let mut env = make_envelope("p2p", "hello", "ou_user1", None);
-        env.event.as_mut().unwrap().message.as_mut().unwrap().message_type = Some("image".into());
+        env.event.as_mut().unwrap().message.as_mut().unwrap().message_type = Some("sticker".into());
         let cfg = test_config();
         assert!(parse_message_event(&env, Some("ou_bot"), &cfg).is_none());
     }
@@ -2212,7 +2506,7 @@ mod tests {
         }];
         let env = make_envelope("group", "@_user_1 tell me about @_user_1 patterns", "ou_user1", Some(mentions));
         let cfg = test_config();
-        let evt = parse_message_event(&env, Some("ou_bot"), &cfg).unwrap();
+        let (evt, _media) = parse_message_event(&env, Some("ou_bot"), &cfg).unwrap();
         // Only first @_user_1 removed, second preserved
         assert!(evt.content.text.contains("@_user_1"));
     }
@@ -2317,7 +2611,7 @@ mod tests {
         let mut env = make_envelope("p2p", "reply", "ou_user1", None);
         env.event.as_mut().unwrap().message.as_mut().unwrap().root_id = Some("om_root".into());
         let cfg = test_config();
-        let evt = parse_message_event(&env, Some("ou_bot"), &cfg).unwrap();
+        let (evt, _media) = parse_message_event(&env, Some("ou_bot"), &cfg).unwrap();
         assert_eq!(evt.channel.thread_id, Some("om_root".into()));
     }
 
@@ -2326,7 +2620,7 @@ mod tests {
         let mut env = make_envelope("p2p", "reply", "ou_user1", None);
         env.event.as_mut().unwrap().message.as_mut().unwrap().parent_id = Some("om_parent".into());
         let cfg = test_config();
-        let evt = parse_message_event(&env, Some("ou_bot"), &cfg).unwrap();
+        let (evt, _media) = parse_message_event(&env, Some("ou_bot"), &cfg).unwrap();
         assert_eq!(evt.channel.thread_id, Some("om_parent".into()));
     }
 

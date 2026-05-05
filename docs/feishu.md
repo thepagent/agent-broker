@@ -128,6 +128,23 @@ Agent replies are sent as Feishu **post** (rich text) messages instead of plain 
 
 Inline Markdown formatting (`**bold**`, `*italic*`, `` `code` ``, `~~strike~~`) is stripped to plain text because Feishu's post format does not support inline styles.
 
+## Image & File Attachments
+
+The gateway downloads and forwards image and text file attachments to the AI agent, matching Discord's attachment handling.
+
+**Supported message types:**
+
+| Feishu msg_type | Handling |
+|-----------------|----------|
+| `text` | Text extracted, forwarded as prompt |
+| `image` | Image downloaded, resized (max 1200px), JPEG compressed, base64 encoded → `ContentBlock::Image` |
+| `file` | Text files only (`.txt`, `.py`, `.rs`, `.md`, `.json`, etc., max 512KB). Non-text files (`.pdf`, `.zip`, etc.) are silently ignored. |
+| `post` | Rich text: text nodes extracted as prompt, `img` nodes downloaded as image attachments. This is the format Feishu uses when @mention + paste image in a group. |
+
+**Group chat limitation:** Feishu does not allow @mention and image upload in the same message. However, @mention + paste (Ctrl+V) an image works — Feishu sends this as a `post` message containing both the mention and the image. Direct image upload (via the attachment button) cannot include @mention, so the bot will not respond in groups.
+
+**Processing pipeline:** Gateway downloads media using `GET /im/v1/messages/{message_id}/resources/{key}?type=image` with `tenant_access_token`, resizes to max 1200px, compresses to JPEG (quality 75), base64 encodes, and embeds in the `GatewayEvent.content.attachments` field. OAB core decodes attachments into `ContentBlock::Image` or `ContentBlock::Text` for the AI agent.
+
 ## Streaming (Typewriter)
 
 Agent replies stream incrementally — a placeholder message appears immediately, then updates every ~1.5 seconds as the agent generates content. This matches Discord's streaming behavior.
