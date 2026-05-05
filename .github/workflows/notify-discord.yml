@@ -4,7 +4,7 @@ on:
   pull_request:
     types: [opened, reopened]
   issues:
-    types: [opened]
+    types: [opened, reopened]
 
 jobs:
   notify:
@@ -24,6 +24,8 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           REPO: ${{ github.repository }}
         run: |
+          [ -z "$DISCORD_WEBHOOK_URL" ] && { echo "::warning::DISCORD_WEBHOOK_URL not set"; exit 0; }
+
           if [ "$EVENT_NAME" = "pull_request" ]; then
             TITLE="$PR_TITLE"
             URL="$PR_URL"
@@ -46,4 +48,4 @@ jobs:
 by ${AUTHOR}
 ${URL}" \
             '{"content": $content}')
-          curl -s -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_WEBHOOK_URL"
+          curl --fail-with-body -s -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_WEBHOOK_URL"
