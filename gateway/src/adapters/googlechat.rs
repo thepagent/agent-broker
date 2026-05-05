@@ -491,6 +491,162 @@ impl GoogleChatTokenCache {
     }
 }
 
+fn markdown_to_gchat(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        // Detect fenced code block — pass through unchanged
+        if line.trim_start().starts_with("```") {
+            result.push_str(line);
+            result.push('\n');
+            i += 1;
+            while i < lines.len() {
+                result.push_str(lines[i]);
+                if lines[i].trim_start().starts_with("```") {
+                    i += 1;
+                    if i < lines.len() {
+                        result.push('\n');
+                    }
+                    break;
+                }
+                result.push('\n');
+                i += 1;
+            }
+            continue;
+        }
+        // Heading → bold
+        let converted = if let Some(heading) = line
+            .strip_prefix("### ")
+            .or_else(|| line.strip_prefix("## "))
+            .or_else(|| line.strip_prefix("# "))
+        {
+            format!("*{}*", heading.trim())
+        } else {
+            convert_inline(line)
+        };
+        result.push_str(&converted);
+        i += 1;
+        if i < lines.len() {
+            result.push('\n');
+        }
+    }
+    result
+}
+
+fn convert_inline(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        // Inline code — pass through
+        if chars[i] == '`' {
+            out.push('`');
+            i += 1;
+            while i < chars.len() && chars[i] != '`' {
+                out.push(chars[i]);
+                i += 1;
+            }
+            if i < chars.len() {
+                out.push('`');
+                i += 1;
+            }
+            continue;
+        }
+        // Markdown link: [text](url)
+        if chars[i] == '[' {
+            if let Some((link_text, url, end)) = parse_md_link(&chars, i) {
+                let converted_text = convert_inline(&link_text);
+                out.push_str(&format!("<{}|{}>", url, converted_text));
+                i = end;
+                continue;
+            }
+        }
+        // Bold: **text** → *text*
+        if chars[i] == '*' && i + 1 < chars.len() && chars[i + 1] == '*' {
+            if let Some(end) = find_closing(&chars, i + 2, &['*', '*']) {
+                out.push('*');
+                let inner: String = chars[i + 2..end].iter().collect();
+                out.push_str(&convert_inline(&inner));
+                out.push('*');
+                i = end + 2;
+                continue;
+            }
+        }
+        // Bold: __text__ → *text*
+        if chars[i] == '_' && i + 1 < chars.len() && chars[i + 1] == '_' {
+            if let Some(end) = find_closing(&chars, i + 2, &['_', '_']) {
+                out.push('*');
+                let inner: String = chars[i + 2..end].iter().collect();
+                out.push_str(&convert_inline(&inner));
+                out.push('*');
+                i = end + 2;
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+fn parse_md_link(chars: &[char], start: usize) -> Option<(String, String, usize)> {
+    let mut i = start + 1;
+    let mut depth = 1;
+    let text_start = i;
+    while i < chars.len() && depth > 0 {
+        if chars[i] == '[' {
+            depth += 1;
+        } else if chars[i] == ']' {
+            depth -= 1;
+        }
+        if depth > 0 {
+            i += 1;
+        }
+    }
+    if depth != 0 {
+        return None;
+    }
+    let text: String = chars[text_start..i].iter().collect();
+    i += 1; // skip ']'
+    if i >= chars.len() || chars[i] != '(' {
+        return None;
+    }
+    i += 1; // skip '('
+    let url_start = i;
+    let mut paren_depth = 1;
+    while i < chars.len() && paren_depth > 0 {
+        if chars[i] == '(' {
+            paren_depth += 1;
+        } else if chars[i] == ')' {
+            paren_depth -= 1;
+        }
+        if paren_depth > 0 {
+            i += 1;
+        }
+    }
+    if paren_depth != 0 {
+        return None;
+    }
+    let url: String = chars[url_start..i].iter().collect();
+    Some((text, url, i + 1))
+}
+
+fn find_closing(chars: &[char], start: usize, pattern: &[char]) -> Option<usize> {
+    if pattern.len() < 2 {
+        return None;
+    }
+    let mut i = start;
+    while i + 1 < chars.len() {
+        if chars[i] == pattern[0] && chars[i + 1] == pattern[1] {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
 async fn send_message(
     client: &reqwest::Client,
     token: &str,
@@ -875,5 +1031,74 @@ mod tests {
             .or(chat.user.as_ref());
         let is_bot = sender.map(|s| s.user_type == "BOT").unwrap_or(false);
         assert!(!is_bot);
+    }
+
+    // --- markdown_to_gchat tests ---
+
+    #[test]
+    fn markdown_bold_double_asterisk() {
+        assert_eq!(markdown_to_gchat("hello **world**"), "hello *world*");
+    }
+
+    #[test]
+    fn markdown_bold_underscore() {
+        assert_eq!(markdown_to_gchat("hello __world__"), "hello *world*");
+    }
+
+    #[test]
+    fn markdown_link_conversion() {
+        assert_eq!(
+            markdown_to_gchat("see [docs](https://example.com) here"),
+            "see <https://example.com|docs> here"
+        );
+    }
+
+    #[test]
+    fn markdown_heading_to_bold() {
+        assert_eq!(markdown_to_gchat("# Title\ntext"), "*Title*\ntext");
+        assert_eq!(markdown_to_gchat("## Sub\ntext"), "*Sub*\ntext");
+        assert_eq!(markdown_to_gchat("### Deep\ntext"), "*Deep*\ntext");
+    }
+
+    #[test]
+    fn markdown_code_block_preserved() {
+        let input = "before\n```rust\nlet **x** = 1;\n```\nafter **bold**";
+        let output = markdown_to_gchat(input);
+        assert!(output.contains("let **x** = 1;"));
+        assert!(output.contains("after *bold*"));
+    }
+
+    #[test]
+    fn markdown_inline_code_preserved() {
+        assert_eq!(
+            markdown_to_gchat("use `**not bold**` here **bold**"),
+            "use `**not bold**` here *bold*"
+        );
+    }
+
+    #[test]
+    fn markdown_empty_string() {
+        assert_eq!(markdown_to_gchat(""), "");
+    }
+
+    #[test]
+    fn markdown_no_conversion_needed() {
+        assert_eq!(markdown_to_gchat("plain text"), "plain text");
+    }
+
+    #[test]
+    fn markdown_multiple_links() {
+        assert_eq!(
+            markdown_to_gchat("[a](http://a.com) and [b](http://b.com)"),
+            "<http://a.com|a> and <http://b.com|b>"
+        );
+    }
+
+    #[test]
+    fn markdown_nested_bold_in_link_text() {
+        assert_eq!(
+            markdown_to_gchat("[**bold link**](http://x.com)"),
+            "<http://x.com|*bold link*>"
+        );
     }
 }
