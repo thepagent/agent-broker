@@ -35,6 +35,16 @@ working_dir = "/home/node"
 
 ## Authentication
 
+Sign in interactively using the OAuth device flow. Credentials are stored on disk (persisted via PVC across pod restarts):
+
 ```bash
-kubectl exec -it deployment/openab-claude -- claude setup-token
+kubectl exec -it deployment/openab-claude -- claude auth login
 ```
+
+After authenticating, restart the pod to pick up the new credentials:
+
+```bash
+kubectl rollout restart deployment/openab-claude
+```
+
+> **Note:** `claude setup-token` is a different command — it generates a long-lived token for CI/scripts and prints it without saving locally. For container-based deployments, `claude auth login` is the correct approach as it persists credentials to the filesystem.
