@@ -31,6 +31,11 @@ pub const REPLY_TOKEN_TTL_SECS: u64 = 50;
 /// if webhooks arrive faster than OAB can reply (e.g. OAB offline, spam burst).
 pub const REPLY_TOKEN_CACHE_MAX: usize = 10_000;
 
+// --- Media Store for Inbound Media Proxy (Issue #690) ---
+
+/// uuid -> (binary data, mime type, created_at)
+pub type MediaStore = Arc<std::sync::Mutex<HashMap<String, (Vec<u8>, String, Instant)>>>;
+
 // --- App state (shared across all adapters) ---
 
 pub struct AppState {
@@ -55,10 +60,17 @@ pub struct AppState {
     /// Broadcast channel: gateway → OAB (events from all platforms)
     pub event_tx: broadcast::Sender<String>,
     /// Cache: event_id → (LINE replyToken, timestamp).
-    /// Global across all OAB WebSocket clients. LINE reply tokens are single-use:
-    /// the first client to `remove()` a token wins the free Reply API call;
-    /// other clients for the same event naturally fall back to Push API.
     pub reply_token_cache: ReplyTokenCache,
+    /// Inbound media proxy store (UUID -> data)
+    pub media_store: MediaStore,
+    /// Public base URL for the gateway (used to construct attachment URLs)
+    pub public_url: String,
+    /// TTL for media in memory
+    pub media_ttl: u64,
+    /// Maximum number of entries in the media store
+    pub media_max_entries: usize,
+    /// Maximum file size for media downloads (in bytes, Issue #690 review fix)
+    pub media_max_file_size: u64,
 }
 
 // --- WebSocket handler (OAB connects here) ---
@@ -86,11 +98,22 @@ async fn handle_oab_connection(state: Arc<AppState>, socket: axum::extract::ws::
 
     info!("OAB client connected via WebSocket");
 
+    let last_event_id: Arc<Mutex<std::collections::HashMap<String, String>>> = Arc::new(Mutex::new(std::collections::HashMap::new()));
+
     // Forward gateway events → OAB
+    let last_event_id_for_send = last_event_id.clone();
     let send_task = tokio::spawn(async move {
         loop {
             tokio::select! {
                 Ok(event_json) = event_rx.recv() => {
+                    // Track the last event ID sent to this client per channel
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&event_json) {
+                        if let (Some(eid), Some(cid)) = (v["event_id"].as_str(), v["channel"]["id"].as_str()) {
+                            let mut last = last_event_id_for_send.lock().await;
+                            last.insert(cid.to_string(), eid.to_string());
+                        }
+                    }
+
                     if ws_tx.send(Message::Text(event_json.into())).await.is_err() {
                         break;
                     }
@@ -104,12 +127,25 @@ async fn handle_oab_connection(state: Arc<AppState>, socket: axum::extract::ws::
     // Track per-message reaction state (Telegram replaces all reactions atomically)
     let reaction_state: Arc<Mutex<HashMap<String, Vec<String>>>> =
         Arc::new(Mutex::new(HashMap::new()));
+    let last_event_id_for_recv = last_event_id.clone();
     let recv_task = tokio::spawn(async move {
         let client = reqwest::Client::new();
         while let Some(Ok(msg)) = ws_rx.next().await {
             if let Message::Text(text) = msg {
-                match serde_json::from_str::<GatewayReply>(&*text) {
-                    Ok(reply) => {
+                match serde_json::from_str::<GatewayReply>(&text) {
+                    Ok(mut reply) => {
+                        // Auto-fill reply_to if empty using the last event sent to this client.
+                        // Rationale: This ensures agents don't need to track event IDs for simple replies.
+                        // Note: reply_to is used by the LINE adapter to look up replyTokens; auto-filling
+                        // allows LINE hybrid Reply/Push dispatch to work even if the agent omits reply_to.
+                        // Issue #690 review fix: Only auto-fill if channel.id is non-empty to prevent
+                        // cross-channel contamination (e.g., LINE reply tokens used for wrong messages).
+                        if reply.reply_to.is_empty() && !reply.channel.id.is_empty() {
+                            let last = last_event_id_for_recv.lock().await;
+                            if let Some(eid) = last.get(&reply.channel.id) {
+                                reply.reply_to = eid.clone();
+                            }
+                        }
                         info!(
                             platform = %reply.platform,
                             channel = %reply.channel.id,
@@ -191,6 +227,29 @@ async fn health() -> &'static str {
     "ok"
 }
 
+async fn media_handler(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(uuid): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let entry = {
+        let cache = state.media_store.lock().unwrap_or_else(|e| e.into_inner());
+        cache.get(&uuid).cloned()
+    };
+
+    if let Some((data, mime, created_at)) = entry {
+        // Check TTL before serving (Issue #690 review fix)
+        if created_at.elapsed().as_secs() >= state.media_ttl {
+            return axum::http::StatusCode::NOT_FOUND.into_response();
+        }
+        axum::response::Response::builder()
+            .header("content-type", mime)
+            .body(axum::body::Body::from(data))
+            .unwrap()
+    } else {
+        axum::http::StatusCode::NOT_FOUND.into_response()
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -201,6 +260,33 @@ async fn main() -> Result<()> {
 
     let listen_addr = std::env::var("GATEWAY_LISTEN").unwrap_or_else(|_| "0.0.0.0:8080".into());
     let ws_token = std::env::var("GATEWAY_WS_TOKEN").ok();
+    
+    // Inbound media proxy config (Issue #690)
+    let public_url = std::env::var("GATEWAY_MEDIA_BASE_URL")
+        .or_else(|_| std::env::var("GATEWAY_PUBLIC_URL"))
+        .unwrap_or_else(|_| "http://localhost:8080".into());
+    
+    // Warn if public_url looks like a loopback address (Issue #690 review fix)
+    if public_url.contains("localhost") || public_url.contains("127.0.0.1") {
+        warn!(
+            public_url = %public_url,
+            "GATEWAY_PUBLIC_URL looks like a loopback address. Media attachments will not be reachable from other pods/containers. Set GATEWAY_PUBLIC_URL to the gateway's cluster-internal Service URL (e.g. http://openab-gateway:8080) or its external ingress URL."
+        );
+    }
+    
+    let media_ttl = std::env::var("GATEWAY_MEDIA_STORE_TTL")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(300);
+    let media_max_entries = std::env::var("GATEWAY_MEDIA_STORE_MAX_ENTRIES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(1000);
+    // Issue #690 review fix: per-file size limit to prevent OOM
+    let media_max_file_size = std::env::var("GATEWAY_MEDIA_MAX_FILE_SIZE")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(10 * 1024 * 1024); // 10MB default
 
     if ws_token.is_none() {
         warn!("GATEWAY_WS_TOKEN not set — WebSocket connections are NOT authenticated (insecure)");
@@ -208,10 +294,12 @@ async fn main() -> Result<()> {
 
     let (event_tx, _) = broadcast::channel::<String>(256);
     let reply_token_cache: ReplyTokenCache = Arc::new(std::sync::Mutex::new(HashMap::new()));
+    let media_store: MediaStore = Arc::new(std::sync::Mutex::new(HashMap::new()));
 
     let mut app = Router::new()
         .route("/ws", get(ws_handler))
-        .route("/health", get(health));
+        .route("/health", get(health))
+        .route("/media/{uuid}", get(media_handler));
 
     // Telegram adapter
     let telegram_bot_token = std::env::var("TELEGRAM_BOT_TOKEN").ok();
@@ -335,6 +423,11 @@ async fn main() -> Result<()> {
         ws_token,
         event_tx,
         reply_token_cache,
+        media_store,
+        public_url,
+        media_ttl,
+        media_max_entries,
+        media_max_file_size,
     });
 
     // Background task: sweep expired reply tokens every REPLY_TOKEN_TTL_SECS
@@ -355,6 +448,28 @@ async fn main() -> Result<()> {
                         removed = before - after,
                         remaining = after,
                         "reply token cache sweep"
+                    );
+                }
+            }
+        });
+    }
+
+    // Background task: sweep expired media every 60 seconds (Issue #690)
+    {
+        let store = state.media_store.clone();
+        let ttl = state.media_ttl;
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                let mut cache = store.lock().unwrap_or_else(|e| e.into_inner());
+                let before = cache.len();
+                cache.retain(|_, (_, _, t)| t.elapsed().as_secs() < ttl);
+                let after = cache.len();
+                if before != after {
+                    info!(
+                        removed = before - after,
+                        remaining = after,
+                        "media store sweep"
                     );
                 }
             }

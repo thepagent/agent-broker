@@ -14,6 +14,21 @@ pub struct GatewayEvent {
     pub content: Content,
     pub mentions: Vec<String>,
     pub message_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<Attachment>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Attachment {
+    #[serde(rename = "type")]
+    pub attachment_type: String, // "image", "audio", etc.
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -107,6 +122,7 @@ impl GatewayEvent {
             },
             mentions,
             message_id: message_id.into(),
+            attachments: vec![],
         }
     }
 }

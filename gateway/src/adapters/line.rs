@@ -90,45 +90,138 @@ pub async fn webhook(
         let Some(ref msg) = event.message else {
             continue;
         };
-        if msg.message_type != "text" {
+
+        let mut attachments = vec![];
+        let mut text = msg.text.clone().unwrap_or_default();
+
+        // Handle Image/Audio attachments (Issue #690 Phase 1)
+        if let Some(ref access_token) = state.line_access_token {
+            if msg.message_type == "image" || msg.message_type == "audio" {
+                let url = format!("https://api-data.line.me/v2/bot/message/{}/content", msg.id);
+                let client = reqwest::Client::new();
+                let resp = client.get(url).bearer_auth(access_token).send().await;
+
+                if let Ok(r) = resp {
+                    if !r.status().is_success() {
+                        warn!(status = %r.status(), id = %msg.id, "failed to download LINE media");
+                        continue;
+                    }
+                    // Issue #690 review fix: Check file size before downloading
+                        let content_length = r
+                            .headers()
+                            .get("content-length")
+                            .and_then(|v| v.to_str().ok())
+                            .and_then(|s| s.parse::<u64>().ok())
+                            .unwrap_or(0);
+
+                        if content_length > state.media_max_file_size {
+                            warn!(
+                                size = content_length,
+                                max = state.media_max_file_size,
+                                id = %msg.id,
+                                "LINE media too large, skipping"
+                            );
+                            continue;
+                        }
+
+                        let mime = r
+                            .headers()
+                            .get("content-type")
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or(if msg.message_type == "image" {
+                                "image/jpeg"
+                            } else {
+                                "audio/x-m4a"
+                            })
+                            .to_string();
+
+                        if let Ok(data) = r.bytes().await {
+                            let uuid = uuid::Uuid::new_v4().to_string();
+                            let size = data.len() as u64;
+                            let proxied = {
+                                let mut store =
+                                    state.media_store.lock().unwrap_or_else(|e| e.into_inner());
+                                if store.len() >= state.media_max_entries {
+                                    warn!(
+                                        size = store.len(),
+                                        "media store full, skipping LINE media proxy"
+                                    );
+                                    false
+                                } else {
+                                    store.insert(
+                                        uuid.clone(),
+                                        (data.to_vec(), mime.clone(), std::time::Instant::now()),
+                                    );
+                                    true
+                                }
+                            };
+                            if proxied {
+                                attachments.push(Attachment {
+                                    attachment_type: msg.message_type.clone(),
+                                    url: format!("{}/media/{}", state.public_url, uuid),
+                                    mime_type: Some(mime),
+                                    filename: Some(format!(
+                                        "line-{}.{}",
+                                        msg.id,
+                                        if msg.message_type == "image" {
+                                            "jpg"
+                                        } else {
+                                            "m4a"
+                                        }
+                                    )),
+                                    size: Some(size),
+                                });
+                                if text.is_empty() {
+                                    text = format!("[{}]", msg.message_type);
+                                }
+                                info!(id = %msg.id, uuid = %uuid, "proxied LINE inbound media");
+                            }
+                        }
+                    }
+                }
+            } else if msg.message_type != "text" {
+                // Issue #690 review fix: Warn when media message is dropped due to missing access_token
+                warn!(
+                    msg_type = %msg.message_type,
+                    "LINE media message dropped (access_token not configured)"
+                );
+                continue;
+            }
+        } else if msg.message_type != "text" {
+            warn!(
+                msg_type = %msg.message_type,
+                "LINE media message dropped (access_token not configured)"
+            );
             continue;
         }
-        let Some(ref text) = msg.text else {
-            continue;
-        };
-        if text.trim().is_empty() {
+
+        if text.trim().is_empty() && attachments.is_empty() {
             continue;
         }
 
         let source = event.source.as_ref();
         let (channel_id, channel_type) = match source {
-            Some(s) if s.source_type == "group" => {
-                match s.group_id.as_deref() {
-                    Some(id) if !id.is_empty() => (id.to_string(), "group".to_string()),
-                    _ => {
-                        warn!("LINE group event missing groupId, skipping");
-                        continue;
-                    }
+            Some(s) if s.source_type == "group" => match s.group_id.as_deref() {
+                Some(id) if !id.is_empty() => (id.to_string(), "group".to_string()),
+                _ => {
+                    warn!("LINE group event missing groupId, skipping");
+                    continue;
                 }
-            }
-            Some(s) if s.source_type == "room" => {
-                match s.room_id.as_deref() {
-                    Some(id) if !id.is_empty() => (id.to_string(), "room".to_string()),
-                    _ => {
-                        warn!("LINE room event missing roomId, skipping");
-                        continue;
-                    }
+            },
+            Some(s) if s.source_type == "room" => match s.room_id.as_deref() {
+                Some(id) if !id.is_empty() => (id.to_string(), "room".to_string()),
+                _ => {
+                    warn!("LINE room event missing roomId, skipping");
+                    continue;
                 }
-            }
-            Some(s) => {
-                match s.user_id.as_deref() {
-                    Some(id) if !id.is_empty() => (id.to_string(), "user".to_string()),
-                    _ => {
-                        warn!("LINE user event missing userId, skipping");
-                        continue;
-                    }
+            },
+            Some(s) => match s.user_id.as_deref() {
+                Some(id) if !id.is_empty() => (id.to_string(), "user".to_string()),
+                _ => {
+                    warn!("LINE user event missing userId, skipping");
+                    continue;
                 }
-            }
+            },
             None => {
                 warn!("LINE event missing source, skipping");
                 continue;
@@ -138,7 +231,7 @@ pub async fn webhook(
             .and_then(|s| s.user_id.as_deref())
             .unwrap_or("unknown");
 
-        let gateway_event = GatewayEvent::new(
+        let mut gateway_event = GatewayEvent::new(
             "line",
             ChannelInfo {
                 id: channel_id.clone(),
@@ -151,10 +244,11 @@ pub async fn webhook(
                 display_name: user_id.into(),
                 is_bot: false,
             },
-            text,
+            &text,
             &msg.id,
             vec![],
         );
+        gateway_event.attachments = attachments;
 
         // Cache the reply token for hybrid Reply/Push dispatch
         if let Some(ref reply_token) = event.reply_token {

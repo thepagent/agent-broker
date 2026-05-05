@@ -1,5 +1,7 @@
 use crate::acp::ContentBlock;
 use crate::adapter::{AdapterRouter, ChannelRef, ChatAdapter, MessageRef, SenderContext};
+use crate::config::SttConfig;
+use crate::media;
 use anyhow::Result;
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -27,6 +29,21 @@ struct GatewayEvent {
     #[allow(dead_code)]
     mentions: Vec<String>,
     message_id: String,
+    #[serde(default)]
+    attachments: Vec<GwAttachment>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct GwAttachment {
+    #[serde(rename = "type")]
+    attachment_type: String,
+    url: String,
+    #[serde(default)]
+    mime_type: Option<String>,
+    #[serde(default)]
+    filename: Option<String>,
+    #[serde(default)]
+    size: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -107,12 +124,16 @@ struct GatewayResponse {
 // --- GatewayAdapter: ChatAdapter over WebSocket ---
 
 type PendingRequests = Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<GatewayResponse>>>>;
-type SharedWsTx = Arc<Mutex<futures_util::stream::SplitSink<
-    tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+type SharedWsTx = Arc<
+    Mutex<
+        futures_util::stream::SplitSink<
+            tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
+            Message,
+        >,
     >,
-    Message,
->>>;
+>;
 
 pub struct GatewayAdapter {
     ws_tx: SharedWsTx,
@@ -487,6 +508,81 @@ pub struct GatewayParams {
     pub allow_all_users: bool,
     pub allowed_users: Vec<String>,
     pub streaming: bool,
+    pub stt_config: SttConfig,
+}
+
+fn attachment_filename(attachment: &GwAttachment) -> &str {
+    attachment
+        .filename
+        .as_deref()
+        .unwrap_or(match attachment.attachment_type.as_str() {
+            "image" => "gateway-image",
+            "audio" => "gateway-audio",
+            _ => "gateway-attachment",
+        })
+}
+
+async fn build_attachment_blocks(
+    attachments: &[GwAttachment],
+    stt_config: &SttConfig,
+) -> Vec<ContentBlock> {
+    let mut blocks = Vec::new();
+
+    for attachment in attachments {
+        match attachment.attachment_type.as_str() {
+            "image" => {
+                if let Some(block) = media::download_and_encode_image(
+                    &attachment.url,
+                    attachment.mime_type.as_deref(),
+                    attachment_filename(attachment),
+                    attachment.size.unwrap_or(0),
+                    None,
+                )
+                .await
+                {
+                    blocks.push(block);
+                } else {
+                    // Issue #690 review fix: Don't leak internal URL to LLM on failure
+                    blocks.push(ContentBlock::Text {
+                        text: "[Image attachment failed to load]".to_string(),
+                    });
+                }
+            }
+            "audio" => {
+                let mut added_transcript = false;
+                if stt_config.enabled {
+                    if let Some(transcript) = media::download_and_transcribe(
+                        &attachment.url,
+                        attachment_filename(attachment),
+                        attachment.mime_type.as_deref().unwrap_or("audio/ogg"),
+                        attachment.size.unwrap_or(0),
+                        stt_config,
+                        None,
+                    )
+                    .await
+                    {
+                        blocks.push(ContentBlock::Text {
+                            text: format!("[Voice message transcript]: {transcript}"),
+                        });
+                        added_transcript = true;
+                    }
+                }
+                if !added_transcript {
+                    blocks.push(ContentBlock::Text {
+                        text: format!("[Audio attachment URL]: {}", attachment.url),
+                    });
+                }
+            }
+            _ => blocks.push(ContentBlock::Text {
+                text: format!(
+                    "[{} attachment URL]: {}",
+                    attachment.attachment_type, attachment.url
+                ),
+            }),
+        }
+    }
+
+    blocks
 }
 
 pub async fn run_gateway_adapter(
@@ -504,6 +600,7 @@ pub async fn run_gateway_adapter(
     let allow_all_users = params.allow_all_users;
     let allowed_users = params.allowed_users;
     let streaming = params.streaming;
+    let stt_config = params.stt_config;
 
     let connect_url = match &params.token {
         Some(token) => {
@@ -547,8 +644,12 @@ pub async fn run_gateway_adapter(
         let (ws_tx, mut ws_rx) = ws_stream.split();
         let ws_tx: SharedWsTx = Arc::new(Mutex::new(ws_tx));
         let pending: PendingRequests = Arc::new(Mutex::new(HashMap::new()));
-        let adapter: Arc<dyn ChatAdapter> =
-            Arc::new(GatewayAdapter::new(ws_tx.clone(), pending.clone(), platform, streaming));
+        let adapter: Arc<dyn ChatAdapter> = Arc::new(GatewayAdapter::new(
+            ws_tx.clone(),
+            pending.clone(),
+            platform,
+            streaming,
+        ));
         let slash_ws_tx = ws_tx.clone(); // for fire-and-forget slash command responses
         let mut tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
 
@@ -642,6 +743,8 @@ pub async fn run_gateway_adapter(
                                     let adapter = adapter.clone();
                                     let router = router.clone();
                                     let prompt = event.content.text.clone();
+                                    let attachments = event.attachments.clone();
+                                    let stt_config = stt_config.clone();
 
                                     // Convert gateway attachments to ContentBlocks
                                     let mut extra_blocks = Vec::new();
@@ -713,6 +816,9 @@ pub async fn run_gateway_adapter(
                                         } else {
                                             channel.clone()
                                         };
+
+                                        let extra_blocks =
+                                            build_attachment_blocks(&attachments, &stt_config).await;
 
                                         if let Err(e) = router
                                             .handle_message(
