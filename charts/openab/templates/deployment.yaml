@@ -83,10 +83,8 @@ spec:
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
+            {{- include "openab.validateSecretEnv" (dict "secretEnv" $cfg.secretEnv "agentName" $name) }}
             {{- range $cfg.secretEnv }}
-            {{- if not (and .name .secretName .secretKey) }}
-            {{- fail (printf "agents.%s.secretEnv entries require name, secretName, and secretKey" $name) }}
-            {{- end }}
             - name: {{ .name }}
               valueFrom:
                 secretKeyRef:
