@@ -87,8 +87,6 @@ spec:
             {{- if not (and .name .secretName .secretKey) }}
             {{- fail (printf "agents.%s.secretEnv entries require name, secretName, and secretKey" $name) }}
             {{- end }}
-            {{- end }}
-            {{- range $cfg.secretEnv }}
             - name: {{ .name }}
               valueFrom:
                 secretKeyRef:
