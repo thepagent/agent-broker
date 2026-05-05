@@ -361,7 +361,14 @@ async fn fire_cronjob(
     };
 
     if let Err(e) = router
-        .handle_message(&adapter, &reply_channel, &sender_json, &job.message, vec![], &trigger_msg, false)
+        .handle_message(&adapter, crate::adapter::MessageContext {
+            thread_channel: reply_channel.clone(),
+            sender_json,
+            prompt: job.message.clone(),
+            extra_blocks: vec![],
+            trigger_msg,
+            other_bot_present: false,
+        })
         .await
     {
         error!("cron handle_message error: {e}");

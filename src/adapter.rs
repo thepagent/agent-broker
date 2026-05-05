@@ -65,6 +65,19 @@ pub struct MessageRef {
     pub message_id: String,
 }
 
+/// Bundles per-message parameters for `AdapterRouter::handle_message`.
+///
+/// Introduced to reduce parameter count and make the signature extensible
+/// (e.g. streaming policy, rate limit hints) without breaking call sites.
+pub struct MessageContext {
+    pub thread_channel: ChannelRef,
+    pub sender_json: String,
+    pub prompt: String,
+    pub extra_blocks: Vec<ContentBlock>,
+    pub trigger_msg: MessageRef,
+    pub other_bot_present: bool,
+}
+
 /// Sender identity injected into prompts for downstream agent context.
 ///
 /// This is **metadata for the agent** — `channel_id` always refers to the
@@ -209,34 +222,29 @@ impl AdapterRouter {
     /// Handle an incoming user message. The adapter is responsible for
     /// filtering, resolving the thread, and building the SenderContext.
     /// This method handles sender context injection, session management, and streaming.
-    #[allow(clippy::too_many_arguments)]
     pub async fn handle_message(
         &self,
         adapter: &Arc<dyn ChatAdapter>,
-        thread_channel: &ChannelRef,
-        sender_json: &str,
-        prompt: &str,
-        extra_blocks: Vec<ContentBlock>,
-        trigger_msg: &MessageRef,
-        other_bot_present: bool,
+        ctx: MessageContext,
     ) -> Result<()> {
         tracing::debug!(platform = adapter.platform(), "processing message");
 
-        let content_blocks = Self::pack_arrival_event(sender_json, prompt, extra_blocks);
+        let content_blocks =
+            Self::pack_arrival_event(&ctx.sender_json, &ctx.prompt, ctx.extra_blocks);
 
         let thread_key = format!(
             "{}:{}",
             adapter.platform(),
-            thread_channel
+            ctx.thread_channel
                 .thread_id
                 .as_deref()
-                .unwrap_or(&thread_channel.channel_id)
+                .unwrap_or(&ctx.thread_channel.channel_id)
         );
 
         if let Err(e) = self.pool.get_or_create(&thread_key).await {
             let msg = format_user_error(&e.to_string());
             let _ = adapter
-                .send_message(thread_channel, &format!("⚠️ {msg}"))
+                .send_message(&ctx.thread_channel, &format!("⚠️ {msg}"))
                 .await;
             error!("pool error: {e}");
             return Err(e);
@@ -245,7 +253,7 @@ impl AdapterRouter {
         let reactions = Arc::new(StatusReactionController::new(
             self.reactions_config.enabled,
             adapter.clone(),
-            trigger_msg.clone(),
+            ctx.trigger_msg.clone(),
             self.reactions_config.emojis.clone(),
             self.reactions_config.timing.clone(),
         ));
@@ -256,9 +264,9 @@ impl AdapterRouter {
                 adapter,
                 &thread_key,
                 content_blocks,
-                thread_channel,
+                &ctx.thread_channel,
                 reactions.clone(),
-                other_bot_present,
+                ctx.other_bot_present,
             )
             .await;
 
@@ -282,7 +290,7 @@ impl AdapterRouter {
 
         if let Err(ref e) = result {
             let _ = adapter
-                .send_message(thread_channel, &format!("⚠️ {e}"))
+                .send_message(&ctx.thread_channel, &format!("⚠️ {e}"))
                 .await;
         }
 
