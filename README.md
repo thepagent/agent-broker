@@ -129,6 +129,8 @@ helm install openab openab/openab \
   --set-string 'agents.kiro.slack.allowedChannels[0]=C0123456789'
 ```
 
+For additional Helm values such as `fullnameOverride`, `nameOverride`, `envFrom`, and `agentsMd`, see [charts/openab/README.md](charts/openab/README.md).
+
 ### 3. Authenticate (first time only)
 
 ```bash

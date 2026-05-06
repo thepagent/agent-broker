@@ -4,6 +4,13 @@ image:
   tag: ""
   pullPolicy: IfNotPresent
 
+# Chart-level name override used in generated resource names.
+# For per-agent overrides, use agents.<name>.nameOverride.
+nameOverride: ""
+
+# Override the full release name used in generated resource names.
+fullnameOverride: ""
+
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 1000
@@ -115,6 +122,7 @@ agents:
     #     allowedUsers: []
     #   workingDir: /home/agent
     #   env: {}
+    #   # Load env vars from existing Secrets or ConfigMaps, e.g. GH_TOKEN.
     #   envFrom: []
     #   secretEnv: []
     #   pool:
@@ -205,6 +213,7 @@ agents:
       # maxBatchTokens: 24000
     workingDir: /home/agent
     env: {}
+    # Load env vars from existing Secrets or ConfigMaps, e.g. GH_TOKEN.
     envFrom: []
     secretEnv: []  # list of {name, secretName, secretKey} — rendered as valueFrom.secretKeyRef; keys auto-added to inherit_env
     pool:
@@ -311,6 +320,7 @@ agents:
       existingClaim: ""  # set to reuse an existing PVC (skips PVC creation)
       storageClass: ""
       size: 1Gi  # defaults to 1Gi if not set
+    # Mount a custom AGENTS.md file. Useful with --set-file.
     # ⚠️ When set, this ConfigMap mount shadows any file at the same path on the PVC.
     # The PVC file is NOT deleted but becomes invisible to the agent. Remove agentsMd to restore.
     agentsMd: ""
