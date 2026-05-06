@@ -46,7 +46,7 @@ on:
   pull_request:
     types: [opened, reopened]
   issues:
-    types: [opened, reopened]
+    types: [opened]
 
 jobs:
   notify:
@@ -55,43 +55,27 @@ jobs:
       - name: Send to Discord
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          EVENT_NAME: ${{ github.event_name }}
-          EVENT_ACTION: ${{ github.event.action }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          ISSUE_TITLE: ${{ github.event.issue.title }}
-          ISSUE_URL: ${{ github.event.issue.html_url }}
-          ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          REPO: ${{ github.repository }}
         run: |
-          [ -z "$DISCORD_WEBHOOK_URL" ] && { echo "::warning::DISCORD_WEBHOOK_URL not set"; exit 0; }
-
-          if [ "$EVENT_NAME" = "pull_request" ]; then
-            TITLE="$PR_TITLE"
-            URL="$PR_URL"
-            AUTHOR="$PR_AUTHOR"
-            NUM="$PR_NUMBER"
-            TYPE="pr_${EVENT_ACTION}"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            TITLE="${{ github.event.pull_request.title }}"
+            URL="${{ github.event.pull_request.html_url }}"
+            AUTHOR="${{ github.event.pull_request.user.login }}"
+            NUM="${{ github.event.pull_request.number }}"
+            TYPE="pr_opened"
             LABEL="PR #${NUM}"
           else
-            TITLE="$ISSUE_TITLE"
-            URL="$ISSUE_URL"
-            AUTHOR="$ISSUE_AUTHOR"
-            NUM="$ISSUE_NUMBER"
-            TYPE="issue_${EVENT_ACTION}"
+            TITLE="${{ github.event.issue.title }}"
+            URL="${{ github.event.issue.html_url }}"
+            AUTHOR="${{ github.event.issue.user.login }}"
+            NUM="${{ github.event.issue.number }}"
+            TYPE="issue_opened"
             LABEL="Issue #${NUM}"
           fi
 
-          PAYLOAD=$(jq -n \
-            --arg content "[GH-EVENT] repo:${REPO} action:${TYPE} ${LABEL}
-**${TITLE}**
-by ${AUTHOR}
-${URL}" \
-            '{"content": $content}')
-          curl --fail-with-body -s -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_WEBHOOK_URL"
+          MSG="[GH-EVENT] repo:${{ github.repository }} action:${TYPE} ${LABEL}"
+          MSG="${MSG}\n**${TITLE}**\nby ${AUTHOR}\n${URL}"
+          PAYLOAD=$(printf '%s' "$MSG" | jq -Rs '{content: .}')
+          curl -s -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_WEBHOOK_URL"
 ```
 
 ## Message Format Convention
@@ -104,8 +88,6 @@ Messages use a structured prefix so OpenAB can identify GitHub events:
 by {author}
 {url}
 ```
-
-Supported `event_type` values: `pr_opened`, `pr_reopened`, `issue_opened`, `issue_reopened`
 
 Example:
 ```
