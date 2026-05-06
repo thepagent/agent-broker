@@ -85,6 +85,23 @@ impl SessionPool {
         }
     }
 
+    /// Spawn a temporary agent connection, run initialize + session/new, then drop it.
+    /// Returns Ok on success or Err with a description of what failed.
+    pub async fn health_check(&self) -> Result<()> {
+        let mut conn = AcpConnection::spawn(
+            &self.config.command,
+            &self.config.args,
+            &self.config.working_dir,
+            &self.config.env,
+            &self.config.inherit_env,
+        )
+        .await?;
+        conn.initialize().await?;
+        conn.session_new(&self.config.working_dir).await?;
+        Ok(())
+        // conn dropped here → kill_process_group()
+    }
+
     fn load_mapping(path: &Path) -> HashMap<String, String> {
         match std::fs::read_to_string(path) {
             Ok(data) => serde_json::from_str(&data).unwrap_or_else(|e| {

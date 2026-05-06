@@ -8,7 +8,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
-use tracing::{debug, error, info};
+use std::collections::VecDeque;
+use tracing::{debug, error, info, warn};
 
 
 /// Pick the most permissive selectable permission option from ACP options.
@@ -162,7 +163,7 @@ impl AcpConnection {
         cmd.args(args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .current_dir(working_dir);
         // Create a new process group so we can kill the entire tree.
         // SAFETY: setpgid is async-signal-safe (POSIX.1-2008) and called
@@ -230,6 +231,30 @@ impl AcpConnection {
         let stdin = proc.stdin.take().ok_or_else(|| anyhow!("no stdin"))?;
         let stdin = Arc::new(Mutex::new(stdin));
 
+        // Stderr reader: log each line at warn level and keep a tail for error messages.
+        let stderr_tail: Arc<std::sync::Mutex<VecDeque<String>>> =
+            Arc::new(std::sync::Mutex::new(VecDeque::with_capacity(8)));
+        if let Some(stderr) = proc.stderr.take() {
+            let tail = stderr_tail.clone();
+            tokio::spawn(async move {
+                let mut reader = BufReader::new(stderr);
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let trimmed = line.trim().to_string();
+                    if trimmed.is_empty() { continue; }
+                    warn!(target: "openab::agent", "[stderr] {trimmed}");
+                    let mut t = tail.lock().unwrap();
+                    if t.len() >= 8 { t.pop_front(); }
+                    t.push_back(trimmed);
+                }
+            });
+        }
+
         let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<JsonRpcMessage>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let notify_tx: Arc<Mutex<Option<mpsc::UnboundedSender<JsonRpcMessage>>>> =
@@ -239,6 +264,7 @@ impl AcpConnection {
             let pending = pending.clone();
             let notify_tx = notify_tx.clone();
             let stdin_clone = stdin.clone();
+            let stderr_tail_reader = stderr_tail.clone();
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stdout);
                 let mut line = String::new();
@@ -309,7 +335,17 @@ impl AcpConnection {
                     }
                 }
 
-                // Connection closed — resolve all pending with error
+                // Connection closed — build error message, optionally with last stderr lines
+                let stderr_hint = {
+                    let tail = stderr_tail_reader.lock().unwrap();
+                    if tail.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; agent stderr: {}", tail.iter().cloned().collect::<Vec<_>>().join(" | "))
+                    }
+                };
+                let close_msg = format!("connection closed{stderr_hint}");
+
                 let mut map = pending.lock().await;
                 for (_, tx) in map.drain() {
                     let _ = tx.send(JsonRpcMessage {
@@ -318,7 +354,7 @@ impl AcpConnection {
                         result: None,
                         error: Some(crate::acp::protocol::JsonRpcError {
                             code: -1,
-                            message: "connection closed".into(),
+                            message: close_msg.clone(),
                         }),
                         params: None,
                     });
